@@ -1,0 +1,38 @@
+Nguồn model
+
+KayKit – Kay Lousberg (www.kaylousberg.com) – CC0, dùng tự do kể cả thương mại
+  player.glb               Knight          – KayKit Character Pack: Adventurers 1.0
+  enemy_mage.glb           Skeleton_Mage   – KayKit Character Pack: Skeletons 1.0
+  weapon_sword.glb         sword_1handed   – Adventurers 1.0
+  weapon_axe.glb           axe_2handed     – Adventurers 1.0
+  weapon_greatsword.glb    sword_2handed   – Adventurers 1.0
+  weapon_staff.glb         staff           – Adventurers 1.0
+  dungeon/*.glb            sàn, tường, cột, đuốc, cờ, thùng... – KayKit Dungeon Remastered 1.0
+  Nguồn: https://github.com/KayKit-Game-Assets
+
+Quaternius – CC0
+  slime.glb                "Slime"  – https://poly.pizza/m/LyjSUKHKnh
+
+Dựng bằng Blender trong project này (blender/build_assets.py)
+  anvil.glb                đe rèn trên gốc cây
+  slime_lava.glb           slime Quaternius + vỏ đá núi lửa
+
+Giao diện (public/ui/)
+  Khung viền, đường kẻ     Kenney – Fantasy UI Borders – CC0
+  Con trỏ găng tay         Kenney – UI Pack (RPG Expansion) – CC0
+  Con trỏ bia ngắm         Kenney – Cursor Pack – CC0
+  Icon (public/ui/icons)   game-icons.net – CC BY 3.0 (BẮT BUỘC ghi công, đã ghi ở màn hình chính)
+                           Lorc: ice, lightning, blood, sword, axe, staff, anvil, dash, kills, wave, best, hourglass, swap
+                           Delapouite: greatsword, heart · sbed: fire
+                           (bản mở rộng) icon x_*, p_*: Lorc, Delapouite, sbed, Skoll, Willdabeast, Zeromancer
+Font (public/fonts/)       Grenze Gotisch, Alegreya SC, Signika – Google Fonts – SIL Open Font License
+
+Âm thanh (public/sfx/) – CC0: rubberduck (OpenGameArt), Kenney. Chi tiết trong public/sfx/CREDITS.txt
+
+Bản mở rộng (KayKit, CC0): char_barbarian, char_mage, char_rogue (Adventurers), npc_merchant (Rogue_Hooded),
+  enemy_minion, enemy_boss, enemy_rogue (Skeletons), prop_skel_* (Skeletons), prop_spellbook, weapon_dagger, prop_shield_barb,
+  dungeon/floor_tile_big_spikes, chest, shop_table, barrel_explosive, coin_stack, floor_tile_big_grate_open, box_large, barrel_small
+Nhạc nền: xem public/music/CREDITS.txt
+
+KayKit Halloween Bits 1.0 (Kay Lousberg) - CC0 1.0 - https://github.com/KayKit-Game-Assets/KayKit-Halloween-Bits-1.0
+  public/models/crypt/*.gltf (mo, bia, quan tai, dau lau, xuong, nen)

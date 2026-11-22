@@ -1,0 +1,381 @@
+import * as THREE from 'three';
+import { models } from './models.js';
+import { emit, F, rectLiquid, disposeLiquids } from './fx.js';
+
+// ================== Kích thước phòng ==================
+export const DS = 0.8;                       // tỉ lệ thu nhỏ bộ hầm ngục KayKit cho khớp nhân vật
+const TILE = 4 * DS;                         // mỗi mảnh sàn/tường KayKit rộng 4m -> 3.2m
+const N = 12;                                // phòng 12 x 12 mảnh
+export let ROOM_HALF = (TILE * N) / 2;       // = 19.2
+export let WALK_LIMIT = ROOM_HALF - 0.9;
+
+// Vật cản: hình tròn (cột, thùng) và hình chữ nhật (tường thấp)
+export const pillars = [];
+export const boxes = [];
+
+// Mỗi tầng một kiểu bố cục + màu đuốc
+const THEMES = [
+  { name: 'Đại Sảnh Cột', torch: 0xff9a4a, layout: 'hall' },
+  { name: 'Tường Đổ', torch: 0x7fb0ff, layout: 'ruins' },
+  { name: 'Kho Hàng Bỏ Hoang', torch: 0x8fe08a, layout: 'storage' },
+  { name: 'Hầm Ngầm', torch: 0xc08aff, layout: 'cross' },
+  { name: 'Thánh Đường Xương', torch: 0xff5a4a, layout: 'ring' },
+];
+// Vùng chủ đề theo tầng: màu sàn/tường, ánh sáng, sương, hạt bay, đáy hố, bẫy riêng
+export const BIOMES = [
+  { id: 'stone', name: 'Hầm Đá', tint: 0xffffff, fog: 0x0b0908, sky: 0xa8b8e0, ground: 0x3a2a20, moon: 0xc8d4ff, torch: null, pit: 0x040303, pitGlow: 0 },
+  { id: 'ice', name: 'Hang Băng', tint: 0xb4d4ff, fog: 0x081420, sky: 0xc8ecff, ground: 0x203850, moon: 0xd8f0ff, torch: 0x7fd0ff, pit: 0x0a3050, pitGlow: 0.5 },
+  { id: 'lava', name: 'Lò Nham Thạch', tint: 0xa89088, fog: 0x140504, sky: 0xc8a090, ground: 0x2a0c06, moon: 0xffd0b0, torch: 0xff6a2a, pit: 0xff4a10, pitGlow: 2.2 },
+  { id: 'crypt', name: 'Hầm Mộ', tint: 0xaab4a6, fog: 0x060a07, sky: 0xa8bcb0, ground: 0x1a201a, moon: 0xb0e0c0, torch: 0x6fe08a, pit: 0x0a1a0e, pitGlow: 0.3 },
+];
+// Hình dạng phòng: các ô sàn [i0, i1, j0, j1] bị khoét thành hố/vực
+const SHAPES = {
+  square: [],
+  L: [[7, 11, 0, 3]],
+  bridge: [[0, 3, 4, 7], [8, 11, 4, 7]],
+  twin: [[2, 3, 1, 3], [8, 9, 1, 3], [2, 3, 8, 9], [8, 9, 8, 9]],
+  cross: [[0, 2, 0, 2], [9, 11, 0, 2], [0, 2, 9, 9], [9, 11, 9, 9]],
+};
+const SHAPE_NAMES = { square: '', L: 'Vực Gãy', bridge: 'Cầu Đá', twin: 'Bốn Hố', cross: 'Góc Sụp' };
+export function floorTheme(floor) {
+  const t = THEMES[(floor - 1) % THEMES.length];
+  const biome = BIOMES[(floor - 1) % BIOMES.length];
+  const shapes = Object.keys(SHAPES);
+  const shape = floor === 1 ? 'square' : shapes[(floor * 7 + 3) % shapes.length];
+  return { ...t, biome, shape, torch: biome.torch ?? t.torch, name: `${biome.name} · ${t.name}${SHAPE_NAMES[shape] ? ' · ' + SHAPE_NAMES[shape] : ''}` };
+}
+export let currentBiome = BIOMES[0];
+export const pits = [];       // hố: chặn người và quái, không chặn đạn
+let pitRects = [];
+const pitFx = [];
+const inPit = (x, z, pad = 0) => pitRects.some((r) => x > r.x0 - pad && x < r.x1 + pad && z > r.z0 - pad && z < r.z1 + pad);
+export function isPit(x, z, pad = 0) { return inPit(x, z, pad); }
+const tintCache = new Map();
+function tintObject(o, tint) {
+  if (tint === 0xffffff) return;
+  o.traverse((c) => {
+    if (!c.isMesh) return;
+    const key = c.material.uuid + ':' + tint;
+    if (!tintCache.has(key)) { const m = c.material.clone(); m.color.multiply(new THREE.Color(tint)); tintCache.set(key, m); }
+    c.material = tintCache.get(key);
+  });
+}
+
+let worldGroup = null;
+let moon = null;
+let hemi = null;
+let darkHook = null;
+let isDark = false;
+const torches = [];
+let seed = 1;
+const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+
+function piece(name, x, z, rotY = 0, y = 0, s = DS) {
+  const entry = models['dungeon/' + name];
+  if (!entry) return null;
+  if (!/^(floor_tile|wall|column|torch|banner)/.test(name) && inPit(x, z, 0.8)) return null;
+  const o = entry.scene.clone(true);
+  o.position.set(x, y, z);
+  o.rotation.y = rotY;
+  if (typeof s === 'number') o.scale.setScalar(s); else o.scale.set(...s);
+  o.traverse((c) => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; } });
+  if (!name.startsWith('torch') && !name.startsWith('banner')) tintObject(o, currentBiome.tint);
+  worldGroup.add(o);
+  return o;
+}
+
+function wallTorch(x, z, rotY, color, y = 2.1, light = true) {
+  piece('torch_mounted', x, z, rotY, y);
+  if (!light) return;
+  const out = new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY));
+  const l = new THREE.PointLight(color, 10, 11, 1.8);
+  l.position.set(x + out.x * 0.6, y + 0.7, z + out.z * 0.6);
+  worldGroup.add(l);
+  torches.push({ light: l, base: 10, seed: rand() * 100, color, flame: new THREE.Vector3(x + out.x * 0.42, y + 0.55, z + out.z * 0.42) });
+}
+
+// Đồ vật có va chạm tròn
+function prop(name, x, z, r, rot = rand() * Math.PI * 2) {
+  if (inPit(x, z, (r || 0) + 0.3)) return;
+  piece(name, x, z, rot);
+  if (r) pillars.push({ x, z, r });
+}
+
+// Tường thấp dài `len` mảnh, nằm ngang (theo x) hoặc dọc (theo z)
+function lowWall(cx, cz, len, vertical) {
+  if (inPit(cx, cz, 1)) return;
+  for (let i = 0; i < len; i++) {
+    const off = (i - (len - 1) / 2) * TILE;
+    const x = vertical ? cx : cx + off, z = vertical ? cz + off : cz;
+    piece(rand() < 0.3 ? 'wall_cracked' : 'wall', x, z, vertical ? Math.PI / 2 : 0, 0, [DS, DS * 0.3, DS]);
+  }
+  const half = (len * TILE) / 2;
+  boxes.push(vertical ? { x: cx, z: cz, hx: 0.45, hz: half } : { x: cx, z: cz, hx: half, hz: 0.45 });
+}
+
+function bigPillar(x, z) {
+  if (inPit(x, z, 1.2)) return;
+  piece('pillar_decorated', x, z, 0);
+  pillars.push({ x, z, r: 1.0 });
+}
+
+// ================== Bố cục bên trong phòng ==================
+function buildLayout(layout) {
+  const S = TILE;
+  if (layout === 'hall') {
+    for (const x of [-8, 8]) for (const z of [-12, -4, 4, 12]) bigPillar(x, z);
+    lowWall(0, -15, 2, false);
+    prop('barrel_large', -15, -15, 0.75); prop('barrel_small_stack', -13.2, -16, 0.5);
+    prop('crates_stacked', 15, -15, 0.9); prop('box_stacked', 13, -16, 0.6);
+    prop('keg_decorated', -16.5, 6, 0.6, Math.PI / 2); prop('trunk_large_A', 16.5, 4, 0.6, -Math.PI / 2);
+  } else if (layout === 'ruins') {
+    lowWall(-9, -8, 3, false); lowWall(9, 8, 3, false);
+    lowWall(-8, 9, 2, true); lowWall(8, -9, 2, true);
+    for (const [x, z] of [[0, -13], [0, 13], [-14, 0], [14, 0]]) bigPillar(x, z);
+    prop('rubble_large', -3, 4, 1.3); prop('rubble_large', 4, -3, 1.3);
+    prop('barrel_large', -15.5, 15, 0.75); prop('crates_stacked', 15, -15.5, 0.9);
+  } else if (layout === 'storage') {
+    // các dãy thùng hàng tạo lối đi
+    for (const [x, z] of [[-10, -10], [10, -10], [-10, 10], [10, 10]]) {
+      prop('crates_stacked', x, z, 0.9); prop('box_large', x + 1.8, z + 0.4, 0.7); prop('barrel_small', x - 0.6, z + 1.8, 0.45);
+    }
+    for (const [x, z] of [[0, -6], [0, 6], [-6, 0], [6, 0]]) prop('box_stacked', x, z, 0.65);
+    lowWall(-15, 0, 2, true); lowWall(15, 0, 2, true);
+    prop('keg_decorated', -4, -15, 0.6); prop('keg_decorated', 4, 15, 0.6);
+  } else if (layout === 'cross') {
+    lowWall(0, -10, 2, true); lowWall(0, 10, 2, true);
+    lowWall(-10, 0, 2, false); lowWall(10, 0, 2, false);
+    for (const [x, z] of [[-6, -6], [6, -6], [-6, 6], [6, 6]]) bigPillar(x, z);
+    prop('rubble_large', -15, -14, 0.9); prop('barrel_large', 15, 14, 0.75);
+  } else {
+    // 'ring': vòng cột quanh tâm
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+      bigPillar(Math.cos(a) * 10, Math.sin(a) * 10);
+    }
+    prop('candle_triple', 0, -2, 0); prop('candle_triple', 0, 2, 0);
+    prop('rubble_large', -15, 15, 0.9); prop('crates_stacked', 15, -15, 0.9);
+  }
+  void S;
+}
+
+// ================== Dựng tầng ==================
+export function buildWorld(scene, floor = 1) {
+  if (!moon) {
+    scene.background = new THREE.Color(0x0b0908);
+    scene.fog = new THREE.Fog(0x0b0908, 26, 50);
+    hemi = new THREE.HemisphereLight(0xa8b8e0, 0x3a2a20, 1.1);
+    scene.add(hemi);
+    moon = new THREE.DirectionalLight(0xc8d4ff, 1.3);
+    moon.castShadow = true;
+    moon.shadow.mapSize.set(2048, 2048);
+    const sc = moon.shadow.camera;
+    sc.left = sc.bottom = -20; sc.right = sc.top = 20; sc.near = 1; sc.far = 60;
+    moon.shadow.bias = -0.0005;
+    scene.add(moon, moon.target);
+  }
+  if (worldGroup) scene.remove(worldGroup);
+  disposeLiquids();
+  worldGroup = new THREE.Group();
+  scene.add(worldGroup);
+  pillars.length = 0;
+  boxes.length = 0;
+  pits.length = 0;
+  pitFx.length = 0;
+  torches.length = 0;
+  seed = floor * 7919 + 17;
+  const theme = floorTheme(floor);
+  const B = theme.biome;
+  currentBiome = B;
+  scene.background.set(B.fog);
+  scene.fog.color.set(B.fog);
+  hemi.color.set(B.sky); hemi.groundColor.set(B.ground);
+  moon.color.set(B.moon);
+  const H0 = ROOM_HALF;
+  pitRects = SHAPES[theme.shape].map(([i0, i1, j0, j1]) => ({ x0: -H0 + i0 * TILE, x1: -H0 + (i1 + 1) * TILE, z0: -H0 + j0 * TILE, z1: -H0 + (j1 + 1) * TILE }));
+  for (const r of pitRects) {
+    const b = { x: (r.x0 + r.x1) / 2, z: (r.z0 + r.z1) / 2, hx: (r.x1 - r.x0) / 2 - 0.15, hz: (r.z1 - r.z0) / 2 - 0.15, pit: true };
+    boxes.push(b); pits.push(b);
+    // Đáy hố: nham thạch phát sáng / nước băng / bóng tối
+    // Đáy hố: dòng nham chảy / nước băng tối / sương mộ / vực sâu (shader)
+    const bottom = rectLiquid(r.x1 - r.x0, r.z1 - r.z0, { lava: 'lava', ice: 'water', crypt: 'mist', stone: 'void' }[B.id]);
+    bottom.material.transparent = false;
+    bottom.position.set(b.x, -1.1, b.z);
+    worldGroup.add(bottom);
+    // Thành đá bên trong miệng hố
+    const rim = new THREE.Mesh(new THREE.BoxGeometry(r.x1 - r.x0, 1.2, r.z1 - r.z0), new THREE.MeshStandardMaterial({ color: new THREE.Color(0x2a2420).multiply(new THREE.Color(B.tint)), roughness: 0.9, side: THREE.BackSide }));
+    rim.position.set(b.x, -0.6, b.z);
+    worldGroup.add(rim);
+    if (B.id === 'lava') { const l = new THREE.PointLight(0xff5a1a, 18, 9, 1.6); l.position.set(b.x, 0.5, b.z); worldGroup.add(l); torches.push({ light: l, base: 18, seed: rand() * 100, color: 0xff5a1a }); }
+    pitFx.push(r);
+    // Đá vỡ lởm chởm dọc mép hố (che cạnh thẳng tắp)
+    const rub = models['dungeon/rubble_large'];
+    if (rub) {
+      const edgeRock = (x, z) => {
+        if (Math.abs(x) > H0 - 0.5 || Math.abs(z) > H0 - 0.5 || rand() < 0.3) return;
+        const o = rub.scene.clone(true);
+        o.scale.set(DS * (0.12 + rand() * 0.16), DS * (0.08 + rand() * 0.12), DS * (0.12 + rand() * 0.16));
+        o.position.set(x, -0.05, z); o.rotation.y = rand() * Math.PI * 2;
+        o.traverse((c) => { if (c.isMesh) { c.receiveShadow = true; c.castShadow = true; } });
+        tintObject(o, B.tint);
+        worldGroup.add(o);
+      };
+      for (let x = r.x0; x <= r.x1; x += 1.6 + rand()) { edgeRock(x, r.z0 - 0.1); edgeRock(x, r.z1 + 0.1); }
+      for (let z = r.z0; z <= r.z1; z += 1.6 + rand()) { edgeRock(r.x0 - 0.1, z); edgeRock(r.x1 + 0.1, z); }
+    }
+  }
+
+  if (!models['dungeon/floor_tile_large'] || !models['dungeon/wall']) {
+    // Không có model: sàn phẳng đơn giản
+    const floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_HALF * 2, ROOM_HALF * 2), new THREE.MeshStandardMaterial({ color: 0x5a5048 }));
+    floorMesh.rotation.x = -Math.PI / 2;
+    floorMesh.receiveShadow = true;
+    worldGroup.add(floorMesh);
+    return theme;
+  }
+
+  const H = ROOM_HALF;
+  const at = (i) => -H + TILE / 2 + i * TILE;
+  const W = H + 0.4;
+
+  // Sàn
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    if (inPit(at(i), at(j))) continue;
+    piece(rand() < 0.07 ? 'floor_tile_large_rocks' : 'floor_tile_large', at(i), at(j), Math.floor(rand() * 4) * Math.PI / 2);
+  }
+  // Tường bắc, tây, đông (phía nam để trống cho camera)
+  for (let i = 0; i < N; i++) {
+    const v = () => (rand() < 0.25 ? 'wall_cracked' : 'wall');
+    piece(v(), at(i), -W, 0);
+    piece(v(), -W, at(i), Math.PI / 2);
+    piece(v(), W, at(i), -Math.PI / 2);
+  }
+  const wallMesh = models['dungeon/wall'].scene.getObjectByProperty('isMesh', true);
+  for (const sx of [-1, 1]) {
+    const c = new THREE.Mesh(new THREE.BoxGeometry(0.8, 4 * DS, 0.8), wallMesh.material);
+    c.position.set(sx * W, 2 * DS, -W);
+    worldGroup.add(c);
+  }
+  for (let i = 0; i <= N; i += 2) piece('column', -H + i * TILE, H + 0.4, 0);
+
+  // Đuốc (có đèn) và cờ
+  for (const x of [-13, -4.5, 4.5, 13]) wallTorch(x, -H, 0, theme.torch);
+  for (const z of [-9, 3, 13]) { wallTorch(-H, z, Math.PI / 2, theme.torch); wallTorch(H, z, -Math.PI / 2, theme.torch); }
+  for (const x of [-8.5, 0, 8.5]) piece('banner_patternA_red', x, -W, 0);
+  for (const x of [-17, 17]) piece('banner_shield_red', x, -W, 0);
+  piece('banner_patternA_red', -W, -3, Math.PI / 2);
+  piece('banner_patternA_red', W, 8, -Math.PI / 2);
+
+  buildLayout(theme.layout);
+  return theme;
+}
+
+// Biến cố "Bóng Tối": tắt gần hết ánh sáng chung, chỉ còn đuốc và đèn quanh nhân vật
+export function setDarkHook(fn) { darkHook = fn; }
+export function setDark(on) {
+  if (isDark === on) return;
+  isDark = on;
+  if (hemi) hemi.intensity = on ? 0.12 : 1.1;
+  if (moon) moon.intensity = on ? 0.08 : 1.3;
+  if (darkHook) darkHook(on);
+}
+
+// Nắp hầm dẫn xuống tầng sau
+let exitObj = null;
+export function spawnExit(x, z) {
+  removeExit();
+  exitObj = new THREE.Group();
+  const grate = models['dungeon/floor_tile_big_grate_open'];
+  if (grate) { const g = grate.scene.clone(true); g.scale.setScalar(DS * 0.75); g.position.y = 0.02; exitObj.add(g); }
+  const beam = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.0, 1.3, 6, 24, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0x7fd8ff, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+  );
+  beam.position.y = 3;
+  const light = new THREE.PointLight(0x7fd8ff, 14, 9, 1.6);
+  light.position.y = 1.5;
+  exitObj.add(beam, light);
+  exitObj.position.set(x, 0, z);
+  exitObj.userData = { beam, light, pos: new THREE.Vector3(x, 0, z) };
+  worldGroup.add(exitObj);
+  return exitObj.userData.pos;
+}
+export function removeExit() { if (exitObj) { exitObj.parent?.remove(exitObj); exitObj = null; } }
+export function exitPos() { return exitObj ? exitObj.userData.pos : null; }
+
+const flameVel = new THREE.Vector3();
+const amb = new THREE.Vector3();
+// Hạt môi trường theo vùng: tuyết, tàn lửa, ma trơi, bụi
+function ambientFx(focus) {
+  if (!focus) return;
+  const B = currentBiome;
+  const rx = () => focus.x + (Math.random() - 0.5) * 30, rz = () => focus.z + (Math.random() - 0.5) * 22;
+  if (B.id === 'ice' && Math.random() < 0.5) emit(amb.set(rx(), 7, rz()), { frame: F.sparkle, color: 0xffffff, color2: 0xbfe8ff, size: 0.25, size2: 0.2, life: 4, vel: flameVel.set((Math.random() - 0.5) * 0.6, -1.6, (Math.random() - 0.5) * 0.6), alpha: 0.8, hdr: 1, rotV: 2 });
+  if (B.id === 'lava' && Math.random() < 0.45) emit(amb.set(rx(), 0.2, rz()), { frame: F.glow, color: 0xffb060, color2: 0xff3a00, size: 0.18, size2: 0.02, life: 2.5, vel: flameVel.set((Math.random() - 0.5) * 0.8, 1.2 + Math.random(), (Math.random() - 0.5) * 0.8), hdr: 2.2 });
+  if (B.id === 'crypt' && Math.random() < 0.12) emit(amb.set(rx(), 0.4, rz()), { frame: F.glow, color: 0x9fffbf, color2: 0x2a8a4a, size: 0.5, size2: 0.1, life: 4, vel: flameVel.set((Math.random() - 0.5) * 0.4, 0.3, (Math.random() - 0.5) * 0.4), alpha: 0.7, fadeIn: 0.3 });
+  if (B.id === 'crypt' && Math.random() < 0.08) emit(amb.set(rx(), 0.2, rz()), { smoke: true, frame: F.smoke, color: 0x3a5a40, size: 3, size2: 5, life: 5, vel: flameVel.set(0.2, 0.05, 0), alpha: 0.18, fadeIn: 0.3 });
+  if (B.id === 'stone' && Math.random() < 0.15) emit(amb.set(rx(), 1 + Math.random() * 3, rz()), { frame: F.glow, color: 0xffe0b0, size: 0.06, size2: 0.06, life: 4, vel: flameVel.set((Math.random() - 0.5) * 0.3, 0.1, (Math.random() - 0.5) * 0.3), alpha: 0.6, hdr: 1, fadeIn: 0.3 });
+  for (const p of pitFx) {
+    if (B.id === 'lava' && Math.random() < 0.35) emit(amb.set(p.x0 + Math.random() * (p.x1 - p.x0), -0.6, p.z0 + Math.random() * (p.z1 - p.z0)), { frame: F.flame, color: 0xffa040, color2: 0xa01a00, size: 1.2, size2: 0.3, life: 0.9, vel: flameVel.set(0, 1.8, 0), alpha: 0.6, hdr: 1.4, fadeIn: 0.2, rotV: 1 });
+    if (B.id !== 'lava' && Math.random() < 0.05) emit(amb.set(p.x0 + Math.random() * (p.x1 - p.x0), -0.8, p.z0 + Math.random() * (p.z1 - p.z0)), { smoke: true, frame: F.smoke, color: B.id === 'ice' ? 0x8ac0e0 : 0x101010, size: 2, size2: 3, life: 3, vel: flameVel.set(0, 0.4, 0), alpha: 0.25, fadeIn: 0.3 });
+  }
+}
+export function updateWorld(time, focus) {
+  for (const t of torches) {
+    const f = Math.sin(time * 11 + t.seed) * 0.5 + Math.sin(time * 23 + t.seed * 2) * 0.3;
+    t.light.intensity = t.base + f * 3;
+    // Lửa đuốc
+    if (t.flame && Math.random() < 0.55) {
+      emit(t.flame, { frame: Math.random() < 0.5 ? F.flame : F.tongue, color: 0xffe8a0, color2: t.color, size: 0.42 + Math.random() * 0.2, size2: 0.08,
+        life: 0.35 + Math.random() * 0.2, vel: flameVel.set((Math.random() - 0.5) * 0.2, 1.1 + Math.random() * 0.5, (Math.random() - 0.5) * 0.2), rotV: (Math.random() - 0.5) * 2, hdr: 2, fadeIn: 0.15 });
+      if (Math.random() < 0.04) emit(t.flame, { frame: F.glow, color: 0xffd080, size: 0.12, size2: 0, life: 0.9, vel: flameVel.set((Math.random() - 0.5) * 0.6, 1.4, (Math.random() - 0.5) * 0.6), hdr: 2.5 });
+    }
+  }
+  ambientFx(focus);
+  if (exitObj) {
+    exitObj.userData.beam.material.opacity = 0.18 + Math.sin(time * 3) * 0.08;
+    exitObj.userData.light.intensity = 12 + Math.sin(time * 5) * 3;
+  }
+  // Vùng bóng đổ đi theo nhân vật (phòng lớn hơn vùng bóng)
+  if (moon && focus) {
+    moon.position.set(focus.x - 8, 18, focus.z + 8);
+    moon.target.position.set(focus.x, 0, focus.z);
+  }
+}
+
+// Có bị vật cản chắn tại điểm này không (dùng khi sinh quái, đạn bay)
+export function isBlocked(x, z, r = 0) {
+  if (Math.abs(x) > WALK_LIMIT - r || Math.abs(z) > WALK_LIMIT - r) return true;
+  if (pillars.some((p) => Math.hypot(x - p.x, z - p.z) < p.r + r)) return true;
+  return boxes.some((b) => (!b.pit || r >= 0) && Math.abs(x - b.x) < b.hx + r && Math.abs(z - b.z) < b.hz + r);
+}
+
+// Đẩy một vật hình tròn ra khỏi tường, cột và tường thấp
+export function collide(pos, radius) {
+  const lim = WALK_LIMIT;
+  pos.x = Math.max(-lim, Math.min(lim, pos.x));
+  pos.z = Math.max(-lim, Math.min(lim, pos.z));
+  for (const p of pillars) {
+    const dx = pos.x - p.x, dz = pos.z - p.z;
+    const d = Math.hypot(dx, dz), min = p.r + radius;
+    if (d < min && d > 0.0001) {
+      pos.x = p.x + (dx / d) * min;
+      pos.z = p.z + (dz / d) * min;
+    }
+  }
+  for (const b of boxes) {
+    const cx = Math.max(b.x - b.hx, Math.min(b.x + b.hx, pos.x));
+    const cz = Math.max(b.z - b.hz, Math.min(b.z + b.hz, pos.z));
+    const dx = pos.x - cx, dz = pos.z - cz;
+    const d = Math.hypot(dx, dz);
+    if (d < radius) {
+      if (d > 0.0001) { pos.x = cx + (dx / d) * radius; pos.z = cz + (dz / d) * radius; }
+      else {
+        // tâm nằm trong hộp: đẩy ra theo cạnh gần nhất
+        const ox = b.hx - Math.abs(pos.x - b.x), oz = b.hz - Math.abs(pos.z - b.z);
+        if (ox < oz) pos.x = b.x + Math.sign(pos.x - b.x || 1) * (b.hx + radius);
+        else pos.z = b.z + Math.sign(pos.z - b.z || 1) * (b.hz + radius);
+      }
+    }
+  }
+}

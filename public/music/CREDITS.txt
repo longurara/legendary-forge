@@ -1,0 +1,4 @@
+Nhạc nền – CC0 (OpenGameArt)
+  calm.ogg    "Dungeon Ambience" – yd            https://opengameart.org/content/dungeon-ambience
+  battle.ogg  "Battle RPG Theme" – CleytonRX      https://opengameart.org/content/boss-battle-theme
+  boss.ogg    "Epic Boss Battle" – Juhani Junkala https://opengameart.org/content/boss-battle-music (chuyển từ WAV sang OGG)
