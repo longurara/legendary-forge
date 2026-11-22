@@ -589,3 +589,22 @@ h3.sec { font: 700 19px var(--f-label); color: var(--gold); margin: 10px 0 4px; 
 #p2-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #2a7acf, #8fd0ff); }
 .p2hud span { font: 700 12px var(--f-body); color: var(--ink); }
 .p2hud.down b { color: #ff6a5a; }
+
+/* ================= Màn hình chính gọn hơn: lưới 2 cột, co theo chiều cao màn hình ================= */
+#start { gap: clamp(8px, 2vh, 22px); justify-content: center; overflow-y: auto; }
+.title-block h1 { font-size: clamp(44px, 8.5vh, 92px); }
+.title-block .kicker { font-size: clamp(11px, 1.5vh, 16px); }
+.title-block .divider img { width: clamp(70px, 9vh, 110px); }
+#start .menu-panel { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(4px, 0.9vh, 8px) 10px; width: min(560px, 92vw); padding: clamp(8px, 1.4vh, 14px) 16px; }
+#start .menu-panel .btn-row { display: contents; }
+#start .menu-panel #btn-play, #start .menu-panel #btn-howto, #start .menu-panel .sound-row, #start .menu-panel #start-best { grid-column: 1 / -1; }
+#start .menu-panel .btn { font-size: clamp(14px, 1.9vh, 18px); padding: clamp(0px, 0.4vh, 4px) 10px; border-width: 11px; border-image-width: 11px; line-height: 1.15; min-width: 0; }
+#start .menu-panel #btn-play { font-size: clamp(18px, 2.6vh, 24px); }
+#start .menu-panel .btn small { display: block; margin: 1px 0 0; font-size: 11px; }
+#start .menu-panel #start-best { margin: 0; font-size: 13px; }
+#start .credits { position: static; margin-top: 4px; font-size: 10px; max-width: 900px; }
+
+/* Hộp thoại cốt truyện: nền tối che hẳn menu phía sau */
+#story { background: rgba(4, 2, 1, .86); z-index: 60; }
+#story .story-panel { width: min(640px, 92vw); background: var(--panel-solid, #1a120c); background-clip: padding-box; }
+.story-line { min-height: 60px; }
