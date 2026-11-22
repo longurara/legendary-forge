@@ -18,7 +18,7 @@ import { loadModels } from './models.js';
 import { randomWeapon, forgeWeapons, weaponName, weaponIcons, makeWeapon, rollAffixes, affixById, codexKey, RARITY, TYPES, ELEMENTS, scrapValue, MAX_PLUS, enhanceCost, weaponScore } from './weapons.js';
 import { weaponIcon, $, show } from './ui.js';
 import { PERKS, EVOLUTIONS, rollPerks, xpForLevel, META, loadMeta, saveMeta } from './perks.js';
-import { RELICS, relicById, CHARACTERS, charById, CURSES, EVENTS, ACHIEVEMENTS } from './content.js';
+import { RELICS, relicById, CHARACTERS, charById, CURSES, EVENTS, ACHIEVEMENTS, DEPTHS } from './content.js';
 import { makeElite, updateEliteLabels } from './elites.js';
 import { buildHazards, updateHazards } from './hazards.js';
 import { Rewards, REWARDS } from './rewards.js';
@@ -175,6 +175,7 @@ let run = { char: 'knight', curses: [], daily: false };
 let choosingReward = false;      // đang chờ người chơi chọn bệ phần thưởng
 let nextReward = null;           // phần thưởng nhận khi dọn xong đợt tới
 let challengeWave = false;
+let waveTime = 0, creeping = false, creepT = 0, creepSpawn = 6;
 let scrap = 0;                   // Mảnh Thép (trong lượt chơi): phân rã vũ khí thừa, dùng để cường hóa
 let dropsThisWave = 0;
 let arenaT = 0, arenaSpawn = 0, arenaWave = false;
@@ -185,7 +186,8 @@ let darkLight = null;
 let slowmoReal = 0;
 
 const hasCurse = (id) => run.curses.includes(id);
-const soulMult = () => (1 + run.curses.reduce((s, id) => s + (CURSES.find((c) => c.id === id)?.bonus || 0), 0)) * (player?.stats.hoard ? 2 : 1);
+const soulMult = () => (1 + run.curses.reduce((s, id) => s + (CURSES.find((c) => c.id === id)?.bonus || 0), 0) + (run.depth || 0) * 0.15) * (player?.stats.hoard ? 2 : 1);
+const deep = (n) => (run.depth || 0) >= n;
 
 function spawnPos(minDist = 5.5, r = Math.random) {
   let x, z, tries = 0;
@@ -211,17 +213,21 @@ function playerPower() {
 }
 // Độ khó theo tầng/đợt: sát thương quái, tốc độ quái
 function applyDifficulty() {
-  ctx.enemyDmgMul = (1 + (floor - 1) * 0.18 + (wave - 1) * 0.012) * (hasCurse('glass') ? 1 : 1);
+  ctx.enemyDmgMul = 1.35 * (1 + (floor - 1) * 0.18 + (wave - 1) * 0.012) * (deep(2) ? 1.15 : 1);
+  ctx.floor = floor;
+  ctx.depth = run.depth || 0;
+  ctx.enemySpeed = (ctx.enemySpeed || 1) * (deep(5) ? 1.1 : 1) * (deep(10) ? 1.1 : 1);
   dmgScale.player = ctx.enemyDmgMul;
 }
 
 function addEnemy(e, opts = {}) {
   if (!e.isBoss) {
     const r = opts.r || Math.random;
-    e.hp = Math.round(e.hp * (1 + (wave - 1) * 0.08) * (1 + (floor - 1) * 0.3) * Math.pow(playerPower(), 0.4) * (hasCurse('tough') ? 1.5 : 1) * (opts.hpMul || 1));
+    e.hp = Math.round(e.hp * (1 + (wave - 1) * 0.08) * (1 + (floor - 1) * 0.3) * Math.pow(playerPower(), 0.4) * (hasCurse('tough') ? 1.5 : 1) * (deep(1) ? 1.2 : 1) * (opts.hpMul || 1));
     if (floor >= 3) e.eliteSpeed = (e.eliteSpeed || 1) * (1 + Math.min(0.25, (floor - 2) * 0.06));
-    const eliteChance = challengeWave || event?.id === 'elites' ? 1 : wave >= 3 ? Math.min(0.3, 0.04 + wave * 0.02) : 0;
-    if (r() < eliteChance) makeElite(e, null, r);
+    const baseChance = wave >= 3 || deep(3) ? Math.min(0.3, 0.04 + wave * 0.02) * (deep(3) ? 2 : 1) : 0;
+    const eliteChance = challengeWave || event?.id === 'elites' ? 1 : baseChance;
+    if (r() < eliteChance) makeElite(e, deep(4) ? 2 + (r() < 0.3 ? 1 : 0) : null, r);
   }
   e.maxHpEff = e.hp;
   enemies.push(e);
@@ -236,10 +242,11 @@ function spawnBossWave() {
   boss.spawnT = -0.4;
   applyDifficulty();
   // Máu boss theo tầng và theo sức mạnh hiện tại của người chơi
-  const hpMul = (1 + 0.4 * (floor - 1)) * playerPower();
+  const hpMul = (1 + 0.4 * (floor - 1)) * playerPower() * (deep(9) ? 1.3 : 1);
   boss.hp = boss.maxHp = Math.round(boss.maxHp * hpMul);
   boss.poiseMax = Math.round(boss.poiseMax * Math.sqrt(hpMul));
   boss.phases = floor >= 3 ? [0.6, 0.25] : [0.5];
+  if (deep(6)) boss.phases = floor >= 3 ? [0.75, 0.5, 0.25] : [0.6, 0.3];
   boss.bossKind = kind;
   if (hasCurse('bossrage')) {
     boss.hp = boss.maxHp = Math.round(boss.maxHp * 1.5);
@@ -264,11 +271,12 @@ function spawnWave() {
   setDark(false);
   arenaT = 0; arenaWave = false;
   dropsThisWave = 0;
+  waveTime = 0; creeping = false; creepT = 0; creepSpawn = 6;
   if (wave % 5 === 0) { spawnBossWave(); return; }
   applyDifficulty();
   const R = rngFor(1);
   // Biến cố đợt
-  if (wave >= 4 && !challengeWave && R() < 0.3) {
+  if (!challengeWave && ((wave >= 4 && R() < 0.3) || (deep(8) && wave >= 2))) {
     event = EVENTS[Math.floor(R() * EVENTS.length)];
     if (event.id === 'bloodmoon') ctx.enemySpeed *= 1.25;
     if (event.id === 'dark') setDark(true);
@@ -286,11 +294,11 @@ function spawnWave() {
   const assassins = wave >= 6 ? n(Math.min(Math.floor((wave - 4) / 2), 3)) : 0;
   const archers = wave >= 4 ? n(Math.min(Math.floor((wave - 2) / 3), 3)) : 0;
   const mothers = wave >= 7 ? n(Math.min(Math.floor((wave - 5) / 3), 2)) : 0;
-  const deep = floor - 1;                                    // tầng sâu có thêm quái mới
-  const shields = wave >= 3 ? n(Math.min(Math.floor(wave / 4) + Math.min(deep, 2), 4)) : 0;
-  const healers = wave >= 4 ? n(Math.min(1 + Math.floor((wave - 4) / 6) + (deep >= 2 ? 1 : 0), 3)) : 0;
-  const bombers = wave >= 3 ? n(Math.min(Math.floor((wave - 1) / 3) + deep, 5)) : 0;
-  const wraiths = wave >= 8 || deep >= 1 ? n(Math.min(Math.floor(wave / 5) + Math.floor(deep / 2), 4)) : 0;
+  const fl = floor - 1;                                      // tầng sâu có thêm quái mới
+  const shields = wave >= 3 ? n(Math.min(Math.floor(wave / 4) + Math.min(fl, 2), 4)) : 0;
+  const healers = wave >= 4 ? n(Math.min(1 + Math.floor((wave - 4) / 6) + (fl >= 2 ? 1 : 0), 3)) : 0;
+  const bombers = wave >= 3 ? n(Math.min(Math.floor((wave - 1) / 3) + fl, 5)) : 0;
+  const wraiths = wave >= 8 || fl >= 1 ? n(Math.min(Math.floor(wave / 5) + Math.floor(fl / 2), 4)) : 0;
   const list = [
     ...Array(Math.max(1, normals - bigs)).fill('normal'), ...Array(bigs).fill('big'), ...Array(lavas).fill('lava'),
     ...Array(mages).fill('mage'), ...Array(minions).fill('minion'), ...Array(assassins).fill('assassin'),
@@ -318,12 +326,29 @@ function spawnWave() {
     e.spawnT = -R() * 0.6;
     addEnemy(e, { hpMul, r: R });
   }
+  // Thủ Lĩnh (mini-boss) ở đợt thứ 3 của mỗi tầng
+  if (wave % 5 === 3 && !arenaWave) {
+    const [x, z] = spawnPos(8, R);
+    const C = [ShieldBearer, Minion, Assassin, Wraith][Math.floor(R() * 4)];
+    const mb = new C(scene, x, z);
+    mb.spawnT = -0.8;
+    mb.hp = Math.round(mb.hp * 5);
+    addEnemy(mb, { r: R });
+    if (!mb.elite) makeElite(mb, 3, R);
+    mb.miniBoss = true;
+    mb.name = 'Thủ Lĩnh ' + ({ ShieldBearer: 'Khiên Binh', Minion: 'Lính Xương', Assassin: 'Sát Thủ', Wraith: 'Bóng Ma' }[C.name] || '');
+    mb.group.scale.multiplyScalar(1.35);
+    mb.maxHpEff = mb.hp;
+    mb.poiseMax = Math.round(mb.hp * 0.4);
+    mb.dropChance = 0;
+  }
   ctx.enemies = enemies;
   if (player.hasRelic('badge')) player.shieldHp = 25;
   const parts = [minions && `${minions} lính xương`, shields && `${shields} khiên binh`, archers && `${archers} cung thủ`, assassins && `${assassins} sát thủ`, mages && `${mages} pháp sư`,
     healers && `${healers} pháp sư hồi máu`, bombers && `${bombers} slime bom`, wraiths && `${wraiths} bóng ma`].filter(Boolean).slice(0, 4).join(' · ');
   if (challengeWave) showBanner(`Đợt ${wave}: Thử Thách`, 'Toàn quái tinh anh · thưởng di vật', 2.4, '#ff6a4a');
   else if (event) showBanner(event.name, event.desc, 2.6, event.color);
+  else if (enemies.some((e) => e.miniBoss)) showBanner('Thủ Lĩnh xuất hiện!', enemies.find((e) => e.miniBoss).name + ' · hạ để nhận rương di vật', 2.6, '#ff8a4a');
   else showBanner(`Đợt ${wave}`, parts);
   renderEvent();
   play('waveStart');
@@ -364,7 +389,7 @@ function onWaveCleared() {
     loot.anvilUses = player.hasRelic('gauntlet') ? 2 : 1;
     showBanner('Đe Rèn xuất hiện!', 'Mang 2 vũ khí tới đe, bấm E để rèn', 2.6, '#ffa040');
   }
-  if (!hasCurse('nopot')) player.heal(10 + (meta.up.regen || 0) * 6);
+  if (!hasCurse('nopot') && meta.up.regen) player.heal(meta.up.regen * 6);
   // Bệ phần thưởng cho đợt sau
   offerRewards();
   checkAchievements();
@@ -585,6 +610,10 @@ function descend() {
   setTimeout(() => {
     floor++;
     meta.stats.maxFloor = Math.max(meta.stats.maxFloor || 0, floor);
+    if (floor === 5 && !run.daily && (run.depth || 0) >= (meta.depthMax || 0) && (meta.depthMax || 0) < 10) {
+      meta.depthMax = (run.depth || 0) + 1;
+      setTimeout(() => toast('x_skull-signet', `Mở khóa Bậc Hầm Sâu ${meta.depthMax}`, 'Chọn ở màn chuẩn bị trước khi vào hầm'), 1500);
+    }
     saveMeta(meta);
     exitOpen = false;
     removeExit();
@@ -655,7 +684,7 @@ function onKill(e) {
     if (Math.random() < 0.55 * dropMult) loot.spawnPickup('gold', e.pos.x, e.pos.z, (e.elite ? 5 : 1) + Math.floor(Math.random() * 2));
   }
   // Bình máu
-  const potionChance = hasCurse('nopot') ? 0 : e.isBoss ? 1 : 0.06 * (1 + st.luck) * dropMult;
+  const potionChance = hasCurse('nopot') || deep(7) ? (e.isBoss && !deep(7) ? 1 : 0) : e.isBoss ? 1 : 0.03 * (1 + st.luck) * dropMult;
   if (Math.random() < potionChance) loot.spawnPickup('potion', e.pos.x, e.pos.z);
   // Vũ khí rơi
   if (e.isBoss) {
@@ -676,6 +705,7 @@ function onKill(e) {
     if (weaponScore(w) < best * 0.8 || dropsThisWave >= 2 + Math.floor(st.luck * 2) || loot.drops.length >= 4) loot.spawnPickup('scrap', e.pos.x, e.pos.z, scrapValue(w));
     else { loot.drop(w, e.pos.x, e.pos.z); dropsThisWave++; }
   } else if (Math.random() < 0.12 * dropMult) loot.spawnPickup('scrap', e.pos.x, e.pos.z, e.elite ? 3 : 1);
+  if (e.miniBoss) { rewards.spawnChest(e.pos.x, e.pos.z); for (let i = 0; i < 5; i++) loot.spawnPickup('gold', e.pos.x, e.pos.z, 5); showBanner('Đã hạ Thủ Lĩnh!', 'Rơi rương di vật', 2, '#ff8a4a'); }
   if (e.elite) {
     if (player.hasRelic('skull')) player.heal(15);
     if (st.hoard && Math.random() < 0.35) rewards.spawnChest(e.pos.x, e.pos.z);
@@ -821,7 +851,16 @@ function renderPrep() {
     meta.curses = run.curses; saveMeta(meta);
     play('uiClick'); renderPrep();
   };
-  const bonus = run.curses.reduce((s, id) => s + CURSES.find((c) => c.id === id).bonus, 0);
+  const maxD = meta.depthMax || 0;
+  run.depth = Math.min(run.depth ?? meta.depth ?? 0, maxD);
+  $('depth-val').textContent = run.depth;
+  $('depth-max').textContent = maxD ? `(đã mở tới bậc ${maxD})` : '(hạ boss tầng 4 để mở bậc 1)';
+  $('depth-minus').disabled = run.depth <= 0;
+  $('depth-plus').disabled = run.depth >= maxD;
+  $('depth-rules').innerHTML = run.depth ? DEPTHS.filter((d) => d.n <= run.depth).map((d) => `<li><b>${d.n}</b> ${d.text}</li>`).join('') : '<li class="muted">Không có luật thêm</li>';
+  $('depth-minus').onclick = () => { run.depth = Math.max(0, run.depth - 1); meta.depth = run.depth; saveMeta(meta); play('uiClick'); renderPrep(); };
+  $('depth-plus').onclick = () => { run.depth = Math.min(maxD, run.depth + 1); meta.depth = run.depth; saveMeta(meta); play('uiClick'); renderPrep(); };
+  const bonus = run.curses.reduce((s, id) => s + CURSES.find((c) => c.id === id).bonus, 0) + run.depth * 0.15;
   $('curse-bonus').textContent = bonus ? `Hồn Thép nhận được +${Math.round(bonus * 100)}%` : 'Không có lời nguyền';
 }
 
@@ -1042,6 +1081,32 @@ function update(realDt, render = true) {
     ctx.enemies = enemies;
     if (born.length || kills % 10 === 0) checkAchievements();
 
+    // Bóng Tối Lan: đợt kéo dài quá lâu thì bóng tối gây sát thương và sinh tinh anh
+    const fighting = enemies.some((e) => e.alive && !e.isBoss) && !enemies.some((e) => e.isBoss) && arenaT <= 0 && !player.dead;
+    if (fighting) {
+      waveTime += dt;
+      const limit = deep(10) ? 40 : 60;
+      if (!creeping && waveTime >= limit) {
+        creeping = true;
+        showBanner('Bóng Tối Lan!', 'Đánh nhanh lên: bóng tối đang nuốt căn phòng', 2.4, '#9a6aff');
+        play('anvil', { rate: 0.6 });
+      }
+      if (creeping) {
+        creepT -= dt; creepSpawn -= dt;
+        if (creepT <= 0) {
+          creepT = Math.max(1.2, 2.4 - (waveTime - limit) * 0.02);
+          const a = Math.random() * Math.PI * 2, rr = Math.random() * 2.5;
+          combat.scheduleBomb(new THREE.Vector3(player.pos.x + Math.cos(a) * rr, 0, player.pos.z + Math.sin(a) * rr), 0.9, 2.2, 0, 12, 0x7a3aff);
+        }
+        if (creepSpawn <= 0 && enemies.length < 30) {
+          creepSpawn = 9;
+          const [x, z] = spawnPos(9);
+          const w = new Wraith(scene, x, z);
+          addEnemy(w); if (!w.elite) makeElite(w, 1);
+          ctx.enemies = enemies;
+        }
+      }
+    }
     // Đấu Trường: quái kéo tới liên tục cho đến hết giờ
     if (arenaT > 0 && !player.dead) {
       arenaT -= dt;
@@ -1148,11 +1213,11 @@ function updateHud(realDt) {
   $('lvl').textContent = player.level;
   $('xp-fill').style.width = Math.min(100, (player.xp / xpForLevel(player.level)) * 100) + '%';
   $('souls').textContent = meta.souls;
-  const boss = enemies.find((e) => e.isBoss && !e.dead);
+  const boss = enemies.find((e) => e.isBoss && !e.dead) || enemies.find((e) => e.miniBoss && !e.dead);
   show('boss-bar', !!boss && started);
   if (boss) {
     $('boss-name').textContent = boss.name + (boss.stunned ? ' · Choáng!' : boss.enraged ? ' · Nổi giận!' : '');
-    $('boss-fill').style.width = Math.max(0, (boss.hp / boss.maxHp) * 100) + '%';
+    $('boss-fill').style.width = Math.max(0, (boss.hp / (boss.maxHp || boss.maxHpEff)) * 100) + '%';
     $('boss-poise').style.width = boss.poiseMax ? Math.min(100, (boss.stunned ? 100 : boss.poise / boss.poiseMax * 100)) + '%' : '0%';
   }
   hurtFlash = Math.max(0, hurtFlash - realDt * 2.5);
@@ -1161,7 +1226,10 @@ function updateHud(realDt) {
   hud.lowhp.style.opacity = low ? 0.35 + Math.sin(time * 6) * 0.25 : 0;
   $('slowmo').style.opacity = player.slowmoT > 0 ? 1 : 0;
   const idle = started && !player.dead && enemies.length === 0 && wave > 0;
-  hud.timer.innerHTML = arenaT > 0 ? `<i class="ico ico-hourglass"></i> Đấu Trường: còn ${Math.ceil(arenaT)} giây`
+  const creepLimit = deep(10) ? 40 : 60;
+  hud.timer.innerHTML = creeping ? '<i class="ico ico-hourglass"></i> <span style="color:#b89aff">Bóng Tối Lan!</span>'
+    : waveTime > creepLimit - 15 && enemies.length ? `<i class="ico ico-hourglass"></i> Bóng Tối Lan sau ${Math.ceil(creepLimit - waveTime)} giây`
+    : arenaT > 0 ? `<i class="ico ico-hourglass"></i> Đấu Trường: còn ${Math.ceil(arenaT)} giây`
     : !idle ? ''
     : exitOpen ? '<i class="ico ico-hourglass"></i> Tới nắp hầm giữa phòng để xuống tầng'
     : choosingReward ? '<i class="ico ico-hourglass"></i> Chọn một bệ phần thưởng để bắt đầu đợt tiếp theo'
@@ -1208,8 +1276,8 @@ function startGame(opts = {}) {
   unlockMusic();
   play('uiConfirm');
   run = opts.daily
-    ? { char: 'knight', curses: [], daily: true }
-    : { char: run.char, curses: [...run.curses], daily: false };
+    ? { char: 'knight', curses: [], daily: true, depth: 0 }
+    : { char: run.char, curses: [...run.curses], daily: false, depth: run.depth || 0 };
   setSeed(run.daily ? daySeed() : null);
   started = true;
   for (const id of ['start', 'howto', 'prep']) show(id, false);

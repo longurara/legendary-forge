@@ -53,14 +53,15 @@ export function rollPerks(levels, n = 3) {
   return out;
 }
 
-export function xpForLevel(level) { return 6 + level * 5; }
+// Lên cấp chậm dần ở cấp cao (tầng 3 khoảng cấp 10–12)
+export function xpForLevel(level) { return Math.round(8 + level * 7 + Math.pow(level, 1.7)); }
 
 // ---------- Lò Rèn: nâng cấp vĩnh viễn bằng Hồn Thép (lưu giữa các lượt chơi) ----------
 export const META = [
   { id: 'hp', name: 'Giáp Rèn', icon: 'p_hp', max: 5, cost: (lv) => 15 + lv * 15, desc: (lv) => `Bắt đầu với +${lv * 10} máu tối đa` },
   { id: 'dmg', name: 'Lưỡi Tôi Luyện', icon: 'p_dmg', max: 5, cost: (lv) => 20 + lv * 20, desc: (lv) => `+${lv * 6}% sát thương vĩnh viễn` },
   { id: 'regen', name: 'Bánh Mì Thợ Rèn', icon: 'potion', max: 3, cost: (lv) => 25 + lv * 25, desc: (lv) => `Hồi thêm ${lv * 6} máu sau mỗi đợt` },
-  { id: 'start', name: 'Vũ Khí Gia Truyền', icon: 'anvil', max: 2, cost: (lv) => (lv === 0 ? 60 : 160), desc: (lv) => ['Bắt đầu với kiếm Thường', 'Bắt đầu với kiếm Hiếm có nguyên tố', 'Bắt đầu với kiếm Sử thi có nguyên tố'][lv] },
+  { id: 'start', name: 'Vũ Khí Gia Truyền', icon: 'anvil', max: 2, cost: (lv) => (lv === 0 ? 60 : 160), desc: (lv) => ['Bắt đầu với vũ khí Thường', 'Bắt đầu với vũ khí Hiếm có nguyên tố', 'Bắt đầu với vũ khí Hiếm có nguyên tố + 1 phụ tố'][lv] },
   { id: 'cards', name: 'Trí Tuệ Thợ Cả', icon: 'level', max: 1, cost: () => 120, desc: (lv) => (lv ? 'Lên cấp được chọn trong 4 thẻ' : 'Lên cấp chỉ chọn trong 3 thẻ') },
   { id: 'souls', name: 'Bình Linh Hồn', icon: 'soul', max: 3, cost: (lv) => 40 + lv * 40, desc: (lv) => `+${lv * 20}% Hồn Thép nhặt được` },
 ];

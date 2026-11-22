@@ -281,7 +281,8 @@ export class Wraith extends Walker {
     this.cd -= bdt;
     if (this.state === 'stalk') {
       this.facing = Math.atan2(dx, dz);
-      if (d > 3) this.move(dx / d, dz / d, 3.4, bdt);
+      if ((player.charging || (player.attack && d < 3)) && d < 5) this.move(-dx / d, -dz / d, 4.5, bdt);   // né
+      else if (d > 3) this.move(dx / d, dz / d, 3.4, bdt);
       if (this.cd <= 0 && !player.dead) {
         // Biến mất rồi hiện ra sau lưng người chơi
         this.state = 'vanish'; this.timer = 0.45;

@@ -51,6 +51,19 @@ export const CHARACTERS = [
 export const charById = (id) => CHARACTERS.find((c) => c.id === id) || CHARACTERS[0];
 
 // ---------- Lời nguyền (tự chọn trước lượt chơi, đổi lấy thêm Hồn Thép) ----------
+// ---------- Bậc Hầm Sâu: mỗi bậc cộng dồn một luật khó hơn ----------
+export const DEPTHS = [
+  { n: 1, text: 'Quái thường +20% máu' },
+  { n: 2, text: 'Quái gây thêm 15% sát thương' },
+  { n: 3, text: 'Tinh anh xuất hiện từ đợt 1, nhiều gấp đôi' },
+  { n: 4, text: 'Tinh anh luôn có ít nhất 2 thuộc tính' },
+  { n: 5, text: 'Quái nhanh hơn 10%' },
+  { n: 6, text: 'Boss có thêm một giai đoạn' },
+  { n: 7, text: 'Không có bình máu rơi' },
+  { n: 8, text: 'Đợt nào cũng có biến cố' },
+  { n: 9, text: 'Boss thêm 30% máu' },
+  { n: 10, text: 'Bóng Tối Lan sớm hơn (40 giây), quái nhanh thêm 10%' },
+];
 export const CURSES = [
   { id: 'tough', name: 'Quái Trâu', icon: 'x_mailed-fist', desc: 'Quái có thêm 50% máu', bonus: 0.25 },
   { id: 'fast', name: 'Quái Cuồng', icon: 'x_winged-leg', desc: 'Quái nhanh hơn 20%', bonus: 0.2 },

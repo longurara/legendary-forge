@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { keys, pressed, mouse, pad } from './input.js';
 import { collide } from './world.js';
 import { spawnSlash, burst, addShake, addHitStop, damageNumber, spawnRing, spawnBolt, smoke, flash, hitSpark, emit, F } from './fx.js';
-import { TYPES, RARITY, makeWeapon, buildWeaponMesh, buildHeldWeapon, slashColor, applyAffixes } from './weapons.js';
+import { TYPES, RARITY, makeWeapon, buildWeaponMesh, buildHeldWeapon, slashColor, applyAffixes, rollAffixes } from './weapons.js';
 import { onIce } from './hazards.js';
 import { ctx, dealDamage, spawnOrb, spawnBoomerang, spawnSwordWave, spawnFirePatch, scheduleBomb, aoe } from './combat.js';
 import { models, fitModel, Animator } from './models.js';
@@ -136,7 +136,8 @@ export class Player {
     this.relicT = { frost: 0, quiver: 0, ember: 0 };
     const startLv = up.start || 0;
     const wType = this.char.weapon;
-    this.weapons = [startLv ? makeWeapon(wType, ELS[Math.floor(Math.random() * 4)], startLv) : makeWeapon(wType)];
+    // Vũ khí khởi đầu tối đa là Hiếm (cấp 2: thêm 1 phụ tố)
+    this.weapons = [startLv ? makeWeapon(wType, ELS[Math.floor(Math.random() * 4)], 1, null, startLv >= 2 ? rollAffixes(1) : []) : makeWeapon(wType)];
     this.slot = 0;
     this.onWeaponsChanged = null;
     this.recalc();
@@ -251,7 +252,7 @@ export class Player {
       if (dmg <= 0) { this.iframes = 0.4; damageNumber(this.pos, 'Chặn', 'burn'); return false; }
     }
     this.hp = Math.max(0, this.hp - dmg);
-    this.iframes = 0.8;
+    this.iframes = 0.55;
     this.gainRage(8);
     addShake(0.5);
     addHitStop(0.08);
@@ -359,7 +360,8 @@ export class Player {
     this.gainRage(dealt * 0.35);
     if (this.stats.leech) {
       this.leechAcc += dealt * this.stats.leech;
-      if (this.leechAcc >= 1) { const h = Math.floor(this.leechAcc); this.leechAcc -= h; this.heal(h); }
+      // Hút máu có giới hạn: tối đa ~3% máu tối đa mỗi giây
+      if (this.leechAcc >= 1) { const h = Math.min(Math.floor(this.leechAcc), Math.floor(this.leechBudget || 0)); this.leechAcc = Math.min(this.leechAcc - h, 3); this.leechBudget -= h; if (h > 0) this.heal(h); }
     }
     if (this.stats.chainChance && Math.random() < this.stats.chainChance) {
       dealDamage(e, Math.max(1, Math.round(dmg * 0.3)), { ...this.weapon, element: 'lightning', element2: null }, null, 0, false);
@@ -519,6 +521,7 @@ export class Player {
     if (this.dead) return;
     this.iframes = Math.max(0, this.iframes - dt);
     this.parryT = Math.max(0, this.parryT - dt);
+    this.leechBudget = Math.min(this.maxHp * 0.03, (this.leechBudget || 0) + this.maxHp * 0.03 * dt);
     this.dodgeWindow = Math.max(0, this.dodgeWindow - dt);
     this.specialCd = Math.max(0, this.specialCd - dt);
     // Lướt: tích nhiều lần (Giày Gió, Sát Thủ, Bóng Ma)

@@ -172,6 +172,7 @@ export class Enemy {
       this.stunT -= dt;
       if (Math.random() < dt * 10) burst(this.pos.clone().setY(1.6 * (this.isBoss ? 2 : 1)), 0xffe060, 1, { speed: 1.5, up: 0.5, gravity: 0, life: 0.3, size: 0.12 });
     }
+    if (this.eliteTick) this.eliteTick(dt);
     if (this.regenPct && this.hp < this.maxHpEff) this.hp = Math.min(this.maxHpEff, this.hp + this.maxHpEff * this.regenPct * dt);
     if (this.eliteRing) {
       this.eliteRing.position.set(this.pos.x, 0.05, this.pos.z);
@@ -526,7 +527,11 @@ export class Mage extends Enemy {
       }
       if (this.shootT <= 0 && !player.dead) {
         const origin = this.pos.clone().setY(1.1).addScaledVector(to, 0.7);
-        enemyShot(origin, to, 8);
+        // Bắn đón đầu: nhắm vào chỗ người chơi sắp tới
+        const tLead = Math.min(1.6, d / 7) * ((ctx.floor || 1) >= 2 ? 0.85 : 0.5);
+        const aimAt = player.pos.clone().addScaledVector(player.vel || new THREE.Vector3(), tLead);
+        const lead = new THREE.Vector3(aimAt.x - this.pos.x, 0, aimAt.z - this.pos.z).normalize();
+        enemyShot(origin, lead, 8);
         this.shootT = 2.3 + Math.random() * 0.9;
         this.casting = false;
         this.core.scale.setScalar(this.walker ? 0.001 : 1);

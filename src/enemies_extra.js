@@ -93,8 +93,13 @@ export class Minion extends Enemy {
           this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 2.4, arc: 1.9, facing: this.facing, duration: 0.55 });
           if (this.anim) this.anim.play('1H_Melee_Attack_Chop', { once: true, fade: 0.05, speed: 1.25 });
         } else if (d > 1.3 && this.busy <= 0) {
-          this.pos.x += (dx / d) * 3.1 * bdt;
-          this.pos.z += (dz / d) * 3.1 * bdt;
+          // Bao vây: mỗi con nhắm một góc quanh người chơi rồi mới áp sát
+          if (this.flankA == null) this.flankA = Math.random() * Math.PI * 2;
+          let tx = dx, tz = dz;
+          if (d > 3.2) { tx = player.pos.x + Math.cos(this.flankA) * 2.4 - this.pos.x; tz = player.pos.z + Math.sin(this.flankA) * 2.4 - this.pos.z; }
+          const td = Math.hypot(tx, tz) || 1;
+          this.pos.x += (tx / td) * 3.1 * bdt;
+          this.pos.z += (tz / td) * 3.1 * bdt;
           anim = 'Running_C';
         } else if (this.busy <= 0) anim = 'Idle_Combat';
       } else if (this.state === 'windup') {
@@ -109,7 +114,16 @@ export class Minion extends Enemy {
         }
       } else if (this.state === 'recover') {
         this.timer -= bdt;
-        if (this.timer <= 0) { this.state = 'chase'; this.cd = 1.0 + Math.random() * 0.6; }
+        if (this.timer <= 0) {
+          // Tầng 3 trở đi: 50% đánh thêm một nhát nhanh
+          if ((ctx.floor || 1) >= 3 && !this.comboed && Math.random() < 0.5 && !player.dead && Math.hypot(player.pos.x - this.pos.x, player.pos.z - this.pos.z) < 3) {
+            this.comboed = true;
+            this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
+            this.state = 'windup'; this.timer = 0.38;
+            this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 2.4, arc: 1.9, facing: this.facing, duration: 0.38 });
+            if (this.anim) this.anim.play('1H_Melee_Attack_Slice_Horizontal', { once: true, fade: 0.05, speed: 1.6 });
+          } else { this.comboed = false; this.state = 'chase'; this.cd = 1.0 + Math.random() * 0.6; }
+        }
       }
     }
 
@@ -336,7 +350,9 @@ export class Assassin extends Enemy {
       this.cd -= bdt;
       if (this.state === 'chase') {
         this.facing = Math.atan2(dx, dz);
-        if (d < 7.5 && this.cd <= 0 && !player.dead) {
+        if ((player.charging || (player.attack && d < 3)) && d < 6) {
+          this.pos.x -= (dx / d) * 5 * bdt; this.pos.z -= (dz / d) * 5 * bdt; anim = 'Running_C';
+        } else if (d < 7.5 && this.cd <= 0 && !player.dead) {
           this.state = 'aim'; this.timer = 0.6;
           spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 1.2, length: 9, facing: this.facing, duration: 0.6 });
           if (this.anim) this.anim.play('1H_Melee_Attack_Stab', { once: true, fade: 0.1, speed: 0.6 });
