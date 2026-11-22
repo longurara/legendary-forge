@@ -1,11 +1,16 @@
 import * as THREE from 'three';
-import { endFrame, pressed, mouse, pollGamepad, pad, resetTouch } from './input.js';
-import { buildWorld, updateWorld, isBlocked, ROOM_HALF, spawnExit, removeExit, exitPos, floorTheme, setDark, setDarkHook } from './world.js';
+import { endFrame, pressed, mouse, pollGamepad, pad, resetTouch, keys, coop, touch as touchIn } from './input.js';
+import { buildWorld, updateWorld, isBlocked, isPit, ROOM_HALF, spawnExit, removeExit, exitPos, floorTheme, setDark, setDarkHook } from './world.js';
 import { Player, SPECIALS } from './player.js';
 import { Slime, Mage } from './enemies.js';
 import { Healer, ShieldBearer, Bomber, Wraith, ShadowLord } from './enemies_new.js';
+import { Armored, Burrower, Totem } from './enemies_more.js';
+import { EVENTS_ROOM, QUESTS } from './events.js';
+import { GODS, BOONS, DUOS, godCards } from './gods.js';
+import { genFloorMap, choicesAt, renderMap } from './floormap.js';
+import { BUILDINGS, STORY, unlockedStory, loadBoard, submitRun } from './village.js';
 import { Minion, Boss, Assassin, Archer, KingSlime, ArchMage } from './enemies_extra.js';
-import { initFx, updateFx, shake, hitStop, clearFx, damageNumber, fxQuality, setFxQuality, dmgScale, explosion, spawnRing as fxRing, flash as fxFlash } from './fx.js';
+import { initFx, updateFx, shake, hitStop, clearFx, damageNumber, fxQuality, setFxQuality, dmgScale, explosion, spawnRing as fxRing, flash as fxFlash, smoke, burst, addShake } from './fx.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -21,6 +26,7 @@ import { PERKS, EVOLUTIONS, rollPerks, xpForLevel, META, loadMeta, saveMeta } fr
 import { RELICS, relicById, CHARACTERS, charById, CURSES, EVENTS, ACHIEVEMENTS, DEPTHS } from './content.js';
 import { makeElite, updateEliteLabels } from './elites.js';
 import { buildHazards, updateHazards } from './hazards.js';
+import * as hazards from './hazards.js';
 import { Rewards, REWARDS } from './rewards.js';
 import { updateAbilities, clearAbilities, ULTIMATES } from './abilities.js';
 import { setMusic, updateMusic, unlockMusic } from './music.js';
@@ -116,7 +122,7 @@ function updateToasts(dt) {
 }
 
 const TYPE_LABEL = (w) => (TYPES[w.type].ranged ? 'Đánh xa' : 'Cận chiến');
-const affixText = (w) => (w.affixes || []).map((id) => affixById(id)?.name).filter(Boolean);
+const affixText = (w) => [...(w.legendText ? ['★ ' + w.legendText] : []), ...(w.affixes || []).map((id) => affixById(id)?.name).filter(Boolean), ...(w.gems || []).map((g) => weaponsMod.GEMS[g]?.name + ' (' + weaponsMod.GEMS[g]?.text + ')')];
 function renderSlots() {
   for (let i = 0; i < 2; i++) {
     const el = hud.slots[i];
@@ -132,7 +138,7 @@ function renderSlots() {
     el.innerHTML = `<span class="num">${i + 1}</span>
       <div class="icon"><img src="${weaponIcon(w)}" alt=""></div>
       <div class="info"><div class="name" style="color:${r.css}">${weaponName(w)}</div>
-      <div class="meta">${weaponIcons(w)}<span>${r.name} · ${TYPE_LABEL(w)}</span></div>
+      <div class="meta">${weaponIcons(w)}<span>${r.name} · ${TYPE_LABEL(w)}</span><span class="dur${(w.dur ?? 100) <= 0 ? ' broken' : (w.dur ?? 100) < 30 ? ' low' : ''}">${Math.ceil(w.dur ?? 100)}%</span></div>
       ${aff.length ? `<div class="affixes">${aff.map((a) => `<span>${a}</span>`).join('')}</div>` : ''}</div>`;
   }
   const sp = SPECIALS[player.weapon.type];
@@ -145,7 +151,7 @@ function renderSlots() {
 function renderRelics() {
   $('relics').innerHTML = player.relics.map((id) => {
     const r = relicById(id);
-    return `<div class="relic" title="${r.name}: ${r.desc}"><i class="ico" style="--i:url('/ui/icons/${r.icon}.svg')"></i></div>`;
+    return `<div class="relic${r.cursed ? ' cursed' : ''}" title="${r.name}: ${r.desc}"><i class="ico" style="--i:url('/ui/icons/${r.icon}.svg')"></i></div>`;
   }).join('');
 }
 
@@ -215,16 +221,21 @@ function playerPower() {
 }
 // Độ khó theo tầng/đợt: sát thương quái, tốc độ quái
 function applyDifficulty() {
-  ctx.enemyDmgMul = 1.35 * (1 + (floor - 1) * 0.18 + (wave - 1) * 0.012) * (deep(2) ? 1.15 : 1);
+  ctx.enemyDmgMul = 1.35 * (1 + (floor - 1) * 0.18 + (wave - 1) * 0.012) * (deep(2) ? 1.15 : 1) * (1 + extraDmgCurse);
+  ctx.bossBane = bossBane;
   ctx.floor = floor;
   ctx.depth = run.depth || 0;
   ctx.enemySpeed = (ctx.enemySpeed || 1) * (deep(5) ? 1.1 : 1) * (deep(10) ? 1.1 : 1);
   dmgScale.player = ctx.enemyDmgMul;
 }
 
+const BIOME_ELEM = { ice: ['ice', 'fire'], lava: ['fire', 'ice'], crypt: ['blood', 'holy'], stone: [null, null] };
 function addEnemy(e, opts = {}) {
+  const be = BIOME_ELEM[floorTheme(floor).biome.id] || [null, null];
+  if (be[0] && Math.random() < 0.8) { e.resist = be[0]; e.weak = be[1]; }
   if (!e.isBoss) {
     const r = opts.r || Math.random;
+    if (player.hasRelic('greed')) e.hp *= 1.25;
     e.hp = Math.round(e.hp * (1 + (wave - 1) * 0.08) * (1 + (floor - 1) * 0.3) * Math.pow(playerPower(), 0.4) * (hasCurse('tough') ? 1.5 : 1) * (deep(1) ? 1.2 : 1) * (opts.hpMul || 1));
     if (floor >= 3) e.eliteSpeed = (e.eliteSpeed || 1) * (1 + Math.min(0.25, (floor - 2) * 0.06));
     const baseChance = wave >= 3 || deep(3) ? Math.min(0.3, 0.04 + wave * 0.02) * (deep(3) ? 2 : 1) : 0;
@@ -273,7 +284,9 @@ function spawnWave() {
   setDark(false);
   arenaT = 0; arenaWave = false;
   dropsThisWave = 0;
+  hitThisWave = false;
   waveTime = 0; creeping = false; creepT = 0; creepSpawn = 6;
+  if (run.bossrush) { wave = floor * 5; renderEvent(); }
   if (wave % 5 === 0) { spawnBossWave(); return; }
   applyDifficulty();
   const R = rngFor(1);
@@ -301,7 +314,10 @@ function spawnWave() {
   const healers = wave >= 4 ? n(Math.min(1 + Math.floor((wave - 4) / 6) + (fl >= 2 ? 1 : 0), 3)) : 0;
   const bombers = wave >= 3 ? n(Math.min(Math.floor((wave - 1) / 3) + fl, 5)) : 0;
   const wraiths = wave >= 8 || fl >= 1 ? n(Math.min(Math.floor(wave / 5) + Math.floor(fl / 2), 4)) : 0;
+  const armoreds = wave >= 5 || fl >= 1 ? n(Math.max(0, Math.min(Math.floor((wave - 3) / 3) + fl, 4))) : 0;
+  const burrowers = wave >= 4 ? n(Math.max(0, Math.min(Math.floor((wave - 2) / 3) + Math.floor(fl / 2), 3))) : 0;
   const list = [
+    ...Array(armoreds).fill('armored'), ...Array(burrowers).fill('burrower'),
     ...Array(Math.max(1, normals - bigs)).fill('normal'), ...Array(bigs).fill('big'), ...Array(lavas).fill('lava'),
     ...Array(mages).fill('mage'), ...Array(minions).fill('minion'), ...Array(assassins).fill('assassin'),
     ...Array(archers).fill('archer'), ...Array(mothers).fill('mother'),
@@ -311,7 +327,7 @@ function spawnWave() {
   // Giới hạn tổng số quái: bớt slime thường trước
   const cap = 24 + floor * 2;
   while (list.length > cap) { const i = list.indexOf('normal'); list.splice(i >= 0 ? i : 0, 1); }
-  const make = { mage: Mage, minion: Minion, assassin: Assassin, archer: Archer, healer: Healer, shield: ShieldBearer, bomber: Bomber, wraith: Wraith };
+  const make = { mage: Mage, minion: Minion, assassin: Assassin, archer: Archer, healer: Healer, shield: ShieldBearer, bomber: Bomber, wraith: Wraith, armored: Armored, burrower: Burrower };
   // Đội hình: khiên binh đứng chắn trước quái đánh xa
   const ranged = [];
   for (const kind of list) {
@@ -327,6 +343,29 @@ function spawnWave() {
     if (kind === 'shield') e.facing = Math.atan2(player.pos.x - x, player.pos.z - z);
     e.spawnT = -R() * 0.6;
     addEnemy(e, { hpMul, r: R });
+  }
+  // Kẻ Săn Đầu: từ tầng 2, săn bạn qua các tầng; để chạy thoát thì lần sau mạnh hơn
+  if (floor >= 2 && !arenaWave && (run.nemesisLv > 0 ? R() < 0.5 : R() < 0.15)) {
+    const lv = (run.nemesisLv || 0) + 1;
+    const [x, z] = spawnPos(10, R);
+    const nm = new Assassin(scene, x, z);
+    nm.spawnT = -1.2;
+    nm.hp = Math.round(nm.hp * (5 + lv * 2));
+    addEnemy(nm, { r: R });
+    if (!nm.elite) makeElite(nm, Math.min(3, 1 + lv), R);
+    nm.nemesis = true; nm.miniBoss = true; nm.fleeT = 35; nm.dropChance = 0;
+    nm.name = `Kẻ Săn Đầu · cấp ${lv}`;
+    nm.group.scale.multiplyScalar(1.25);
+    nm.maxHpEff = nm.hp;
+    nm.poiseMax = Math.round(nm.hp * 0.4);
+    for (const m of nm.mats) if (m.color) m.color.lerp(new THREE.Color(0x8a1a3a), 0.5);
+    setTimeout(() => showBanner('Kẻ Săn Đầu đã tới!', 'Hạ hắn trong 35 giây trước khi hắn bỏ chạy', 2.6, '#ff5a8a'), 2800);
+  }
+  // Cột Tế: thỉnh thoảng xuất hiện, cường hóa quái xung quanh
+  if (wave >= 4 && !arenaWave && R() < 0.35) {
+    const [x, z] = spawnPos(8, R);
+    const t = new Totem(scene, x, z, { hp: Math.round(60 * (1 + (floor - 1) * 0.4)) });
+    t.spawnT = 0; t.maxHpEff = t.hp; enemies.push(t);
   }
   // Thủ Lĩnh (mini-boss) ở đợt thứ 3 của mỗi tầng
   if (wave % 5 === 3 && !arenaWave) {
@@ -364,6 +403,7 @@ function renderEvent() {
 }
 
 function onWaveCleared() {
+  if (!hitThisWave && wave % 5 !== 0) questProgress('nohit');
   play('waveClear');
   meta.stats.maxWave = Math.max(meta.stats.maxWave || 0, wave);
   setDark(false);
@@ -373,6 +413,7 @@ function onWaveCleared() {
   // Phần thưởng đã chọn từ bệ
   if (nextReward) { grantReward(nextReward); nextReward = null; }
   if (challengeWave) { challengeWave = false; rewards.spawnChest(0, -3); }
+  if (run.bossrush && wave % 5 === 0) { pendingLevels += 2; player.heal(Math.round(player.maxHp * 0.4)); if (!choosing) openLevelUp(); }
   if (wave % 5 === 0) {
     exitOpen = true;
     spawnExit(0, 0);
@@ -404,9 +445,15 @@ function offerRewards() {
   if (wave >= 2 && R() < 0.35) pool.push('shop');
   if (wave >= 3 && R() < 0.25) pool.push('challenge');
   if (wave >= 3 && R() < 0.2) pool.push('treasure');
-  const pick = [];
+  if (wave >= 2 && R() < 0.35) pool.push('event');
+  let pick = [];
   const n = R() < 0.3 ? 3 : 2;
   while (pick.length < n && pool.length) pick.push(pool.splice(Math.floor(R() * pool.length), 1)[0]);
+  // Theo bản đồ tầng: chỉ những nút nối với nút đã chọn trước đó
+  const step = (wave - 1) % 5;
+  const ch = choicesAt(floorMap, step);
+  if (ch) pick = [...new Set(ch.map((i) => floorMap.layers[step][i].kind))];
+  if (vil('tower')) { const extra = ['relic', 'treasure', 'event', 'perk', 'weapon'].filter((k) => !pick.includes(k)); if (extra.length) pick.push(extra[Math.floor(R() * extra.length)]); }
   if (hasCurse('nopot')) { const i = pick.indexOf('potion'); if (i >= 0) pick[i] = 'gold'; }
   rewards.offer(pick, -7);
   choosingReward = true;
@@ -414,6 +461,9 @@ function offerRewards() {
 }
 
 function chooseReward(kind) {
+  // ghi lại đường đi trên bản đồ tầng
+  const step = (wave - 1) % 5, ch = choicesAt(floorMap, step);
+  if (ch) { const idx = ch.find((i) => floorMap.layers[step][i].kind === kind); if (idx != null) floorMap.path[step] = idx; }
   rewards.clearPedestals();
   choosingReward = false;
   play('uiConfirm');
@@ -421,6 +471,7 @@ function chooseReward(kind) {
     openShopRoom();
     return;
   }
+  if (kind === 'event') { openEventRoom(); return; }
   if (kind === 'treasure') {
     // Phòng kho báu: 2 rương + vàng rải khắp nơi, không có quái
     rewards.spawnChest(-3, -4); rewards.spawnChest(3, -4);
@@ -464,7 +515,7 @@ function addSouls(v) {
   meta.souls += v;
   saveMeta(meta);
 }
-function addScrap(v) { scrap += v; $('scrap').textContent = scrap; }
+function addScrap(v) { if (v > 0 && player.hasRelic('greed')) v *= 2; scrap += v; $('scrap').textContent = scrap; }
 function addGold(v) {
   v = Math.round(v * (player.hasRelic('goldbag') ? 1.5 : 1) * (player.stats.hoard ? 2 : 1));
   gold += v;
@@ -543,6 +594,11 @@ function leaveShop() {
 
 // ================= Chơi lại / menu =================
 function restart() {
+  setupP2();
+  floorMap = genFloorMap(Math.random);
+  setTimeout(openPatron, 2200);
+  extraDmgCurse = 0; bossBane = 0; hitThisWave = false;
+  setTimeout(newQuest, 50);
   for (const e of enemies) if (!e.dead) e.die();
   enemies = [];
   ctx.enemies = enemies;
@@ -561,15 +617,23 @@ function restart() {
   renderSlots();
   renderRelics();
   runSouls = 0;
-  gold = 0;
-  scrap = 0; dropsThisWave = 0;
-  const se = document.getElementById('scrap'); if (se) se.textContent = 0;
+  gold = (vil('inn')) * 30;
+  scrap = vil('smith') * 6; dropsThisWave = 0;
+  const se = document.getElementById('scrap'); if (se) se.textContent = scrap;
+  const ge = document.getElementById('gold'); if (ge) ge.textContent = gold;
+  if (vil('gem')) {
+    const w0 = player.weapons[0];
+    if (vil('gem') >= 2 && w0.rarity < 1) w0.rarity = 1;
+    w0.gems = [['ruby', 'sapphire', 'emerald', 'topaz'][Math.floor(Math.random() * 4)]];
+    player.equip(0); renderSlots();
+  }
   pendingLevels = 0;
   exitOpen = false;
   removeExit();
   floor = 1;
   buildWorld(scene, 1);
   buildHazards(scene, 1, rngFor(4));
+  maybeSecret();
   choosing = false;
   choosingReward = false;
   nextReward = null;
@@ -604,7 +668,7 @@ function setPaused(p) {
   if (!p) show('howto', false);
   setMode(p ? 'menu' : 'playing');
 }
-const inShopOpen = () => !$('shop').classList.contains('hidden');
+const inShopOpen = () => !$('shop').classList.contains('hidden') || !$('eventroom').classList.contains('hidden') || !$('floormap').classList.contains('hidden');
 
 // ================= Xuống tầng =================
 function descend() {
@@ -612,6 +676,7 @@ function descend() {
   play('anvil');
   setTimeout(() => {
     floor++;
+    bossBane = 0;
     meta.stats.maxFloor = Math.max(meta.stats.maxFloor || 0, floor);
     if (floor === 5 && !run.daily && (run.depth || 0) >= (meta.depthMax || 0) && (meta.depthMax || 0) < 10) {
       meta.depthMax = (run.depth || 0) + 1;
@@ -628,11 +693,15 @@ function descend() {
     clearProjectiles();
     const theme = buildWorld(scene, floor);
     buildHazards(scene, floor, rngFor(4));
+    maybeSecret();
     player.pos.set(0, 0, ROOM_HALF - 4);
     player.heal(Math.round(player.maxHp * 0.3));
     camera.position.copy(player.pos).add(CAM_OFFSET);
     intermission = 2.5;
     showBanner(`Tầng ${floor}`, theme.name, 2.8, '#ffe2a0');
+    newQuest();
+    floorMap = genFloorMap(run.daily ? rngFor(7) : Math.random);
+    setTimeout(openPatron, 1600);
     play('waveStart');
     checkAchievements();
   }, 550);
@@ -673,6 +742,7 @@ function updateArrows() {
 
 // ================= Khi hạ quái =================
 function onKill(e) {
+  if (e.noReward) return;
   const st = player.stats;
   meta.stats.kills = (meta.stats.kills || 0) + 1;
   if (e instanceof Slime || e instanceof KingSlime) meta.stats.slimes = (meta.stats.slimes || 0) + 1;
@@ -708,12 +778,30 @@ function onKill(e) {
     if (weaponScore(w) < best * 0.8 || dropsThisWave >= 2 + Math.floor(st.luck * 2) || loot.drops.length >= 4) loot.spawnPickup('scrap', e.pos.x, e.pos.z, scrapValue(w));
     else { loot.drop(w, e.pos.x, e.pos.z); dropsThisWave++; }
   } else if (Math.random() < 0.12 * dropMult) loot.spawnPickup('scrap', e.pos.x, e.pos.z, e.elite ? 3 : 1);
-  if (e.miniBoss) { rewards.spawnChest(e.pos.x, e.pos.z); for (let i = 0; i < 5; i++) loot.spawnPickup('gold', e.pos.x, e.pos.z, 5); showBanner('Đã hạ Thủ Lĩnh!', 'Rơi rương di vật', 2, '#ff8a4a'); }
+  if (e.elite) questProgress('elites');
+  if (e.lastDashHit && performance.now() - e.lastDashHit < 400) questProgress('dashkill');
+  if (e.nemesis) { run.nemesisLv = 0; addGold(80); addSouls(30); rewards.spawnChest(e.pos.x - 1.5, e.pos.z); showBanner('Đã hạ Kẻ Săn Đầu!', '+80 vàng · +30 Hồn Thép · rương di vật', 2.6, '#ff5a8a'); }
+  if (e.miniBoss && !e.nemesis) { rewards.spawnChest(e.pos.x, e.pos.z); for (let i = 0; i < 5; i++) loot.spawnPickup('gold', e.pos.x, e.pos.z, 5); showBanner('Đã hạ Thủ Lĩnh!', 'Rơi rương di vật', 2, '#ff8a4a'); }
   if (e.elite) {
     if (player.hasRelic('skull')) player.heal(15);
     if (st.hoard && Math.random() < 0.35) rewards.spawnChest(e.pos.x, e.pos.z);
   }
   if (st.fireBurst && e.burnT > 0) combat.fireBurst(e.pos, Math.round(12 * st.dmg));
+  if (st.killboom && !e.isBoss) combat.fireBurst(e.pos, Math.round(10 * st.dmg));
+  if (st.killinvis) player.iframes = Math.max(player.iframes, 0.6);
+  if (player.weapon.legend === 'bloodfire') player.heal(3);
+  // Ngọc: tinh anh 35%, Thủ Lĩnh và boss chắc chắn rơi
+  if ((e.elite && Math.random() < 0.35) || e.miniBoss || e.isBoss) {
+    const kinds = ['ruby', 'sapphire', 'emerald', 'topaz'];
+    loot.spawnPickup('gem', e.pos.x, e.pos.z, kinds[Math.floor(Math.random() * kinds.length)]);
+  }
+  // Độ thuần thục vũ khí (lưu vĩnh viễn)
+  const wt = player.weapon.type;
+  meta.mastery = meta.mastery || {};
+  const before = masteryLv(meta.mastery[wt] || 0);
+  meta.mastery[wt] = (meta.mastery[wt] || 0) + 1;
+  const after = masteryLv(meta.mastery[wt]);
+  if (after > before) { player.recalc(); toast({ daggers: 'x_daggers', crossbow: 'x_crossbow' }[wt] || wt, `Thuần thục ${TYPES[wt].name}: cấp ${after}`, `+${after * 4}% sát thương khi dùng ${TYPES[wt].name.toLowerCase()}`); }
 }
 
 const runInfo = () => ({ relics: player.relics.length, curses: run.curses.length, bossKilled: !!run.bossKilled, daily: run.daily, wave });
@@ -732,17 +820,21 @@ function gainXp(n) {
 
 function openLevelUp() {
   if (player.dead) return;
-  perkChoices = rollPerks(player.perkLv, meta.up.cards ? 4 : 3);
+  if (luTitle) $('lu-title').innerHTML = luTitle;
+  const nCards = meta.up.cards ? 4 : 3;
+  const gc = player.patron ? godCards(player.perkLv, player.patron) : [];
+  perkChoices = [...gc, ...rollPerks(player.perkLv, nCards - gc.length)];
   if (!perkChoices.length) { pendingLevels = 0; return; }
   choosing = true;
   $('lu-level').textContent = player.level - pendingLevels + 1;
   $('lu-cards').innerHTML = perkChoices.map((p, i) => {
     const lv = player.perkLv[p.id] || 0;
-    return `<button class="card${p.evo ? ' evo' : ''}" data-i="${i}">
+    const godOf = p.god ? GODS.find((g) => g.id === p.god) : null;
+    return `<button class="card${p.evo ? ' evo' : ''}${p.god || p.godPick ? ' god' : ''}${p.duo ? ' duo' : ''}" data-i="${i}">
       <span class="keycap">${i + 1}</span>
       <i class="ico card-ico" style="--i:url('/ui/icons/${p.icon}.svg')"></i>
       <h3>${p.name}</h3>
-      <div class="lv">${p.evo ? 'Tiến hóa' : lv ? `Cấp ${lv} → ${lv + 1}` : 'Mới'}${!p.evo && p.max > 1 ? ` <span class="muted">/ ${p.max}</span>` : ''}</div>
+      <div class="lv">${p.godPick ? '<span class="godtag" style="color:' + p.color + '">Thần Hộ Mệnh</span>' : p.duo ? '<span class="godtag" style="color:#ff9ad8">Song Thần</span>' : godOf ? `<span class="godtag" style="color:${godOf.color}">${godOf.name}</span>` : p.evo ? 'Tiến hóa' : lv ? `Cấp ${lv} → ${lv + 1}` : 'Mới'}${!p.evo && !p.god && !p.duo && !p.godPick && p.max > 1 ? ` <span class="muted">/ ${p.max}</span>` : ''}</div>
       <p>${p.desc(lv + 1)}</p></button>`;
   }).join('');
   for (const b of $('lu-cards').querySelectorAll('.card')) {
@@ -760,10 +852,12 @@ function pickPerk(i) {
   const lv = (player.perkLv[p.id] || 0) + 1;
   player.perkLv[p.id] = lv;
   p.apply(player.base, lv, player);
+  if (player2 && !p.godPick) { p.apply(player2.base, lv, player2); player2.recalc(); }
   player.recalc();
   if (p.evo) toast(p.icon, 'Tiến hóa: ' + p.name, p.desc(1));
+  if (p.duo) toast(p.icon, 'Song Thần: ' + p.name, p.desc(1));
   play('uiConfirm');
-  pendingLevels--;
+  if (p.godPick) { $('lu-title').innerHTML = luTitle; } else pendingLevels--;
   choosing = false;
   show('levelup', false);
   setMode('playing');
@@ -881,7 +975,7 @@ function renderAchievements() {
 
 function renderCodex() {
   const types = Object.keys(TYPES);
-  const els = ['fire', 'ice', 'lightning', 'blood'];
+  const els = ['fire', 'ice', 'lightning', 'blood', 'poison', 'wind', 'holy'];
   const combos = [['none'], ...els.map((e) => [e])];
   for (let i = 0; i < els.length; i++) for (let j = i + 1; j < els.length; j++) combos.push([els[i], els[j]]);
   let found = 0, total = 0;
@@ -920,6 +1014,10 @@ function handleInteract() {
   const E = pressed.has('KeyE');
   let text = '';
   let interactLabel = '';
+  // Kết liễu: quái đang choáng hoặc còn dưới 15% máu, đứng gần
+  const fin = enemies.find((e) => e.alive && !e.spawning && !e.isBoss && Math.hypot(e.pos.x - player.pos.x, e.pos.z - player.pos.z) < 2.6
+    && (e.stunT > 0 || e.hp < (e.maxHpEff || e.hp) * 0.15));
+  const bossFin = enemies.find((e) => e.isBoss && e.alive && e.stunT > 0 && e.finishedStun !== e.stunId && Math.hypot(e.pos.x - player.pos.x, e.pos.z - player.pos.z) < 3.5);
   let canEnhance = false;
   // Phân rã vũ khí gần nhất (X) – luôn dùng được, kể cả khi đứng cạnh đe
   if (drop && pressed.has('KeyX')) {
@@ -929,7 +1027,35 @@ function handleInteract() {
     loot.remove(drop);
     drop = null;
   }
-  if (atExit) {
+  if (bossFin) {
+    interactLabel = 'Trọng Kích';
+    text = `<span class="keycap">E</span> <b style="color:#ffcf4a">Trọng Kích</b> ${bossFin.name} đang choáng`;
+    if (E) {
+      bossFin.finishedStun = bossFin.stunId;
+      const d = Math.round((bossFin.maxHp || bossFin.maxHpEff) * 0.07);
+      bossFin.takeHit(d, new THREE.Vector3(0, 0, 1), 0, true, 'big');
+      damageNumber(bossFin.pos, 'Trọng Kích!', 'react ult');
+      fxFlash(bossFin.pos.clone().setY(2), 0xffcf4a, 5, 0.25); addShake(0.7); play('hitHeavy'); player.slowmoT = 0.4;
+    }
+  } else if (fin) {
+    interactLabel = 'Kết liễu';
+    text = `<span class="keycap">E</span> <b style="color:#ff8a6a">Kết liễu</b> · hồi máu`;
+    if (E) {
+      const dx = fin.pos.x - player.pos.x, dz = fin.pos.z - player.pos.z, d = Math.hypot(dx, dz) || 1;
+      player.pos.x = fin.pos.x - (dx / d) * 1.1; player.pos.z = fin.pos.z - (dz / d) * 1.1;
+      player.facing = Math.atan2(dx, dz);
+      player.playOnce?.('2H_Melee_Attack_Chop', 0.35);
+      fin.takeHit(fin.hp + 9999, new THREE.Vector3(dx / d, 0, dz / d), 10, true);
+      damageNumber(fin.pos, 'Kết Liễu!', 'react ult');
+      if (!player.hasRelic('fury')) player.heal(Math.round(player.maxHp * 0.06));
+      player.gainRage(12);
+      player.iframes = Math.max(player.iframes, 0.35);
+      player.slowmoT = Math.max(player.slowmoT, 0.25);
+      fxFlash(fin.pos.clone().setY(1.2), 0xff6a4a, 3, 0.18); addShake(0.45); play('hitHeavy', { rate: 1.1 });
+      meta.stats.finishers = (meta.stats.finishers || 0) + 1;
+      questProgress('finish');
+    }
+  } else if (atExit) {
     interactLabel = 'Xuống tầng';
     text = `<span class="keycap">E</span> Xuống <b>tầng ${floor + 1}</b> · ${floorTheme(floor + 1).name}`;
     if (E && !fading) descend();
@@ -946,12 +1072,13 @@ function handleInteract() {
     interactLabel = 'Mua bán';
     text = '<span class="keycap">E</span> Mua bán với <b>thương nhân</b>';
     if (E) { renderShop(); show('shop', true); setMode('menu'); play('uiOpen'); }
+  } else if ((atAnvil || (loot.anvil && Math.hypot(loot.anvil.pos.x - player.pos.x, loot.anvil.pos.z - player.pos.z) < 2)) && repairAtAnvil() && false) {
   } else if (atAnvil || (loot.anvil && Math.hypot(loot.anvil.pos.x - player.pos.x, loot.anvil.pos.z - player.pos.z) < 2 && !loot.anvil.forging)) {
     // Cường hóa (F): tốn Mảnh Thép, không giới hạn số lần ở đe
     const cw = player.weapon;
     const canPlus = cw && (cw.plus || 0) < MAX_PLUS;
     canEnhance = canPlus;
-    const cost = canPlus ? enhanceCost(cw) : 0;
+    const cost = canPlus ? Math.max(1, Math.round(enhanceCost(cw) * (1 - 0.1 * vil('smith')))) : 0;
     const enh = canPlus ? ` <span class="sep">·</span> <span class="keycap">F</span> Cường hóa <b>+${(cw.plus || 0) + 1}</b> <span class="${scrap >= cost ? '' : 'muted'}">(${cost} <i class="ico ico-scrap"></i>)</span>` : ' <span class="sep">·</span> <span class="muted">Đã cường hóa tối đa</span>';
     if (pressed.has('KeyF') && canPlus) {
       if (scrap >= cost) {
@@ -970,11 +1097,14 @@ function handleInteract() {
     else {
       interactLabel = 'Rèn';
       const preview = forgeWeapons(player.weapons[player.slot], player.weapons[1 - player.slot], player.hasRelic('gauntlet') ? 1 : 0);
+      const recipe = weaponsMod.applyRecipe(preview, player.weapons[player.slot], player.weapons[1 - player.slot]);
       text = `<span class="keycap">E</span> Rèn thành <img src="${weaponIcon(preview)}" width="30" height="30" alt=""><span style="color:${RARITY[preview.rarity].css}">${weaponName(preview)}</span>${weaponIcons(preview)}${enh}`;
       if (E) {
         const a = player.weapons[player.slot], b = player.weapons[1 - player.slot];
         const result = forgeWeapons(a, b, player.hasRelic('gauntlet') ? 1 : 0);
         result.plus = Math.floor(((a.plus || 0) + (b.plus || 0)) / 2);   // giữ lại một nửa cấp cường hóa
+        result.gems = [...(a.gems || []), ...(b.gems || [])].slice(0, weaponsMod.socketsOf(result) + 1);
+        if (weaponsMod.applyRecipe(result, a, b)) setTimeout(() => toast('x_sword-stone', 'Công thức huyền thoại!', result.title + ': ' + result.legendText), 900);
         loot.anvilUses = (loot.anvilUses || 1) - 1;
         const keep = loot.anvilUses > 0;
         loot.startForge(() => {
@@ -1036,6 +1166,7 @@ function update(realDt, render = true) {
   updateAim();
   setListener(player.pos);
   if (pressed.has('KeyM')) toggleMute();
+  if (pressed.has('Tab') && started && !player.dead && !choosing) toggleMap();
   if (pressed.has('Escape')) {
     if (inShopOpen()) leaveShopPanel();
     else if (started && !player.dead && !choosing) setPaused(!paused);
@@ -1043,6 +1174,7 @@ function update(realDt, render = true) {
 
   if (started && !paused && !choosing && !inShopOpen()) {
     player.update(dt, aim, enemies, time);
+    if (player2) updateP2(dt, time);
     if (player.dead) {
       if (pressed.has('KeyR')) restart();
     } else {
@@ -1050,12 +1182,22 @@ function update(realDt, render = true) {
     }
 
     for (const e of enemies) {
-      const landed = e.update(dt * (e.timeMul || 1), player, time);
-      if (!e.alive || e.spawning || player.dead || !e.contactDmg || e.stunned) continue;
-      const d = Math.hypot(e.pos.x - player.pos.x, e.pos.z - player.pos.z);
-      if (e.grounded && d < e.radius + player.radius - 0.1) {
-        if (player.hurt(e.contactDmg)) {
-          const push = new THREE.Vector3(e.pos.x - player.pos.x, 0, e.pos.z - player.pos.z).normalize();
+      if (e.nemesis && e.alive && (e.fleeT -= dt) <= 0) {
+        e.noReward = true; run.nemesisLv = (run.nemesisLv || 0) + 1;
+        smoke(e.pos.clone().setY(0.8), { count: 10, color: 0x2a1020, size: 1.4, life: 1, alpha: 0.7 });
+        showBanner('Kẻ Săn Đầu đã bỏ chạy', 'Hắn sẽ quay lại, mạnh hơn', 2.2, '#ff5a8a');
+        e.die();
+        continue;
+      }
+      const kSpeed = e.knock.length();
+      const tp = targetFor(e);
+      const landed = e.update(dt * (e.timeMul || 1), tp, time);
+      if (kSpeed > 4.5 && e.alive && !e.spawning) envImpact(e, kSpeed);
+      if (!e.alive || e.spawning || tp.dead || !e.contactDmg || e.stunned) continue;
+      const d = Math.hypot(e.pos.x - tp.pos.x, e.pos.z - tp.pos.z);
+      if (e.grounded && d < e.radius + tp.radius - 0.1) {
+        if (tp.hurt(e.contactDmg)) {
+          const push = new THREE.Vector3(e.pos.x - tp.pos.x, 0, e.pos.z - tp.pos.z).normalize();
           e.knock.copy(push).multiplyScalar(6);
         }
       } else if (landed && d < e.radius + 1.2) {
@@ -1102,6 +1244,8 @@ function update(realDt, render = true) {
     ctx.enemies = enemies;
     if (born.length || kills % 10 === 0) checkAchievements();
 
+    // Khế Ước Máu: mất máu dần nhưng không chết
+    if (player.hasRelic('pact') && !player.dead && player.hp > 1) player.hp = Math.max(1, player.hp - dt);
     // Bóng Tối Lan: đợt kéo dài quá lâu thì bóng tối gây sát thương và sinh tinh anh
     const fighting = enemies.some((e) => e.alive && !e.isBoss) && !enemies.some((e) => e.isBoss) && arenaT <= 0 && !player.dead;
     if (fighting) {
@@ -1164,7 +1308,8 @@ function update(realDt, render = true) {
     for (const p of loot.updatePickups(dt, player, player.stats.magnet)) {
       if (p.kind === 'soul') { addSouls(p.value); play('drop', { vol: 0.6, rate: 1.4 }); }
       else if (p.kind === 'gold') { addGold(p.value); play('drop', { vol: 0.5, rate: 1.8 }); }
-      else if (p.kind === 'potion') { player.heal(25); play('heal'); }
+      else if (p.kind === 'potion') { if (!player.hasRelic('fury')) player.heal(25); play('heal'); }
+      else if (p.kind === 'gem') pickGem(p.value);
       else if (p.kind === 'scrap') { addScrap(p.value); play('pickup', { vol: 0.35, rate: 1.6 }); }
     }
   }
@@ -1188,7 +1333,10 @@ function update(realDt, render = true) {
     camTarget.set(Math.sin(menuT) * 9, 13, Math.cos(menuT) * 9 + 4);
     camera.position.lerp(camTarget, 1 - Math.pow(0.2, realDt));
   } else {
-    camTarget.copy(player.pos).addScaledVector(CAM_OFFSET, camZoom);
+    // 2 người: camera nhìn vào giữa hai người, lùi xa khi hai người cách xa
+    const focus = player2 && !player2.dead && !player.dead ? player.pos.clone().lerp(player2.pos, 0.5) : player2 && player.dead ? player2.pos : player.pos;
+    const spread = player2 ? Math.min(0.55, Math.max(0, player.pos.distanceTo(player2.pos) - 8) * 0.03) : 0;
+    camTarget.copy(focus).addScaledVector(CAM_OFFSET, camZoom + spread);
     camera.position.lerp(camTarget, 1 - Math.pow(0.001, realDt));
   }
   shake.trauma = Math.max(0, shake.trauma - realDt * 1.8);
@@ -1208,10 +1356,12 @@ function update(realDt, render = true) {
 }
 
 function updateHud(realDt) {
-  if (player.hp < lastHp) hurtFlash = 1;
+  if (player.hp < lastHp) { hurtFlash = 1; hitThisWave = true; }
   lastHp = player.hp;
   ghostHp = ghostHp > player.hp ? Math.max(player.hp, ghostHp - realDt * 35) : player.hp;
   hud.hpFill.style.width = (player.hp / player.maxHp) * 100 + '%';
+  $('stam-fill').style.width = player.stamina + '%';
+  $('stam').classList.toggle('warn', player.stamWarn > 0);
   hud.hpGhost.style.width = (ghostHp / player.maxHp) * 100 + '%';
   hud.hpText.textContent = `${Math.ceil(player.hp)} / ${player.maxHp}` + (player.shieldHp > 0 ? ` (+${player.shieldHp})` : '');
   hud.wave.textContent = Math.max(1, wave);
@@ -1257,7 +1407,7 @@ function updateHud(realDt) {
     : inShop ? '<i class="ico ico-hourglass"></i> Mua đồ ở thương nhân, bấm "Rời đi" khi xong'
     : intermission !== null && isFinite(intermission) ? `<i class="ico ico-hourglass"></i> Đợt ${wave + 1} sau ${Math.ceil(intermission)} giây` : '';
   if (bannerTimer > 0) { bannerTimer -= realDt; if (bannerTimer <= 0) hud.bannerWrap.classList.remove('show'); }
-  if (player.dead && !deathShown) onDeath();
+  if (player.dead && (!player2 || player2.dead) && !deathShown) onDeath();
 }
 
 function onDeath() {
@@ -1268,6 +1418,9 @@ function onDeath() {
     const k = todayKey();
     meta.daily[k] = Math.max(meta.daily[k] || 0, wave);
   }
+  meta.stats.deaths = (meta.stats.deaths || 0) + 1;
+  meta.stats.runs = (meta.stats.runs || 0) + 1;
+  const rank = submitRun({ floor, wave, kills, char: run.char, depth: run.depth || 0, boss: !!run.bossKilled, date: todayKey(), mode: run.bossrush ? 'Boss Rush' : run.daily ? 'Hằng ngày' : '' });
   checkAchievements();
   saveMeta(meta);
   setTimeout(() => {
@@ -1276,10 +1429,11 @@ function onDeath() {
     $('go-best').textContent = best;
     show('new-record', isRecord);
     const w = player.weapon;
-    $('go-souls').innerHTML = `<i class="ico ico-soul"></i> Nhận được <b>${runSouls}</b> Hồn Thép · Tầng ${floor} · Cấp ${player.level}${run.daily ? ' · Thử thách hằng ngày' : ''}`;
+    $('go-souls').innerHTML = `<i class="ico ico-soul"></i> Nhận được <b>${runSouls}</b> Hồn Thép · Tầng ${floor} · Cấp ${player.level}${run.daily ? ' · Thử thách hằng ngày' : ''}${rank ? ` · <b style="color:var(--gold)">Hạng #${rank}</b> bảng xếp hạng` : ''}`;
     $('go-weapon').innerHTML = `Vũ khí cuối cùng: <span style="color:${RARITY[w.rarity].css}">${weaponName(w)}</span> ${weaponIcons(w)}`;
     show('gameover', true);
     setMode('menu');
+    playStory();
   }, 1200);
   hud.prompt.classList.remove('show');
 }
@@ -1298,7 +1452,8 @@ function startGame(opts = {}) {
   play('uiConfirm');
   run = opts.daily
     ? { char: 'knight', curses: [], daily: true, depth: 0 }
-    : { char: run.char, curses: [...run.curses], daily: false, depth: run.depth || 0 };
+    : { char: run.char, curses: opts.bossrush ? [] : [...run.curses], daily: false, depth: opts.bossrush ? 0 : run.depth || 0, bossrush: !!opts.bossrush, coop: !!opts.coop };
+  coop.on = !!run.coop;
   setSeed(run.daily ? daySeed() : null);
   started = true;
   for (const id of ['start', 'howto', 'prep']) show(id, false);
@@ -1312,6 +1467,7 @@ function toMenu() {
   updateMenuSouls();
   started = false;
   run.daily = false;
+  run.coop = false; coop.on = false;
   restart();
   hud.startBest.textContent = best ? `Kỷ lục: đợt ${best}` : 'Chưa có kỷ lục';
   renderDaily();
@@ -1324,7 +1480,7 @@ function renderDaily() {
   $('daily-best').textContent = b ? `Hôm nay: đợt ${b}` : 'Chưa chơi hôm nay';
 }
 
-function leaveShopPanel() { show('shop', false); setMode('playing'); play('uiClose'); }
+function leaveShopPanel() { show('shop', false); show('floormap', false); setMode('playing'); play('uiClose'); }
 
 // ================= Âm lượng =================
 function syncSoundUI() {
@@ -1344,6 +1500,7 @@ async function init() {
   $('btn-fx').onclick = () => { setFxQuality(!fxQuality.high); applyFxQuality(); play('uiClick'); };
   ctx.scene = scene;
   player = new Player(scene);
+  player.masteryOf = (t) => masteryLv((meta.mastery || {})[t] || 0);
   player.meta = meta;
   run.char = meta.char || 'knight';
   run.curses = [...(meta.curses || [])];
@@ -1359,6 +1516,17 @@ async function init() {
     play('anvil'); play('explode', { at: b.pos });
     const dx = player.pos.x - b.pos.x, dz = player.pos.z - b.pos.z, d = Math.hypot(dx, dz) || 1;
     if (d < 6) { player.pos.x += (dx / d) * (6 - d); player.pos.z += (dz / d) * (6 - d); }
+    // Từ tầng 2: boss dựng 3 pha lê hộ thể, bất tử cho tới khi phá hết
+    if (floor >= 2 || deep(6)) {
+      for (let k = 0; k < 3; k++) {
+        const a = (k / 3) * Math.PI * 2 + Math.random();
+        let x = b.pos.x + Math.cos(a) * 7, z = b.pos.z + Math.sin(a) * 7;
+        if (isBlocked(x, z, 0.8)) [x, z] = spawnPos(4);
+        const w = new Totem(scene, x, z, { ward: b, hp: Math.round(40 * (1 + (floor - 1) * 0.35)) });
+        w.spawnT = 0; w.maxHpEff = w.hp; enemies.push(w);
+      }
+      showBanner('Phá 3 pha lê hộ thể!', `${b.name} bất tử khi pha lê còn đứng`, 2.4, '#b070ff');
+    }
     const mk = { 0: () => Minion, 1: () => null, 2: () => Healer, 3: () => Wraith }[b.bossKind ?? 0]();
     for (let i = 0; i < 1 + b.phase; i++) {
       const a = Math.random() * Math.PI * 2;
@@ -1370,7 +1538,7 @@ async function init() {
     }
     ctx.enemies = enemies;
   };
-  ctx.onReaction = () => { meta.stats.reactions = (meta.stats.reactions || 0) + 1; };
+  ctx.onReaction = () => { meta.stats.reactions = (meta.stats.reactions || 0) + 1; questProgress('react'); };
   ctx.onPerfect = () => { meta.stats.perfect = (meta.stats.perfect || 0) + 1; };
   loot = new Loot(scene);
   rewards = new Rewards(scene);
@@ -1389,13 +1557,15 @@ async function init() {
   $('btn-play').onclick = () => { renderPrep(); show('prep', true); play('uiOpen'); };
   $('btn-go').onclick = () => startGame();
   $('btn-daily').onclick = () => startGame({ daily: true });
+  $('btn-bossrush').onclick = () => startGame({ bossrush: true });
+  $('btn-coop').onclick = () => startGame({ coop: true });
   $('btn-howto').onclick = () => { show('howto', true); play('uiOpen'); };
   $('btn-howto2').onclick = () => { show('howto', true); play('uiOpen'); };
   $('btn-ach').onclick = () => { renderAchievements(); show('achievements', true); play('uiOpen'); };
   $('btn-codex').onclick = () => { renderCodex(); show('codex', true); play('uiOpen'); };
   $('btn-shop-leave').onclick = () => { leaveShopPanel(); leaveShop(); };
   $('btn-shop-close').onclick = () => leaveShopPanel();
-  for (const btn of document.querySelectorAll('[data-close]')) btn.onclick = () => { show(btn.dataset.close, false); play('uiBack'); };
+  for (const btn of document.querySelectorAll('[data-close]')) btn.onclick = () => { show(btn.dataset.close, false); play('uiBack'); if (btn.dataset.close === 'floormap') setMode('playing'); };
   for (const btn of document.querySelectorAll('.btn')) {
     btn.addEventListener('mouseenter', () => play('uiHover'));
     btn.addEventListener('click', () => { if (btn.id !== 'btn-go' && btn.id !== 'btn-daily') play('uiClick'); });
@@ -1430,7 +1600,7 @@ async function init() {
     get gold() { return gold; },
     get choosingReward() { return choosingReward; },
     spawnBoss(kind = 0) { const C = [Boss, KingSlime, ArchMage, ShadowLord][kind]; const b = new C(scene, 0, -8, 1); b.spawnT = 0; b.phases = [0.5]; b.bossKind = kind; addEnemy(b); ctx.enemies = enemies; return b; },
-    spawn(name, x = 0, z = -5) { const C = { Minion, Assassin, Archer, Mage, Healer, ShieldBearer, Bomber, Wraith }[name]; const e = C ? new C(scene, x, z) : new Slime(scene, x, z, name); e.spawnT = 0; addEnemy(e); ctx.enemies = enemies; return e; },
+    spawn(name, x = 0, z = -5) { const C = { Minion, Assassin, Archer, Mage, Healer, ShieldBearer, Bomber, Wraith, Armored, Burrower, Totem }[name]; const e = C ? new C(scene, x, z) : new Slime(scene, x, z, name); e.spawnT = 0; addEnemy(e); ctx.enemies = enemies; return e; },
     grantRelic, chooseReward, openShopRoom, descend, addGold,
     step(n = 1, render = false) { for (let i = 0; i < n; i++) update(1 / 60, render || i === n - 1); },
     set god(v) { player.god = v; },
@@ -1439,3 +1609,303 @@ async function init() {
 }
 
 init();
+
+// ================= Môi trường thành vũ khí =================
+// Quái bị hất văng: rơi xuống vực (chết ngay), đập tường/cột (choáng + sát thương)
+function envImpact(e, speed) {
+  const dir = e.knock.lengthSq() > 0.0001 ? e.knock.clone().normalize() : null;
+  if (!dir) return;
+  const probe = (k) => ({ x: e.pos.x + dir.x * (e.radius + k), z: e.pos.z + dir.z * (e.radius + k) });
+  const p = probe(0.45);
+  if (!e.isBoss && !e.miniBoss && isPit(p.x, p.z, 0.05)) {
+    damageNumber(e.pos, 'Rơi xuống vực!', 'react shatter');
+    smoke(e.pos.clone().setY(0.3), { count: 6, color: 0x2a2420, size: 1, life: 0.9, alpha: 0.6 });
+    play('slimeLand', { at: e.pos, rate: 0.6, vol: 1.5 });
+    meta.stats.pitKills = (meta.stats.pitKills || 0) + 1;
+    questProgress('env');
+    e.takeHit(e.hp + 9999, null, 0, false);
+    return;
+  }
+  if (speed > 7 && !(e.slamCd > performance.now()) && isBlocked(p.x, p.z, 0) && !isPit(p.x, p.z)) {
+    e.slamCd = performance.now() + 700;
+    e.knock.set(0, 0, 0);
+    const dmg = Math.round((e.maxHpEff || e.maxHp || e.hp) * (e.isBoss ? 0.02 : 0.12) + 6);
+    damageNumber(e.pos, 'Đập Tường!', 'react stun');
+    questProgress('env');
+    e.takeHit(dmg, null, 0, true);
+    if (!e.isBoss) e.stunT = Math.max(e.stunT, 1.2); else e.poise += dmg * 2;
+    addShake(0.3); play('hitHeavy', { at: e.pos, rate: 1.2 });
+    burst(new THREE.Vector3(p.x, 1, p.z), 0x8a7a6a, 14, { speed: 6, size: 0.2 });
+  }
+}
+
+// ================= Phòng sự kiện =================
+let hitThisWave = false;
+let bossBane = 0;            // +% sát thương lên boss tầng hiện tại (Thầy Bói)
+let extraDmgCurse = 0;       // quái gây thêm sát thương (Cướp túi)
+function eventApi() {
+  return {
+    player, gold: () => gold, addGold, addSouls, addScrap, grantRelic, rand: Math.random,
+    heal: (pct) => player.heal(Math.round(player.maxHp * pct)),
+    levelUp: () => { pendingLevels++; },
+    banner: (a, b) => showBanner(a, b, 2, '#9fd0ff'),
+    curseDmg: (v) => { extraDmgCurse += v; },
+    bossBane: () => { bossBane = 0.2; },
+    refresh: () => { renderSlots(); },
+    addAffix: () => { const w = player.weapon; const add = rollAffixes(1, w.affixes || []); w.affixes = [...(w.affixes || []), ...add]; player.recalc(); renderSlots(); showBanner(weaponName(w), 'Thêm phụ tố: ' + affixText({ affixes: add }).join(', '), 2, '#ffcf4a'); },
+  };
+}
+function openEventRoom() {
+  const ev = EVENTS_ROOM[Math.floor(Math.random() * EVENTS_ROOM.length)];
+  const g = eventApi();
+  $('ev-title').textContent = ev.title;
+  $('ev-text').textContent = ev.text;
+  $('ev-icon').style.setProperty('--i', `url('/ui/icons/${ev.icon}.svg')`);
+  $('ev-choices').innerHTML = ev.choices.map((c, i) => `<button class="btn ev-choice" data-i="${i}" ${c.can && !c.can(g) ? 'disabled' : ''}><b>${c.text}</b><small>${c.sub}</small></button>`).join('');
+  for (const b of $('ev-choices').querySelectorAll('button')) b.onclick = () => {
+    const c = ev.choices[+b.dataset.i];
+    show('eventroom', false); setMode('playing');
+    play('uiConfirm');
+    c.run(g);
+    player.hp = Math.max(1, player.hp);
+    if (pendingLevels > 0 && !choosing) openLevelUp();
+    intermission = 2.5;
+  };
+  show('eventroom', true); setMode('menu'); play('uiOpen');
+  intermission = Infinity;
+}
+
+// ================= Nhiệm vụ trong tầng =================
+let quest = null;
+function newQuest() {
+  const q = QUESTS[Math.floor(Math.random() * QUESTS.length)];
+  quest = { ...q, n: 0, done: false };
+  renderQuest();
+}
+function questProgress(id, k = 1) {
+  if (!quest || quest.done || quest.id !== id) return;
+  quest.n = Math.min(quest.goal, quest.n + k);
+  if (quest.n >= quest.goal) {
+    quest.done = true;
+    addGold(50); addSouls(15);
+    rewards.spawnChest(player.pos.x + 1.5, player.pos.z);
+    showBanner('Hoàn thành nhiệm vụ!', `${quest.text} · +50 vàng · +15 Hồn Thép · rương di vật`, 2.6, '#7fff9a');
+    play('forged');
+  }
+  renderQuest();
+}
+function renderQuest() {
+  const el = $('quest-chip');
+  if (!quest || !started) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  el.classList.toggle('done', quest.done);
+  el.innerHTML = `<i class="ico" style="--i:url('/ui/icons/x_scroll.svg')"></i>${quest.done ? '✔ ' : ''}${quest.text} (${quest.n}/${quest.goal})`;
+}
+
+// ================= Thần Hộ Mệnh =================
+const luTitle = document.getElementById('lu-title')?.innerHTML || '';
+function openPatron() {
+  if (!started || player.dead) return;
+  if (choosing || inShopOpen()) { setTimeout(openPatron, 800); return; }
+  const pool = [...GODS].sort(() => Math.random() - 0.5).slice(0, 3);
+  perkChoices = pool.map((g) => ({
+    id: 'god_' + g.id, name: g.name, icon: g.icon, color: g.color, max: 99, godPick: true,
+    desc: () => g.desc + (player.patron === g.id ? ' (đang thờ)' : ''),
+    apply: (s, lv, p) => {
+      p.patron = g.id;
+      const free = BOONS.filter((b) => b.god === g.id && !p.perkLv[b.id]);
+      const b = free[Math.floor(Math.random() * free.length)];
+      if (b) { p.perkLv[b.id] = 1; b.apply(p.base, 1, p); toast(b.icon, `${g.name}: ${b.name}`, b.desc(1)); }
+      if (vil('shrine') >= 2 || (vil('shrine') >= 1 && floor === 1)) {
+        const more = BOONS.filter((x) => x.god === g.id && !p.perkLv[x.id]);
+        const b2 = more[Math.floor(Math.random() * more.length)];
+        if (b2) { p.perkLv[b2.id] = 1; b2.apply(p.base, 1, p); setTimeout(() => toast(b2.icon, `Đền Thần: ${b2.name}`, b2.desc(1)), 600); }
+      }
+    },
+  }));
+  choosing = true;
+  $('lu-title').innerHTML = 'Chọn <b>Thần Hộ Mệnh</b>';
+  $('lu-cards').innerHTML = perkChoices.map((p, i) => `<button class="card god" data-i="${i}">
+      <span class="keycap">${i + 1}</span>
+      <i class="ico card-ico" style="--i:url('/ui/icons/${p.icon}.svg');color:${p.color}"></i>
+      <h3 style="color:${p.color}">${p.name}</h3>
+      <div class="lv"><span class="godtag" style="color:${p.color}">Thần Hộ Mệnh</span></div>
+      <p>${p.desc()}</p></button>`).join('');
+  for (const b of $('lu-cards').querySelectorAll('.card')) { b.onclick = () => pickPerk(Number(b.dataset.i)); b.onmouseenter = () => play('uiHover'); }
+  show('levelup', true); setMode('menu'); play('forged');
+}
+
+// ================= Ngọc =================
+function pickGem(kind) {
+  const G = weaponsMod.GEMS[kind];
+  const target = player.weapons.find((w) => (w.gems || []).length < weaponsMod.socketsOf(w));
+  play('dropRare', { vol: 0.6 });
+  if (!target) { addScrap(6); toast('x_sword-break', 'Không còn ô khảm', `${G.name} đổi thành 6 Mảnh Thép`); return; }
+  target.gems = [...(target.gems || []), kind];
+  player.recalc(); renderSlots();
+  toast('x_crystal-ball', `Khảm ${G.name}`, `${weaponName(target)}: ${G.text}`);
+}
+
+// ================= Độ thuần thục =================
+function masteryLv(k) { return Math.min(5, Math.floor(Math.sqrt(k / 25))); }
+
+// ================= Độ bền: đứng cạnh đe thì vũ khí được sửa =================
+function repairAtAnvil() {
+  let fixed = false;
+  for (const w of player.weapons) if ((w.dur ?? 100) < 100) { w.dur = 100; w.warnedBroken = false; fixed = true; }
+  if (fixed) { renderSlots(); toast('anvil', 'Đã sửa vũ khí', 'Độ bền hồi về 100%'); play('hammer', { rate: 1.1, vol: 0.6 }); }
+  return fixed;
+}
+
+// ================= Phòng bí mật =================
+function maybeSecret() {
+  if (Math.random() > 0.45) return;
+  hazards.placeSecretWall(Math.random, (pos) => {
+    const inward = new THREE.Vector3(-pos.x, 0, -pos.z).normalize().multiplyScalar(2.5);
+    const at = pos.clone().add(inward);
+    rewards.spawnChest(at.x, at.z);
+    for (let i = 0; i < 8; i++) loot.spawnPickup('gold', at.x, at.z, 5);
+    if (Math.random() < 0.5) loot.spawnPickup('gem', at.x, at.z, ['ruby', 'sapphire', 'emerald', 'topaz'][Math.floor(Math.random() * 4)]);
+    showBanner('Phòng bí mật!', 'Rương di vật và vàng sau bức tường nứt', 2.4, '#ffd060');
+    meta.stats.secrets = (meta.stats.secrets || 0) + 1;
+  });
+}
+
+// ================= Bản đồ tầng (phím Tab) =================
+let floorMap = null;
+function toggleMap(force) {
+  const open = force ?? $('floormap').classList.contains('hidden');
+  if (open) {
+    const step = enemies.length || !choosingReward ? Math.min(3, (wave - 1) % 5 + (enemies.length ? 0 : 1)) : (wave - 1) % 5;
+    $('fm-title').textContent = `Bản đồ tầng ${floor}`;
+    $('fm-body').innerHTML = renderMap(floorMap, choosingReward ? (wave - 1) % 5 : step);
+    play('uiOpen');
+  } else play('uiClose');
+  show('floormap', open);
+  setMode(open ? 'menu' : 'playing');
+}
+addEventListener('keydown', (ev) => { if (ev.code === 'Tab') ev.preventDefault(); });
+
+// ================= Làng Thợ Rèn =================
+function vil(id) { return (meta.village || {})[id] || 0; }
+function renderVillage() {
+  $('vil-souls').textContent = meta.souls;
+  $('vil-list').innerHTML = BUILDINGS.map((b) => {
+    const lv = vil(b.id), maxed = lv >= b.max, cost = maxed ? 0 : b.cost(lv);
+    return `<div class="vil${lv ? ' built' : ''}"><div class="top"><i class="ico" style="--i:url('/ui/icons/${b.icon}.svg')"></i><div><h4>${b.name}</h4><div class="lv">${lv ? `Cấp ${lv} / ${b.max}` : 'Đổ nát'}</div></div></div>
+      <p>${lv ? b.desc(lv) : 'Xây để: ' + b.next(0)}</p>
+      ${maxed ? '<span class="muted small">Đã hoàn thiện</span>' : `<button class="btn" data-b="${b.id}" ${meta.souls < cost ? 'disabled' : ''}>${lv ? 'Nâng cấp' : 'Xây'} · ${cost} <i class="ico ico-soul"></i></button>`}</div>`;
+  }).join('');
+  for (const btn of $('vil-list').querySelectorAll('button[data-b]')) btn.onclick = () => {
+    const b = BUILDINGS.find((x) => x.id === btn.dataset.b), lv = vil(b.id), cost = b.cost(lv);
+    if (meta.souls < cost) return;
+    meta.souls -= cost;
+    meta.village = meta.village || {};
+    meta.village[b.id] = lv + 1;
+    saveMeta(meta); updateMenuSouls();
+    play('forged'); renderVillage();
+  };
+  $('btn-journal').style.display = vil('library') ? '' : 'none';
+}
+
+// ================= Bảng xếp hạng =================
+function renderBoard() {
+  const list = loadBoard();
+  const name = (id) => charById(id)?.name || id;
+  $('board-list').innerHTML = list.length ? list.map((r, i) => `<div class="board-row"><b>${i + 1}</b><span>${name(r.char)} · Tầng ${r.floor} · Đợt ${r.wave}${r.depth ? ' · Bậc ' + r.depth : ''}${r.mode ? ' · ' + r.mode : ''}<br><small class="muted">${r.kills} quái · ${r.date || ''}</small></span><span class="muted small">${r.boss ? 'Hạ boss' : ''}</span><span class="sc">${r.score}</span></div>`).join('')
+    : '<p class="muted">Chưa có lượt chơi nào.</p>';
+}
+
+// ================= Cốt truyện =================
+let storyQueue = [], storyLine = 0;
+function playStory(all = false) {
+  const info = { deaths: meta.stats.deaths || 0 };
+  meta.storySeen = meta.storySeen || {};
+  storyQueue = all ? unlockedStory(meta, info) : unlockedStory(meta, info).filter((s) => !meta.storySeen[s.id]);
+  if (!storyQueue.length) return false;
+  storyLine = 0;
+  showStoryLine();
+  show('story', true);
+  return true;
+}
+function showStoryLine() {
+  const s = storyQueue[0];
+  $('st-chapter').textContent = 'Chương ' + (STORY.indexOf(s) + 1) + ' · ' + s.title;
+  $('st-who').textContent = s.who;
+  $('st-line').textContent = s.lines[storyLine];
+  $('st-next').textContent = storyLine < s.lines.length - 1 || storyQueue.length > 1 ? 'Tiếp' : 'Đóng';
+}
+function nextStory() {
+  const s = storyQueue[0];
+  play('uiClick');
+  if (storyLine < s.lines.length - 1) { storyLine++; showStoryLine(); return; }
+  meta.storySeen[s.id] = true; saveMeta(meta);
+  storyQueue.shift(); storyLine = 0;
+  if (storyQueue.length) showStoryLine(); else show('story', false);
+}
+document.getElementById('st-next').onclick = nextStory;
+document.getElementById('btn-village').onclick = () => { renderVillage(); show('village', true); play('uiOpen'); };
+document.getElementById('btn-board').onclick = () => { renderBoard(); show('board', true); play('uiOpen'); };
+document.getElementById('btn-journal').onclick = () => { show('village', false); playStory(true); };
+setTimeout(() => { if (!started) playStory(); }, 2500);
+
+// ================= Chơi 2 người (P2 dùng tay cầm) =================
+let player2 = null;
+let reviveT = 0;
+function setupP2() {
+  if (player2) { scene.remove(player2.root); player2 = null; }
+  ctx.players = [player];
+  show('p2hud', false);
+  if (!run.coop) return;
+  player2 = new Player(scene);
+  player2.setCharacter(run.char === 'barbarian' ? 'knight' : 'barbarian');
+  player2.reset();
+  player2.masteryOf = player.masteryOf;
+  player2.god = player.god;
+  ctx.players = [player, player2];
+  show('p2hud', true);
+  setTimeout(() => { player2.pos.copy(player.pos).add(new THREE.Vector3(2, 0, 0)); }, 0);
+  if (!coop.p2.connected) toast('x_gamepad', 'Chơi 2 người', 'Cắm tay cầm cho người chơi 2 (cần trái đi, cần phải ngắm, RT đánh, LT kỹ năng, A lướt)');
+}
+// Quái nhắm người chơi còn sống gần nhất
+function targetFor(e) {
+  if (!player2 || player2.dead) return player;
+  if (player.dead) return player2;
+  return e.pos.distanceTo(player.pos) <= e.pos.distanceTo(player2.pos) ? player : player2;
+}
+// Cập nhật P2: tạm thay trạng thái bàn phím/chuột/tay cầm dùng chung bằng tay cầm của P2
+function updateP2(dt, time) {
+  const q = coop.p2;
+  const sk = [...keys], sp = [...pressed], sm = { ...mouse }, spad = { ...pad, move: { ...pad.move } }, st = { ...touchIn, move: { ...touchIn.move } };
+  keys.clear(); pressed.clear();
+  for (const k of q.pressed) pressed.add(k);
+  Object.assign(mouse, { down: false, clicked: q.clicked, rdown: q.special, rclicked: q.rclicked, rreleased: q.rreleased });
+  Object.assign(pad, { active: true, move: { ...q.move }, aim: q.aim, attack: q.attack, special: q.special });
+  Object.assign(touchIn, { active: false, attack: false, special: false, aim: null });
+  const a2 = player2.pos.clone().add(new THREE.Vector3(q.aim?.x || Math.sin(player2.facing), 0, q.aim?.z || Math.cos(player2.facing)).multiplyScalar(5));
+  const ctxP = ctx.player;
+  ctx.player = player2;
+  try { player2.update(dt, a2, enemies, time); } finally {
+    ctx.player = ctxP;
+    keys.clear(); for (const k of sk) keys.add(k);
+    pressed.clear(); for (const k of sp) pressed.add(k);
+    Object.assign(mouse, sm); Object.assign(pad, spad); Object.assign(touchIn, st);
+  }
+  // Hồi sinh đồng đội: đứng cạnh 2 giây
+  const down = player.dead ? player : player2.dead ? player2 : null;
+  const up = down === player ? player2 : player;
+  if (down && !up.dead && up.pos.distanceTo(down.pos) < 2) {
+    reviveT += dt;
+    if (reviveT > 2) {
+      reviveT = 0;
+      down.dead = false; down.hp = Math.round(down.maxHp * 0.35); down.iframes = 2;
+      down.anim?.play('Idle', { fade: 0.2 });
+      showBanner('Hồi sinh!', 'Đồng đội đã đứng dậy', 1.6, '#7fff9a'); play('forged');
+    }
+  } else reviveT = 0;
+  // HUD P2
+  $('p2-fill').style.width = Math.max(0, player2.hp / player2.maxHp * 100) + '%';
+  $('p2-text').textContent = player2.dead ? (reviveT > 0 ? `Đang hồi sinh ${Math.round(reviveT / 2 * 100)}%` : 'Gục ngã · đứng cạnh để hồi sinh') : `${Math.ceil(player2.hp)} / ${player2.maxHp}`;
+  $('p2hud').classList.toggle('down', player2.dead);
+  if (player.dead && !player2.dead) hud.prompt.innerHTML = reviveT > 0 ? `Đang được hồi sinh ${Math.round(reviveT / 2 * 100)}%` : 'Bạn đã gục ngã · chờ đồng đội tới hồi sinh';
+}

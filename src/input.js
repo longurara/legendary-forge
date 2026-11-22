@@ -4,6 +4,8 @@ export const pressed = new Set();
 export const mouse = { x: 0, y: 0, down: false, clicked: false, rdown: false, rclicked: false, rreleased: false };
 // Tay cầm: move/aim là vector (x, z) trên mặt sàn; attack/special là giữ nút
 export const pad = { active: false, move: { x: 0, z: 0 }, aim: null, attack: false, special: false };
+// Chơi 2 người: tay cầm ghi vào p2 thay vì pad/pressed/mouse của người chơi 1
+export const coop = { on: false, p2: { move: { x: 0, z: 0 }, aim: null, attack: false, special: false, clicked: false, rclicked: false, rreleased: false, pressed: new Set(), connected: false } };
 
 addEventListener('keydown', (e) => {
   touch.active = false;
@@ -37,8 +39,25 @@ const BTN_TO_KEY = { 0: 'Space', 2: 'KeyE', 3: 'KeyQ', 4: 'KeyR', 5: 'KeyR', 9: 
 const dead = (v) => (Math.abs(v) < 0.2 ? 0 : v);
 export function pollGamepad() {
   const gp = navigator.getGamepads ? [...navigator.getGamepads()].find(Boolean) : null;
+  coop.p2.connected = !!gp;
   if (!gp) return;
   const b = gp.buttons.map((x) => x.pressed);
+  if (coop.on) {
+    const q = coop.p2;
+    q.move.x = dead(gp.axes[0] || 0); q.move.z = dead(gp.axes[1] || 0);
+    const ax = dead(gp.axes[2] || 0), az = dead(gp.axes[3] || 0);
+    q.aim = Math.hypot(ax, az) > 0.3 ? { x: ax, z: az } : (Math.hypot(q.move.x, q.move.z) > 0.3 ? { x: q.move.x, z: q.move.z } : q.aim);
+    const wa = q.attack, ws = q.special;
+    q.attack = !!b[7] || !!b[2];
+    q.special = !!b[6] || !!b[1];
+    if (q.attack && !wa) q.clicked = true;
+    if (q.special && !ws) q.rclicked = true;
+    if (!q.special && ws) q.rreleased = true;
+    for (const [i, code] of Object.entries({ 0: 'Space', 3: 'KeyQ', 4: 'KeyR', 5: 'KeyR' })) if (b[i] && !prevBtn[i]) q.pressed.add(code);
+    if (b[9] && !prevBtn[9]) pressed.add('Escape');
+    b.forEach((v, i) => { prevBtn[i] = v; });
+    return;
+  }
   const any = b.some(Boolean) || gp.axes.some((a) => Math.abs(a) > 0.3);
   if (any) { pad.active = true; touch.active = false; }
   if (!pad.active) return;
@@ -60,6 +79,7 @@ export function pollGamepad() {
 
 export function endFrame() {
   pressed.clear();
+  coop.p2.pressed.clear(); coop.p2.clicked = coop.p2.rclicked = coop.p2.rreleased = false;
   mouse.clicked = false;
   mouse.rclicked = false;
   mouse.rreleased = false;

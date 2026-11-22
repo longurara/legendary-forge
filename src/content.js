@@ -17,6 +17,11 @@ export const RELICS = [
   { id: 'rune', name: 'Cổ Ngữ Nộ', icon: 'x_rune', desc: 'Thanh Nộ tích nhanh hơn 50%' },
   { id: 'quiver', name: 'Ống Tên Xương', icon: 'x_quiver', desc: 'Mỗi 2.5 giây tự bắn tên vào quái gần nhất' },
   { id: 'skull', name: 'Ấn Đầu Lâu', icon: 'x_skull-signet', desc: 'Hạ tinh anh hồi 15 máu; mỗi quái +1 Hồn Thép' },
+  // Di vật bị nguyền: rất mạnh nhưng có cái giá
+  { id: 'pact', name: 'Khế Ước Máu', icon: 'x_dripping-blade', cursed: true, desc: '+40% sát thương, nhưng mất 1 máu mỗi giây (không chết vì nó)' },
+  { id: 'glass', name: 'Tim Thủy Tinh', icon: 'x_broken-heart', cursed: true, desc: '+15% chí mạng, chí mạng x3, nhưng nhận thêm 40% sát thương' },
+  { id: 'greed', name: 'Túi Tham Lam', icon: 'x_heart-bottle', cursed: true, desc: 'Gấp đôi vàng và Mảnh Thép, nhưng quái thêm 25% máu' },
+  { id: 'fury', name: 'Mặt Nạ Cuồng Nộ', icon: 'x_poison-gas', cursed: true, desc: 'Mỗi 10% máu đã mất: +6% sát thương; bình máu không còn tác dụng' },
 ];
 export const relicById = (id) => RELICS.find((r) => r.id === id);
 

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { collide } from './world.js';
-import { burst, damageNumber, spawnRing, addShake, statusFx, hitSpark, explosion, smoke, flame } from './fx.js';
+import { burst, damageNumber, spawnRing, addShake, statusFx, hitSpark, explosion, smoke, flame, emit, F } from './fx.js';
 import { models, fitModel, Animator } from './models.js';
 import { ctx, enemyShot } from './combat.js';
 import { play } from './audio.js';
@@ -68,7 +68,7 @@ export class Enemy {
   get alive() { return !this.dead && !this.dying; }
   get speedMul() {
     if (this.frozenT > 0 || this.stunT > 0) return 0;
-    return (this.slowT > 0 ? 0.5 : 1) * this.eliteSpeed * (ctx.enemySpeed || 1);
+    return (this.slowT > 0 ? 0.5 : 1) * this.eliteSpeed * (ctx.enemySpeed || 1) * (this.totemBuff > 0 ? 1.3 : 1);
   }
   get grounded() { return false; }
   get stunned() { return this.stunT > 0; }
@@ -78,6 +78,7 @@ export class Enemy {
     // Boss đang chuyển giai đoạn: miễn nhiễm
     if (this.invulnT > 0) { if (Math.random() < 0.3) damageNumber(this.pos, 'Miễn nhiễm', 'burn'); return 0; }
     if (this.stunT > 0) dmg = Math.round(dmg * 1.5);
+    if (this.totemBuff > 0) dmg = Math.max(1, Math.round(dmg * 0.7));
     // Khiên phép hấp thụ trước
     if (this.shieldHp > 0) {
       const absorbed = Math.min(this.shieldHp, dmg);
@@ -106,6 +107,7 @@ export class Enemy {
       if (this.poise >= this.poiseMax) {
         this.poise = 0;
         this.stunT = this.isBoss ? 3 : 2;
+        this.stunId = (this.stunId || 0) + 1;
         damageNumber(this.pos, 'Choáng!', 'react stun');
         play('hitHeavy', { at: this.pos, rate: 0.7 });
         addShake(0.4);
@@ -154,6 +156,15 @@ export class Enemy {
       this.invulnT -= dt;
       this.flash = Math.sin(this.invulnT * 30) > 0 ? 0.05 : 0;
     }
+    if (this.poisonT > 0) {
+      this.poisonT -= dt;
+      this.poisonTick = (this.poisonTick || 0) - dt;
+      if (this.poisonTick <= 0) {
+        this.poisonTick = 0.5;
+        this.takeHit(Math.max(1, Math.round((this.poisonDps || 2) * this.poisonStacks * 0.5)), null, 0, false, 'poison');
+      }
+      if (this.poisonT <= 0) this.poisonStacks = 0;
+    }
     if (this.burnT > 0) {
       this.burnT -= dt;
       this.burnTick -= dt;
@@ -173,6 +184,7 @@ export class Enemy {
       if (Math.random() < dt * 10) burst(this.pos.clone().setY(1.6 * (this.isBoss ? 2 : 1)), 0xffe060, 1, { speed: 1.5, up: 0.5, gravity: 0, life: 0.3, size: 0.12 });
     }
     if (this.eliteTick) this.eliteTick(dt);
+    if (this.totemBuff > 0) { this.totemBuff -= dt; if (Math.random() < dt * 5) emit(this.pos.clone().setY(1.6), { frame: F.glow, color: 0xff6a4a, size: 0.3, size2: 0, life: 0.4, vel: new THREE.Vector3(0, 1, 0) }); }
     if (this.regenPct && this.hp < this.maxHpEff) this.hp = Math.min(this.maxHpEff, this.hp + this.maxHpEff * this.regenPct * dt);
     if (this.eliteRing) {
       this.eliteRing.position.set(this.pos.x, 0.05, this.pos.z);
@@ -213,6 +225,7 @@ export class Slime extends Enemy {
     super(scene, x, z);
     this.type = type;
     this.cfg = SLIME_TYPES[type];
+    this.slimy = true;
     this.hp = this.cfg.hp;
     this.color = this.cfg.color;
     this.mass = this.cfg.scale;

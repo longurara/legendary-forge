@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { burst, spawnBolt, damageNumber, spawnRing, spawnTelegraph, addShake, explosion, flame, emit, F, glowSprite, flash } from './fx.js';
+import { burst, spawnBolt, damageNumber, spawnRing, spawnTelegraph, addShake, explosion, flame, emit, F, glowSprite, flash, hitSpark } from './fx.js';
 import { isBlocked } from './world.js';
 import { ELEMENTS, buildWeaponMesh } from './weapons.js';
 import { play } from './audio.js';
@@ -46,10 +46,55 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
       ctx.player.heal(Math.max(2, Math.round(dmg * 0.3)));
     }
   }
+  // Phản ứng của nguyên tố mới
+  for (const el of els) {
+    if (allowChain && ((el === 'fire' && enemy.poisonStacks > 0) || (el === 'poison' && enemy.burnT > 0))) {
+      const st = Math.max(1, enemy.poisonStacks || 1);
+      enemy.poisonStacks = 0; enemy.poisonT = 0;
+      react(enemy, 'Khí Nổ!', 'overload');
+      explosion(enemy.pos, 2.8, 0x9fff5a, { smoke: true, scorch: false, core: 0xe0ffb0 });
+      play('explode', { at: enemy.pos, vol: 0.7 });
+      aoe(enemy.pos, 2.8, Math.round(dmg * 0.6 + st * 7), NONE, 10, { exclude: enemy });
+    } else if (allowChain && ((el === 'wind' && enemy.burnT > 0) || (el === 'fire' && enemy.gustT > 0))) {
+      enemy.gustT = 0;
+      react(enemy, 'Lốc Lửa!', 'melt');
+      spawnFirePatch(enemy.pos, 2.6, 3.5, Math.round(dmg * 0.25 + 6));
+      play('ignite', { at: enemy.pos });
+    } else if (allowChain && el === 'wind' && (enemy.slowT > 0 || enemy.frozenT > 0)) {
+      react(enemy, 'Bão Tuyết!', 'shatter');
+      spawnRing(ctx.scene, enemy.pos, 3.4, 0xbff0ff, 0.45);
+      play('freeze', { at: enemy.pos, rate: 0.8 });
+      for (const o of ctx.enemies) if (o.alive && o.pos.distanceTo(enemy.pos) < 3.4) { o.frozenT = 1.6; o.slowT = 3; }
+    } else if (allowChain && el === 'holy' && enemy.shockT > 0) {
+      enemy.shockT = 0;
+      react(enemy, 'Phán Xét!', 'ult');
+      spawnBolt(ctx.scene, enemy.pos.clone().setY(9), enemy.pos.clone().setY(0.5), 0xfff6d0);
+      play('zap', { at: enemy.pos, rate: 0.7 });
+      aoe(enemy.pos, 2.4, Math.round(dmg + 12), NONE, 6, {});
+    }
+    if (el === 'holy' && !enemy.slimy) mult *= 1.5;              // Thánh khắc chế quái xương
+  }
+  if (enemy.isBoss && ctx.bossBane) mult *= 1 + ctx.bossBane;
+  // Kháng / yếu theo vùng
+  for (const el of els) {
+    if (enemy.resist === el) { mult *= 0.3; if (!enemy.resistShown) { enemy.resistShown = true; damageNumber(enemy.pos, 'Kháng ' + ELEMENTS[el].name, 'burn'); } }
+    else if (enemy.weak === el) { mult *= 1.6; if (!enemy.weakShown) { enemy.weakShown = true; damageNumber(enemy.pos, 'Yếu ' + ELEMENTS[el].name + '!', 'react melt'); } }
+  }
   dmg = Math.max(1, Math.round(dmg * mult));
-  const dealt = enemy.takeHit(dmg, dir, kb, crit || mult > 1) ?? dmg;
+  const dealt = enemy.takeHit(dmg, dir, kb * (els.includes('wind') ? 1.9 : 1), crit || mult > 1) ?? dmg;
 
   for (const el of els) {
+    if (el === 'poison') {
+      enemy.poisonStacks = Math.min(8, (enemy.poisonStacks || 0) + 1);
+      enemy.poisonT = 4;
+      enemy.poisonDps = Math.max(enemy.poisonDps || 0, dmg * 0.12);
+    } else if (el === 'wind') {
+      enemy.gustT = 2;
+      // gió đẩy luôn quái đứng sát bên
+      if (allowChain && dir) for (const o of ctx.enemies) if (o !== enemy && o.alive && !o.isBoss && o.pos.distanceTo(enemy.pos) < 2) o.knock.copy(dir).multiplyScalar(8 / (o.mass || 1));
+    } else if (el === 'holy') {
+      if (Math.random() < 0.15) ctx.player.heal(2);
+    }
     if (el === 'fire') {
       if (enemy.burnT <= 0) play('ignite', { at: enemy.pos, vol: 0.6 });
       enemy.burnT = 3;
@@ -136,6 +181,7 @@ export function spawnFirePatch(pos, radius, dur, dps, hurtsPlayer = false) {
   patches.push({ mesh, pos: mesh.position, radius, t: dur, dur, dps, hurtsPlayer, tick: 0 });
 }
 function updatePatches(dt) {
+  updateToxics(dt);
   for (let i = patches.length - 1; i >= 0; i--) {
     const f = patches[i];
     f.t -= dt; f.tick -= dt;
@@ -158,6 +204,27 @@ function updatePatches(dt) {
   }
 }
 
+// ---------- Vũng độc (tinh anh "Rỉ Độc"): chỉ hại người chơi, gây trúng độc ----------
+const toxics = [];
+export function spawnToxic(pos, radius = 1.3, dur = 4) {
+  const mesh = new THREE.Mesh(patchGeo, new THREE.MeshBasicMaterial({ color: 0x6fd83a, transparent: true, opacity: 0.35, depthWrite: false }));
+  mesh.scale.setScalar(radius);
+  mesh.position.set(pos.x, 0.06, pos.z);
+  ctx.scene.add(mesh);
+  toxics.push({ mesh, pos: mesh.position, radius, t: dur, dur });
+}
+function updateToxics(dt) {
+  const p = ctx.player;
+  for (let i = toxics.length - 1; i >= 0; i--) {
+    const f = toxics[i];
+    f.t -= dt;
+    f.mesh.material.opacity = 0.35 * Math.min(1, f.t / 0.5);
+    if (Math.random() < dt * 3) emit(f.pos.clone().setY(0.1), { frame: F.glow, color: 0xbfff7a, color2: 0x3a8a10, size: 0.4, size2: 0, life: 0.8, vel: new THREE.Vector3(0, 0.8, 0) });
+    if (p && !p.dead && p.dashTime <= 0 && Math.hypot(p.pos.x - f.pos.x, p.pos.z - f.pos.z) < f.radius + 0.2) p.poisonT = 3;
+    if (f.t <= 0) { ctx.scene.remove(f.mesh); f.mesh.material.dispose(); toxics.splice(i, 1); }
+  }
+}
+
 // ---------- Đạn ----------
 const projectiles = [];
 const orbGeo = new THREE.SphereGeometry(0.2, 12, 8);
@@ -169,6 +236,18 @@ const colorOf = (w) => (w.element === 'none' ? 0xc9b6ff : ELEMENTS[w.element].gl
 // Cầu phép thường của trượng
 export function spawnOrb(origin, dir, weapon, dmg, splash, speed, extra = {}) {
   const color = colorOf(weapon);
+  if (extra.bolt) {
+    // Tên nỏ / dao ném: xuyên qua quái, bay thẳng
+    const mesh = new THREE.Mesh(arrowGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(extra.knife ? 0xe0e8f0 : color).multiplyScalar(1.8) }));
+    mesh.add(glowSprite(color, extra.explode ? 1.6 : 0.9));
+    mesh.rotation.y = Math.atan2(dir.x, dir.z);
+    if (extra.knife) mesh.scale.set(1, 1, 0.55);
+    if (extra.explode) mesh.scale.setScalar(1.6);
+    mesh.position.copy(origin);
+    ctx.scene.add(mesh);
+    projectiles.push({ kind: 'pbolt', friendly: true, mesh, vel: dir.clone().multiplyScalar(speed), life: 0.9, weapon, dmg, splash: 0, color, pierce: extra.pierce || 0, explode: !!extra.explode, hitSet: new Set() });
+    return;
+  }
   const mesh = new THREE.Mesh(orbGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(color).lerp(new THREE.Color(1, 1, 1), 0.5).multiplyScalar(2) }));
   mesh.add(glowSprite(color, 1.7));
   mesh.position.copy(origin);
@@ -288,7 +367,7 @@ export function updateProjectiles(dt) {
       if (Math.random() < (big ? 0.8 : 0.3)) emit(pos, { frame: F.sparkle, color: 0xffffff, color2: p.color, size: big ? 0.7 : 0.35, size2: 0, life: 0.4, vel: new THREE.Vector3((Math.random() - 0.5) * 2, Math.random(), (Math.random() - 0.5) * 2) });
     } else if (p.kind === 'wave') {
       if (Math.random() < 0.7) emit(pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 1.6 * p.scale, 0, (Math.random() - 0.5) * 1.6 * p.scale)), { frame: F.sparkle, color: 0xffffff, color2: p.color, size: 0.5, size2: 0, life: 0.3 });
-    } else if (p.kind === 'arrow') {
+    } else if (p.kind === 'arrow' || p.kind === 'pbolt') {
       emit(pos, { frame: F.glow, color: 0xffe0a0, size: 0.35, size2: 0, life: 0.15, alpha: 0.6 });
     }
 
@@ -305,6 +384,15 @@ export function updateProjectiles(dt) {
       const hit = ctx.enemies.find((e) => e.alive && !e.spawning && !p.hitSet.has(e) && Math.hypot(e.pos.x - pos.x, e.pos.z - pos.z) < e.radius + (p.kind === 'bigorb' ? 0.5 : 0.25));
       if (hit) {
         if (p.kind === 'bigorb') { explodeBig(p); removeProjectile(i); continue; }
+        if (p.kind === 'pbolt') {
+          dealDamage(hit, p.dmg, p.weapon, p.vel.clone().setY(0).normalize(), p.explode ? 4 : 6, false);
+          hitSpark(pos.clone(), p.color, false);
+          play('hit', { at: pos, vol: 0.5, rate: 1.3 });
+          if (p.explode) { explosion(pos, 2.8, p.color, { smoke: true, scorch: true }); aoe(pos, 2.8, Math.round(p.dmg * 0.7), p.weapon, 12, { exclude: hit }); play('explode', { at: pos, vol: 0.6 }); removeProjectile(i); continue; }
+          p.hitSet.add(hit);
+          if (p.pierce-- <= 0) removeProjectile(i);
+          continue;
+        }
         const dir = p.vel.clone().setY(0).normalize();
         dealDamage(hit, p.dmg, p.weapon, dir, 5, p.crit);
         for (const e of ctx.enemies) {
@@ -331,8 +419,9 @@ export function updateProjectiles(dt) {
         }
         removeProjectile(i);
       }
-    } else if (!player.dead) {
-      if (Math.hypot(player.pos.x - pos.x, player.pos.z - pos.z) < player.radius + 0.25) {
+    } else {
+      const player = (ctx.players || [ctx.player]).find((pl) => !pl.dead && Math.hypot(pl.pos.x - pos.x, pl.pos.z - pos.z) < pl.radius + 0.25);
+      if (player) {
         // Đỡ đòn: phản đạn ngược lại
         if (player.parryT > 0) {
           player.onParry(null);

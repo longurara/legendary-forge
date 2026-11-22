@@ -241,6 +241,53 @@ function crackDecal(x, z, size, rand) {
   group.add(m);
 }
 
+// ---------- Tường nứt: đánh vỡ để mở phòng bí mật ----------
+class SecretWall {
+  constructor(x, z, rotY, onBreak) {
+    this.pos = new THREE.Vector3(x, 0, z);
+    this.alive = true; this.hits = 0; this.onBreak = onBreak; this.t = 0;
+    this.mesh = new THREE.Group();
+    const m = models['dungeon/wall_cracked'];
+    if (m) { const o = m.scene.clone(true); o.scale.set(DS * 0.55, DS * 0.7, DS * 0.6); o.rotation.y = rotY; this.mesh.add(o); }
+    this.mesh.position.copy(this.pos);
+    group.add(this.mesh);
+    this.collider = { x, z, r: 0.9 };
+    pillars.push(this.collider);
+  }
+  hit() {
+    if (!this.alive) return;
+    this.hits++;
+    burst(this.pos.clone().setY(1), 0x8a7a6a, 10, { speed: 5, size: 0.18 });
+    addShake(0.15);
+    play('hitHeavy', { at: this.pos, rate: 1.3, vol: 0.6 });
+    if (this.hits >= 3) {
+      this.alive = false;
+      group.remove(this.mesh);
+      const i = pillars.indexOf(this.collider); if (i >= 0) pillars.splice(i, 1);
+      burst(this.pos.clone().setY(1), 0x8a7a6a, 40, { speed: 9, size: 0.25 });
+      fxSmoke(this.pos.clone().setY(0.8), { count: 8, color: 0x3a3430, size: 1.4, life: 1.2, alpha: 0.6 });
+      play('explode', { at: this.pos, vol: 0.6 });
+      this.onBreak?.(this.pos);
+    }
+  }
+  update(dt) {
+    if (!this.alive) return;
+    this.t += dt;
+    // gợi ý: thỉnh thoảng có gió lùa và bụi rơi qua khe nứt
+    if (Math.random() < dt * 1.2) emit(this.pos.clone().setY(1.6 + Math.random()), { smoke: true, frame: F.dust, color: 0x8a7a6a, size: 0.4, size2: 0.8, life: 1.2, vel: new THREE.Vector3(0, -0.6, 0), alpha: 0.5 });
+  }
+}
+export function placeSecretWall(rand, onBreak) {
+  const H = ROOM_HALF - 0.9;
+  const side = Math.floor(rand() * 3);
+  const t = (rand() * 2 - 1) * (ROOM_HALF - 5);
+  const [x, z, rot] = side === 0 ? [t, -H, 0] : side === 1 ? [-H, t, Math.PI / 2] : [H, t, -Math.PI / 2];
+  if (isBlocked(x * 0.97, z * 0.97, 1)) return null;
+  const w = new SecretWall(x, z, rot, onBreak);
+  ctx.barrels.push(w);
+  return w;
+}
+
 // Người chơi đang đứng trên băng không (player.js dùng để trượt)
 export function onIce(x, z) { return icePatches.some((p) => Math.hypot(x - p.x, z - p.z) < p.r); }
 

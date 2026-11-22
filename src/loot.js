@@ -56,6 +56,11 @@ export class Loot {
       m.rotation.x = Math.PI / 2;
       m.scale.setScalar(1 + Math.min(value, 8) * 0.06);
       group.add(m);
+    } else if (kind === 'gem') {
+      const col = { ruby: 0xff3a4a, sapphire: 0x3a8aff, emerald: 0x3ad36a, topaz: 0xffc03a }[value] || 0xffffff;
+      const m = new THREE.Mesh(new THREE.OctahedronGeometry(0.22, 0), new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.8, metalness: 0.4, roughness: 0.15, flatShading: true }));
+      m.scale.y = 1.4;
+      group.add(m);
     } else if (kind === 'scrap') {
       for (let k = 0; k < Math.min(3, 1 + Math.floor(value / 4)); k++) {
         const m = new THREE.Mesh(SCRAP_GEO, SCRAP_MAT);

@@ -25,10 +25,10 @@ const inSector = (from, facing, target, range, arc) => {
   diff = Math.atan2(Math.sin(diff), Math.cos(diff));
   return Math.abs(diff) <= arc / 2;
 };
-const hurtPlayer = (player, dmg) => { if (player.hurt(dmg)) damageNumber(player.pos, dmg, 'player'); };
+export const hurtPlayer = (player, dmg) => { if (player.hurt(dmg)) damageNumber(player.pos, dmg, 'player'); };
 
 // Nhuộm màu vật liệu (sau setupMaterials)
-function tintMats(e, color, amount, emissive = null, ei = 0) {
+export function tintMats(e, color, amount, emissive = null, ei = 0) {
   const c = new THREE.Color(color);
   for (const m of e.mats) {
     if (m.color) m.color.lerp(c, amount);
@@ -37,7 +37,7 @@ function tintMats(e, color, amount, emissive = null, ei = 0) {
 }
 
 // ---------- Khung chung cho quái người (model KayKit có animation) ----------
-class Walker extends Enemy {
+export class Walker extends Enemy {
   build(modelName, size, props = []) {
     this.body = new THREE.Group();
     this.anim = null;
@@ -197,6 +197,7 @@ export class ShieldBearer extends Walker {
 export class Bomber extends Enemy {
   constructor(scene, x, z) {
     super(scene, x, z);
+    this.slimy = true;
     this.hp = 14; this.color = 0xff5a2a; this.mass = 0.7; this.contactDmg = 0; this.dropChance = 0.08; this.xp = 2;
     this.hurtSound = 'slimeHit'; this.dieSound = 'slimeDie';
     this.fuse = -1; this.bob = Math.random() * 6;

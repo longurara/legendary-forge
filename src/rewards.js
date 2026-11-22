@@ -11,6 +11,7 @@ export const REWARDS = {
   gold: { name: 'Vàng', icon: 'x_coins', desc: '+40 vàng', color: 0xffd060 },
   potion: { name: 'Hồi phục', icon: 'potion', desc: 'Hồi đầy máu', color: 0x6fe38a },
   relic: { name: 'Di vật', icon: 'x_locked-chest', desc: 'Rương di vật', color: 0xc77dff },
+  event: { name: 'Sự kiện', icon: 'x_scroll', desc: 'Gặp một sự kiện bí ẩn, tự chọn cách xử lý', color: 0x9fd0ff },
   treasure: { name: 'Kho báu', icon: 'x_gold', desc: 'Phòng kho báu: 2 rương di vật + vàng, không có quái', color: 0xffd060 },
   shop: { name: 'Thương nhân', icon: 'x_shop', desc: 'Đợt sau là cửa hàng, không phải đánh', color: 0xffa040 },
   challenge: { name: 'Thử thách', icon: 'x_skull-signet', desc: 'Đợt sau toàn tinh anh, thưởng di vật', color: 0xff5a4a },
@@ -227,6 +228,7 @@ function makeItem(kind, color) {
   else if (kind === 'gold') o = fit('dungeon/coin_stack', 0.8);
   else if (kind === 'relic') o = fit('dungeon/chest', 0.9);
   else if (kind === 'treasure') o = fit('dungeon/chest', 1.0);
+  else if (kind === 'event') { o = fit('crypt/skull_candle', 0.8); }
   else if (kind === 'shop') o = fit('dungeon/trunk_large_A', 0.85);
   else if (kind === 'challenge') { o = fit('prop_skel_shield', 1.1); if (o) o.rotation.x = 0.6; }
   if (!o) {

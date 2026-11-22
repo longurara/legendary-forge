@@ -1,6 +1,6 @@
 // Quái tinh anh: 1–2 thuộc tính ngẫu nhiên, hào quang + nhãn tên, rơi nhiều đồ hơn
 import * as THREE from 'three';
-import { scheduleBomb, ctx, enemyShot } from './combat.js';
+import { scheduleBomb, ctx, enemyShot, spawnToxic } from './combat.js';
 import { smoke, spawnRing, spawnTelegraph, damageNumber, emit, F } from './fx.js';
 import { play } from './audio.js';
 import { isBlocked } from './world.js';
@@ -17,6 +17,7 @@ export const AFFIX_DEFS = {
   frost: { name: 'Băng Giá', color: 0x9fe8ff, apply: (e) => { e.frostT = 3 + Math.random() * 2; } },
   mender: { name: 'Hồi Sinh Lực', color: 0x6fe38a, apply: (e) => { e.mender = true; } },
   orbs: { name: 'Phản Cầu', color: 0xc06bff, apply: (e) => { e.orbCd = 0; } },
+  toxic: { name: 'Rỉ Độc', color: 0x9fff5a, apply: (e) => { e.toxicT = 1; } },
 };
 
 // Hành vi theo khung hình của các thuộc tính chủ động
@@ -49,7 +50,7 @@ function eliteTick(e, dt) {
         spawnRing(e.scene, at, 3, 0x9fe8ff, 0.5);
         play('freeze', { at });
         for (let i = 0; i < 14; i++) emit(at.clone().setY(0.4), { frame: F.cross, color: 0xdff8ff, color2: 0x6fc3ff, size: 0.6, size2: 0, life: 0.6, vel: new THREE.Vector3((Math.random() - 0.5) * 9, 1, (Math.random() - 0.5) * 9) });
-        if (!p.dead && Math.hypot(p.pos.x - at.x, p.pos.z - at.z) < 3 + p.radius && p.hurt(12)) damageNumber(p.pos, 12, 'player');
+        if (!p.dead && Math.hypot(p.pos.x - at.x, p.pos.z - at.z) < 3 + p.radius) { p.slowT = 2.5; if (p.hurt(12)) damageNumber(p.pos, 12, 'player'); }
       }, 900);
     }
   }
@@ -67,6 +68,7 @@ function eliteTick(e, dt) {
     }
   }
   if (e.orbCd != null) e.orbCd = Math.max(0, e.orbCd - dt);
+  if (e.toxicT != null) { e.toxicT -= dt; if (e.toxicT <= 0) { e.toxicT = 1.4; spawnToxic(e.pos, 1.2 * (e.giant || 1), 4.5); } }
 }
 const KEYS = Object.keys(AFFIX_DEFS);
 const labelLayer = () => document.getElementById('dmg-layer');

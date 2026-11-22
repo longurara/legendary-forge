@@ -18,7 +18,7 @@ export const MODEL_NAMES = [
   'player', 'slime', 'slime_lava', 'enemy_mage', 'enemy_minion', 'enemy_boss', 'anvil',
   'prop_skel_blade', 'prop_skel_axe', 'prop_skel_shield', 'prop_potion', 'prop_chest',
   'char_barbarian', 'char_mage', 'char_rogue', 'npc_merchant', 'enemy_rogue', 'prop_skel_crossbow', 'prop_spellbook',
-  'weapon_sword', 'weapon_axe', 'weapon_greatsword', 'weapon_staff',
+  'weapon_sword', 'weapon_axe', 'weapon_greatsword', 'weapon_staff', 'weapon_dagger',
   ...DUNGEON_PIECES.map((n) => 'dungeon/' + n),
   ...CRYPT_PIECES.map((n) => 'crypt/' + n),
 ];

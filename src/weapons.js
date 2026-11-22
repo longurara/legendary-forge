@@ -8,8 +8,11 @@ export const ELEMENTS = {
   ice: { name: 'Băng', icon: '❄️', color: 0x7fdcff, glow: 0xaeeaff },
   lightning: { name: 'Sét', icon: '⚡', color: 0xffe14a, glow: 0xfff07a },
   blood: { name: 'Huyết', icon: '🩸', color: 0xd8203a, glow: 0xff4a5a },
+  poison: { name: 'Độc', icon: '☠', color: 0x6fd83a, glow: 0x9fff5a },
+  wind: { name: 'Gió', icon: '🌀', color: 0x9fe8d0, glow: 0xd8fff0 },
+  holy: { name: 'Thánh', icon: '✦', color: 0xffe8a0, glow: 0xfff6d0 },
 };
-const ELEMENT_KEYS = ['fire', 'ice', 'lightning', 'blood'];
+export const ELEMENT_KEYS = ['fire', 'ice', 'lightning', 'blood', 'poison', 'wind', 'holy'];
 
 // ---------- Độ hiếm ----------
 export const RARITY = [
@@ -51,7 +54,24 @@ export const TYPES = {
     name: 'Trượng', rest: 0.5, idle: 'Idle', ranged: true, anim: 'Spellcast_Shoot',
     shot: { dmg: 9, cooldown: 0.3, speed: 17, splash: 1.4 },
   },
+  // Song Dao: đánh rất nhanh, sát thương thấp mỗi nhát, đòn cuối đâm chí mạng cao
+  daggers: {
+    name: 'Song Dao', rest: 1.0, idle: 'Idle', dual: true,
+    combo: [
+      { anim: 'Dualwield_Melee_Attack_Slice', arc: 2.2, range: 2.3, dmg: 6, kb: 4, dur: 0.17, lunge: 3, from: 1.0, to: -1.0, shake: 0.1, stop: 0.03 },
+      { anim: 'Dualwield_Melee_Attack_Chop', arc: 2.0, range: 2.3, dmg: 7, kb: 4, dur: 0.17, lunge: 3, from: -1.0, to: 1.0, shake: 0.1, stop: 0.03 },
+      { anim: 'Dualwield_Melee_Attack_Slice', arc: 2.2, range: 2.3, dmg: 6, kb: 4, dur: 0.17, lunge: 3, from: 1.0, to: -1.0, shake: 0.1, stop: 0.03 },
+      { anim: 'Dualwield_Melee_Attack_Stab', arc: 0.9, range: 3.0, dmg: 15, kb: 9, dur: 0.28, lunge: 6, thrust: true, shake: 0.25, stop: 0.06, big: true },
+    ],
+  },
+  // Nỏ: bắn chậm, tên xuyên qua quái
+  crossbow: {
+    name: 'Nỏ', rest: 0.5, idle: '2H_Ranged_Aiming', ranged: true, anim: '2H_Ranged_Shoot', bolt: true,
+    shot: { dmg: 17, cooldown: 0.55, speed: 30, splash: 0, pierce: 2 },
+  },
 };
+// Model dùng cho từng loại vũ khí
+export const modelFor = (type) => ({ daggers: 'weapon_dagger', crossbow: 'prop_skel_crossbow' }[type] || 'weapon_' + type);
 const TYPE_KEYS = Object.keys(TYPES);
 
 // ---------- Phụ tố vũ khí ----------
@@ -77,6 +97,7 @@ export function rollAffixes(n, exclude = [], r = Math.random) {
 export function applyAffixes(stats, w) {
   for (const id of w.affixes || []) affixById(id)?.apply(stats);
   if (w.plus) stats.dmg *= 1 + 0.12 * w.plus;          // cường hóa: +12% sát thương mỗi cấp
+  for (const g of w.gems || []) GEMS[g]?.apply(stats);
 }
 
 // Khóa trong Sổ Rèn: loại + các nguyên tố (không phân biệt thứ tự)
@@ -95,7 +116,32 @@ export function weaponName(w) {
   let n = TYPES[w.type].name;
   if (w.element !== 'none') n += ' ' + ELEMENTS[w.element].name;
   if (w.element2) n += '-' + ELEMENTS[w.element2].name;
+  if (w.title) n = w.title;
   return (w.rarity === 3 ? '★ ' : '') + n + (w.plus ? ` +${w.plus}` : '');
+}
+
+// ---------- Ngọc khảm: rơi từ tinh anh, tự khảm vào ô trống ----------
+export const GEMS = {
+  ruby: { name: 'Hồng Ngọc', color: '#ff5a6a', text: '+10% sát thương', apply: (s) => { s.dmg += 0.1; } },
+  sapphire: { name: 'Lam Ngọc', color: '#5aa8ff', text: '+6% chí mạng', apply: (s) => { s.crit += 0.06; } },
+  emerald: { name: 'Lục Ngọc', color: '#6fe38a', text: '+2% hút máu', apply: (s) => { s.leech += 0.02; } },
+  topaz: { name: 'Hoàng Ngọc', color: '#ffcf4a', text: '+8% tốc đánh', apply: (s) => { s.atk += 0.08; } },
+};
+export const socketsOf = (w) => [1, 1, 2, 3][w.rarity] || 1;
+
+// ---------- Công thức rèn đặc biệt: đúng cặp nguyên tố → vũ khí huyền thoại có hiệu ứng riêng ----------
+export const RECIPES = [
+  { els: ['ice', 'lightning'], title: 'Búa Bão Tuyết', legend: 'blizzard', text: '20% đòn đánh tạo vụ nổ băng đóng băng quái xung quanh' },
+  { els: ['blood', 'fire'], title: 'Huyết Hỏa Thần Binh', legend: 'bloodfire', text: 'Hạ quái hồi 3 máu, quái đang cháy chịu thêm 25% sát thương' },
+  { els: ['holy', 'lightning'], title: 'Thánh Khí Phán Xét', legend: 'judgement', text: 'Chí mạng gọi thánh lôi giáng xuống mục tiêu' },
+  { els: ['poison', 'wind'], title: 'Dịch Hạch Phong Ba', legend: 'plague', text: 'Đòn đánh lây độc sang quái trong 3m' },
+];
+export function applyRecipe(result, a, b) {
+  const els = [...new Set([a.element, a.element2, b.element, b.element2].filter((e) => e && e !== 'none'))].sort();
+  const r = RECIPES.find((x) => x.els.length === els.length && x.els.every((e, i) => e === els[i]));
+  if (!r) return null;
+  result.rarity = 3; result.title = TYPES[result.type].name + ' · ' + r.title; result.legend = r.legend; result.legendText = r.text;
+  return r;
 }
 
 // Giá trị phân rã (Mảnh Thép) và giá cường hóa
@@ -142,9 +188,9 @@ export function buildWeaponMesh(w) {
   const rar = RARITY[w.rarity];
   const g = new THREE.Group();
 
-  const custom = models['weapon_' + w.type];
+  const custom = models[modelFor(w.type)];
   if (custom) {
-    const len = { sword: 1.75, axe: 1.9, greatsword: 2.3, staff: 1.9 }[w.type];
+    const len = { sword: 1.75, axe: 1.9, greatsword: 2.3, staff: 1.9, daggers: 1.0, crossbow: 1.3 }[w.type];
     const m = fitModel(custom, len, 'weapon');
     tintWeapon(m, w);
     g.add(m);
@@ -215,7 +261,7 @@ function tintWeapon(m, w) {
 
 // Vũ khí cầm trên tay hiệp sĩ: gắn vào xương handslot.r đúng như bản gốc KayKit
 export function buildHeldWeapon(w) {
-  const custom = models['weapon_' + w.type];
+  const custom = models[modelFor(w.type)];
   if (!custom) return null;
   const m = custom.scene.clone(true);
   tintWeapon(m, w);

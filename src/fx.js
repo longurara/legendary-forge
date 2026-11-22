@@ -559,6 +559,9 @@ export function statusFx(e, dt) {
   } else if (e.slowT > 0 && Math.random() < dt * 4 * d) {
     emit(tmpV.set(e.pos.x + rv(0.4), 0.4 + Math.random() * h, e.pos.z + rv(0.4)), { frame: F.sparkle, color: 0xaeeaff, size: 0.35, life: 0.4, vel: new THREE.Vector3(0, -0.4, 0) });
   }
+  if (e.poisonStacks > 0 && Math.random() < dt * (4 + e.poisonStacks * 2) * d) {
+    emit(tmpV.set(e.pos.x + rv(0.4 * h), 0.4 + Math.random() * 0.8 * h, e.pos.z + rv(0.4 * h)), { frame: F.glow, color: 0xbfff7a, color2: 0x3a8a10, size: 0.35, size2: 0.05, life: 0.7, vel: new THREE.Vector3(0, 0.9, 0) });
+  }
   // Boss nổi giận: hào quang đỏ bốc lên
   if (e.phase > 0 && Math.random() < dt * 14 * d) {
     emit(tmpV.set(e.pos.x + rv(0.8), 0.2, e.pos.z + rv(0.8)), { frame: F.flame, color: 0xff6a4a, color2: 0x8a0010, size: 1.1, size2: 0.2, life: 0.6, vel: new THREE.Vector3(0, 2.5, 0), alpha: 0.6, hdr: 1.3, fadeIn: 0.2 });

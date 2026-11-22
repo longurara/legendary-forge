@@ -455,6 +455,7 @@ export class Archer extends Enemy {
 export class KingSlime extends Enemy {
   constructor(scene, x, z, level = 1) {
     super(scene, x, z);
+    this.slimy = true;
     this.isBoss = true; this.name = 'Vua Slime';
     this.maxHp = this.hp = 520 + (level - 1) * 300;
     this.color = 0xb070ff; this.mass = 6; this.contactDmg = 14; this.xp = 40; this.dropChance = 0;

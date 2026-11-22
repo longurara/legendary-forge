@@ -9,6 +9,9 @@ export const ULTIMATES = {
   ice: { name: 'Bão Băng', color: '#8fe0ff' },
   lightning: { name: 'Thiên Lôi', color: '#ffe14a' },
   blood: { name: 'Xoáy Máu', color: '#ff4a5a' },
+  poison: { name: 'Mây Độc', color: '#9fff5a' },
+  wind: { name: 'Cuồng Phong', color: '#a8f0d8' },
+  holy: { name: 'Thánh Quang', color: '#fff0b0' },
   none: { name: 'Sóng Lò Rèn', color: '#ffcf4a' },
 };
 
@@ -32,7 +35,7 @@ export function castUltimate(player) {
   addShake(0.6);
   addHitStop(0.12);
   spawnRing(ctx.scene, P, 4, 0xffffff, 0.4);
-  const runeCol = { fire: 0xff7a2a, ice: 0x8fe0ff, lightning: 0xffe14a, blood: 0xff3a4a, none: 0xffcf4a }[el];
+  const runeCol = { fire: 0xff7a2a, ice: 0x8fe0ff, lightning: 0xffe14a, blood: 0xff3a4a, poison: 0x9fff5a, wind: 0xa8f0d8, holy: 0xfff0b0, none: 0xffcf4a }[el];
   groundRune(player.pos, el === 'ice' ? 11 : el === 'none' ? 9 : 7, runeCol, 1.4, 1.6);
   flash(P.clone().setY(1.2), runeCol, 5, 0.25);
   play('anvil');
@@ -76,6 +79,33 @@ export function castUltimate(player) {
         dealDamage(t, Math.round(40 * pw), { element: 'lightning', element2: null }, null, 0, true, false);
       });
     }
+  } else if (el === 'poison') {
+    // Mây độc: 4 giây liên tục chồng độc lên mọi quái trong vùng
+    for (let k = 0; k < 8; k++) later(k * 0.5, () => {
+      smoke(player.pos.clone().setY(0.5), { count: 6, color: 0x5aa82a, size: 2.4, life: 1.2, speed: 6, rise: 0.3, alpha: 0.35 });
+      for (const e of nearby(player.pos, 8)) dealDamage(e, Math.round(6 * pw), { element: 'poison', element2: null }, null, 0, false, false);
+    });
+    play('ignite', { rate: 0.6 });
+  } else if (el === 'wind') {
+    // Cuồng phong: hút mọi quái lại gần rồi thổi văng
+    for (const e of nearby(P, 13)) { if (!e.isBoss) e.knock.set(P.x - e.pos.x, 0, P.z - e.pos.z).multiplyScalar(2.2); }
+    play('dash', { rate: 0.5 });
+    later(0.55, () => {
+      spawnRing(ctx.scene, player.pos, 7, 0xd8fff0, 0.5);
+      for (const e of nearby(player.pos, 7)) {
+        const dir = new THREE.Vector3(e.pos.x - player.pos.x, 0, e.pos.z - player.pos.z).normalize();
+        dealDamage(e, Math.round(35 * pw), { element: 'wind', element2: null }, dir, 26, true, false);
+      }
+      addShake(0.5);
+    });
+  } else if (el === 'holy') {
+    // Thánh quang: hồi máu, gây sát thương lớn lên quái xương
+    player.heal(Math.round(player.maxHp * 0.2));
+    for (const e of nearby(P, 9)) {
+      spawnBolt(ctx.scene, e.pos.clone().setY(9), e.pos.clone().setY(0.5), 0xfff6d0);
+      dealDamage(e, Math.round(30 * pw), { element: 'holy', element2: null }, null, 0, true, false);
+    }
+    play('forged');
   } else if (el === 'blood') {
     spawnRing(ctx.scene, P, 7, 0xff4a5a, 0.6);
     burst(P.clone().setY(1), 0xd8203a, 50, { speed: 12, size: 0.18 });

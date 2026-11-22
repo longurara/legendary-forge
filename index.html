@@ -14,6 +14,7 @@
         <div class="hp-row">
           <i class="ico ico-heart"></i>
           <div class="bar"><div id="hp-ghost"></div><div id="hp-fill"></div><span id="hp-text">100 / 100</span></div>
+          <div id="stam" class="stam"><div id="stam-fill"></div></div>
         </div>
         <div class="xp-row">
           <span class="lvl">Cấp <b id="lvl">1</b></span>
@@ -37,6 +38,7 @@
         </div>
         <div id="timer"></div>
         <div class="chips"><div id="event-chip" class="chip" style="display:none"></div><div id="next-reward" class="chip" style="display:none"></div></div>
+        <div id="quest-chip" class="chip quest" style="display:none"></div>
       </div>
 
       <div id="hud-right" class="panel slim">
@@ -109,7 +111,10 @@
       <div class="menu-panel panel">
         <button id="btn-play" class="btn primary">Bắt đầu</button>
         <button id="btn-daily" class="btn">Thử thách hằng ngày <small id="daily-best" class="muted"></small></button>
+        <button id="btn-bossrush" class="btn">Boss Rush <small class="muted">chỉ có boss</small></button>
+        <button id="btn-coop" class="btn">Chơi 2 người <small class="muted">P2 dùng tay cầm</small></button>
         <button id="btn-forge" class="btn">Lò Rèn <span id="menu-souls" class="soul-count"></span></button>
+        <div class="btn-row"><button id="btn-village" class="btn">Làng Thợ Rèn</button><button id="btn-board" class="btn">Bảng Xếp Hạng</button></div>
         <div class="btn-row"><button id="btn-ach" class="btn">Thành tựu</button><button id="btn-codex" class="btn">Sổ Rèn</button></div>
         <button id="btn-howto" class="btn">Hướng dẫn</button>
         <div class="sound-row"><button class="mute-btn" title="Tắt tiếng (M)"><i class="ico ico-speaker"></i><i class="ico ico-speaker-off"></i></button><input class="vol-slider" type="range" min="0" max="100" /></div>
@@ -138,7 +143,10 @@
             <div class="ctrl"><span><span class="keycap wide">Chuột phải</span></span>Kỹ năng vũ khí: kiếm đỡ đòn, rìu ném, đại kiếm giữ để tích lực, trượng bắn cầu lớn</div>
             <div class="ctrl"><span><span class="keycap">R</span></span>Tuyệt kỹ khi thanh Nộ đầy (theo nguyên tố vũ khí)</div>
             <div class="ctrl"><span><span class="keycap">X</span></span>Phân rã vũ khí trên sàn thành Mảnh Thép</div>
+            <div class="ctrl"><span><span class="keycap">E</span></span>Kết liễu quái đang choáng hoặc sắp chết (hồi máu); boss đang choáng: Trọng Kích</div>
+            <div class="ctrl"><span><span class="keycap">Space</span></span>Lướt tốn thể lực (thanh xanh dưới máu); đánh ngay sau khi lướt = Đâm Lướt</div>
             <div class="ctrl"><span><span class="keycap">F</span></span>Cường hóa vũ khí ở đe bằng Mảnh Thép (tối đa +5, mỗi cấp +12% sát thương)</div>
+            <div class="ctrl"><span><span class="keycap">Tab</span></span>Xem bản đồ tầng (đường đi tới boss)</div>
             <div class="ctrl"><span><span class="keycap">M</span></span>Tắt / bật tiếng</div>
             <div class="ctrl"><span><i class="ico" style="--i:url('/ui/icons/x_gamepad.svg')"></i></span>Có hỗ trợ tay cầm</div>
             <h3>Mẹo</h3>
@@ -150,6 +158,9 @@
             <div class="ctrl"><i class="ico el-ice"></i><b class="c-ice">Băng</b> làm chậm, 3 đòn thì đóng băng</div>
             <div class="ctrl"><i class="ico el-lightning"></i><b class="c-lightning">Sét</b> lan sang 2 quái gần đó</div>
             <div class="ctrl"><i class="ico el-blood"></i><b class="c-blood">Huyết</b> hút máu hồi cho bạn</div>
+            <h3>Mẹo chiến đấu</h3>
+            <p class="muted small">Hất quái xuống vực là chết ngay, đập vào tường thì choáng. Mỗi vùng quái kháng một nguyên tố và yếu một nguyên tố khác. Phá <b>Cột Tế</b> trước vì nó cường hóa quái xung quanh; phá <b>pha lê hộ thể</b> để boss hết bất tử. <b>Hiệp Sĩ Giáp</b> chỉ vỡ giáp bằng chí mạng hoặc Đâm Lướt.</p>
+            <p class="muted small">Nguyên tố mới: <b class="c-poison">Độc</b> (cộng dồn), <b class="c-wind">Gió</b> (hất văng mạnh), <b class="c-holy">Thánh</b> (+50% lên quái xương). Độc + Lửa = <b>Khí Nổ</b> · Gió + Lửa = <b>Lốc Lửa</b> · Gió + Băng = <b>Bão Tuyết</b> · Thánh + Sét = <b>Phán Xét</b>.</p>
             <h3>Phản ứng nguyên tố</h3>
             <p class="muted small"><b class="c-fire">Lửa</b> + <b class="c-ice">Băng</b> = <b>Tan Chảy</b> (gấp đôi sát thương) · <b class="c-lightning">Sét</b> vào quái bị đóng băng = <b>Vỡ Băng</b> (nổ lan) · <b class="c-fire">Lửa</b> + <b class="c-lightning">Sét</b> = <b>Quá Tải</b> (nổ hất văng) · <b class="c-blood">Huyết</b> vào quái đang dính hiệu ứng = <b>Huyết Tế</b> (hồi nhiều máu)</p>
             <h3>Đe rèn</h3>
@@ -166,7 +177,7 @@
 
     <!-- ===== Lên cấp ===== -->
     <div id="levelup" class="overlay hidden">
-      <div class="lu-title">Lên cấp <b id="lu-level">2</b></div>
+      <div id="lu-title" class="lu-title">Lên cấp <b id="lu-level">2</b></div>
       <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
       <div id="lu-cards" class="cards"></div>
       <p class="muted small">Chọn một năng lực</p>
@@ -204,6 +215,57 @@
     </div>
 
     <!-- ===== Cửa hàng ===== -->
+    <div id="p2hud" class="p2hud hidden"><b>P2</b><div class="bar"><div id="p2-fill"></div></div><span id="p2-text"></span></div>
+
+    <div id="village" class="overlay hidden">
+      <div class="panel big wide">
+        <h2>Làng Thợ Rèn</h2>
+        <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
+        <div class="souls-have"><i class="ico ico-soul"></i><b id="vil-souls">0</b> Hồn Thép</div>
+        <p class="muted small">Dùng Hồn Thép xây lại làng. Mỗi công trình cho lợi thế vĩnh viễn ở mọi lượt chơi.</p>
+        <div id="vil-list" class="vil-list"></div>
+        <div class="btn-row center"><button id="btn-journal" class="btn">Nhật Ký</button><button class="btn primary" data-close="village">Xong</button></div>
+      </div>
+    </div>
+
+    <div id="board" class="overlay hidden">
+      <div class="panel big">
+        <h2>Bảng Xếp Hạng</h2>
+        <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
+        <p class="muted small">10 lượt chơi tốt nhất trên máy này. Điểm = tầng × 1000 + đợt × 100 + số quái hạ + bậc × 800 (+500 nếu hạ boss).</p>
+        <div id="board-list"></div>
+        <button class="btn primary" data-close="board">Xong</button>
+      </div>
+    </div>
+
+    <div id="story" class="overlay hidden">
+      <div class="panel story-panel">
+        <div class="story-chapter" id="st-chapter"></div>
+        <div class="story-who" id="st-who"></div>
+        <p class="story-line" id="st-line"></p>
+        <button id="st-next" class="btn primary">Tiếp</button>
+      </div>
+    </div>
+
+    <div id="floormap" class="overlay hidden">
+      <div class="panel big wide">
+        <h2 id="fm-title">Bản đồ tầng</h2>
+        <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
+        <p class="muted small">Sau mỗi đợt, bệ phần thưởng chỉ đưa ra các ô nối với ô bạn đã chọn. Lên kế hoạch đường đi tới boss.</p>
+        <div id="fm-body"></div>
+        <button class="btn primary" data-close="floormap">Đóng (Tab)</button>
+      </div>
+    </div>
+
+    <div id="eventroom" class="overlay hidden">
+      <div class="panel big">
+        <h2 id="ev-title"></h2>
+        <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
+        <div class="ev-body"><i id="ev-icon" class="ico"></i><p id="ev-text"></p></div>
+        <div id="ev-choices" class="ev-choices"></div>
+      </div>
+    </div>
+
     <div id="shop" class="overlay hidden">
       <div class="panel big">
         <h2>Thương Nhân</h2>
