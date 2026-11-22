@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { keys, pressed, mouse, pad } from './input.js';
+import { keys, pressed, mouse, pad, touch } from './input.js';
 import { collide } from './world.js';
 import { spawnSlash, burst, addShake, addHitStop, damageNumber, spawnRing, spawnBolt, smoke, flash, hitSpark, emit, F } from './fx.js';
 import { TYPES, RARITY, makeWeapon, buildWeaponMesh, buildHeldWeapon, slashColor, applyAffixes, rollAffixes } from './weapons.js';
@@ -542,7 +542,25 @@ export class Player {
     // Hướng ngắm: chuột hoặc cần phải tay cầm
     const canTurn = !this.attack || this.attack.ranged || this.attack.t < (this.attack.hitAt || 0);
     if (canTurn) {
-      if (pad.active && pad.aim) this.facing = Math.atan2(pad.aim.x, pad.aim.z);
+      if (touch.active) {
+        let dx = touch.move.x, dz = touch.move.z;
+        if (touch.aim) {
+          dx = touch.aim.x;
+          dz = touch.aim.z;
+        } else if (touch.attack || touch.special || mouse.clicked || mouse.rclicked) {
+          let nearest = Infinity;
+          for (const enemy of enemies) {
+            if (!enemy.alive || enemy.spawning) continue;
+            const distance = enemy.pos.distanceToSquared(this.pos);
+            if (distance < nearest) {
+              nearest = distance;
+              dx = enemy.pos.x - this.pos.x;
+              dz = enemy.pos.z - this.pos.z;
+            }
+          }
+        }
+        if (Math.hypot(dx, dz) > 0.05) this.facing = Math.atan2(dx, dz);
+      } else if (pad.active && pad.aim) this.facing = Math.atan2(pad.aim.x, pad.aim.z);
       else {
         const ax = aim.x - this.pos.x, az = aim.z - this.pos.z;
         if (Math.hypot(ax, az) > 0.2) this.facing = Math.atan2(ax, az);
@@ -553,7 +571,8 @@ export class Player {
       (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0), 0,
       (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0) - (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0),
     );
-    if (pad.active && Math.hypot(pad.move.x, pad.move.z) > 0) input.set(pad.move.x, 0, pad.move.z);
+    if (touch.active) input.set(touch.move.x, 0, touch.move.z);
+    else if (pad.active && Math.hypot(pad.move.x, pad.move.z) > 0) input.set(pad.move.x, 0, pad.move.z);
     if (input.lengthSq() > 1) input.normalize();
 
     if (pressed.has('KeyQ') && this.weapons.length > 1) {
@@ -590,7 +609,7 @@ export class Player {
     }
 
     // Kỹ năng chuột phải
-    const rightDown = mouse.rdown || pad.special;
+    const rightDown = mouse.rdown || touch.special || pad.special;
     if (mouse.rclicked && this.specialCd <= 0 && !this.attack && this.dashTime <= 0 && !this.charging) this.useSpecial(enemies);
     if (this.charging) {
       this.chargeT += dt;
@@ -600,7 +619,7 @@ export class Player {
     }
 
     // Tấn công
-    const attackHeld = mouse.down || pad.attack;
+    const attackHeld = mouse.down || touch.attack || pad.attack;
     if (mouse.clicked && this.attack && !this.attack.ranged) this.queued = true;
     if ((mouse.clicked || attackHeld || this.queued) && !this.attack && this.dashTime <= 0 && this.attackCd <= 0 && !this.charging) {
       this.queued = false;

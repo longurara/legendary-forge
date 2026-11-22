@@ -2,7 +2,7 @@
 <html lang="vi">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Lò Rèn Huyền Thoại</title>
     <link rel="stylesheet" href="/src/fonts.css" />
     <link rel="stylesheet" href="/src/style.css" />
@@ -69,6 +69,24 @@
       </div>
     </div>
 
+    <div id="touch-controls" aria-label="Điều khiển cảm ứng">
+      <button id="move-stick" data-action="move" aria-label="Cần di chuyển"><span></span></button>
+      <button id="touch-pause" data-action="Escape" aria-label="Tạm dừng">Ⅱ</button>
+      <div class="touch-combat">
+        <button data-action="KeyR">Nộ</button>
+        <button data-action="special">Kỹ năng</button>
+        <button data-action="Space">Lướt</button>
+        <button data-action="attack">Đánh</button>
+      </div>
+      <div class="touch-context">
+        <button data-action="KeyE" hidden>Tương tác</button>
+        <button data-action="KeyX" hidden>Phân rã</button>
+        <button data-action="KeyF" hidden>Cường hóa</button>
+      </div>
+      <button id="touch-swap" data-action="KeyQ" hidden>Đổi vũ khí</button>
+    </div>
+    <div id="rotate-phone"><strong>Xoay ngang điện thoại</strong><span>để chơi bằng hai tay</span></div>
+
     <div id="banner-wrap">
       <div class="banner-line"><img src="/ui/divider.png" alt="" /><div id="banner"></div><img src="/ui/divider.png" alt="" class="flip" /></div>
       <div id="banner-sub"></div>
@@ -109,6 +127,7 @@
         <div class="howto-grid">
           <div class="howto-col">
             <h3>Điều khiển</h3>
+            <p class="touch-guide">Di chuyển bằng cần trái. Giữ Đánh để nhắm quái gần nhất hoặc kéo nút Đánh để tự ngắm. Chạm Lướt để né. Giữ Kỹ năng để tích lực khi dùng đại kiếm. Chạm Nộ khi thanh đầy để tung tuyệt kỹ.</p>
             <div class="ctrl"><span><span class="keycap">W</span><span class="keycap">A</span><span class="keycap">S</span><span class="keycap">D</span></span>Di chuyển</div>
             <div class="ctrl"><span><span class="keycap wide">Chuột</span></span>Ngắm hướng đánh</div>
             <div class="ctrl"><span><span class="keycap wide">Chuột trái</span></span>Tấn công (giữ để đánh liên tục)</div>
@@ -150,7 +169,7 @@
       <div class="lu-title">Lên cấp <b id="lu-level">2</b></div>
       <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
       <div id="lu-cards" class="cards"></div>
-      <p class="muted small">Chọn một năng lực · bấm phím số hoặc click</p>
+      <p class="muted small">Chọn một năng lực</p>
     </div>
 
     <!-- ===== Lò Rèn (nâng cấp vĩnh viễn) ===== -->

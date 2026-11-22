@@ -6,6 +6,7 @@ export const mouse = { x: 0, y: 0, down: false, clicked: false, rdown: false, rc
 export const pad = { active: false, move: { x: 0, z: 0 }, aim: null, attack: false, special: false };
 
 addEventListener('keydown', (e) => {
+  touch.active = false;
   if (!keys.has(e.code)) pressed.add(e.code);
   keys.add(e.code);
   if (e.code === 'Space' || e.code === 'Tab') e.preventDefault();
@@ -14,6 +15,8 @@ addEventListener('keydown', (e) => {
 addEventListener('keyup', (e) => keys.delete(e.code));
 addEventListener('blur', () => { keys.clear(); mouse.down = mouse.rdown = false; });
 addEventListener('mousemove', (e) => {
+  if (e.sourceCapabilities?.firesTouchEvents) return;
+  touch.active = false;
   mouse.x = (e.clientX / innerWidth) * 2 - 1;
   mouse.y = -(e.clientY / innerHeight) * 2 + 1;
   pad.active = false;
@@ -37,7 +40,7 @@ export function pollGamepad() {
   if (!gp) return;
   const b = gp.buttons.map((x) => x.pressed);
   const any = b.some(Boolean) || gp.axes.some((a) => Math.abs(a) > 0.3);
-  if (any) pad.active = true;
+  if (any) { pad.active = true; touch.active = false; }
   if (!pad.active) return;
   pad.move.x = dead(gp.axes[0] || 0);
   pad.move.z = dead(gp.axes[1] || 0);
@@ -61,3 +64,73 @@ export function endFrame() {
   mouse.rclicked = false;
   mouse.rreleased = false;
 }
+
+// Each thumb owns its pointer until release, even when dragged outside its button.
+export const touch = { active: false, move: { x: 0, z: 0 }, aim: null, attack: false, special: false };
+const controls = document.getElementById('touch-controls');
+const pointers = new Map();
+
+function updateStick(pointer, event) {
+  const dx = event.clientX - pointer.x, dy = event.clientY - pointer.y;
+  const length = Math.hypot(dx, dy);
+  if (pointer.action === 'move') {
+    const radius = pointer.button.clientWidth * 0.34;
+    const scale = length < 4 ? 0 : 1 / Math.max(radius, length);
+    touch.move.x = dx * scale;
+    touch.move.z = dy * scale;
+    pointer.button.firstElementChild.style.transform = `translate(${touch.move.x * radius}px,${touch.move.z * radius}px)`;
+  } else if (pointer.action === 'attack') {
+    touch.aim = length > 9 ? { x: dx / length, z: dy / length } : null;
+  }
+}
+
+controls.addEventListener('pointerdown', event => {
+  const button = event.target.closest('[data-action]');
+  if (!button || button.classList.contains('held')) return;
+  event.preventDefault();
+  const action = button.dataset.action;
+  const rect = button.getBoundingClientRect();
+  const pointer = { button, action, x: event.clientX, y: event.clientY };
+  if (action === 'move') {
+    pointer.x = rect.left + rect.width / 2;
+    pointer.y = rect.top + rect.height / 2;
+  }
+  touch.active = true;
+  pad.active = false;
+  button.setPointerCapture(event.pointerId);
+  button.classList.add('held');
+  pointers.set(event.pointerId, pointer);
+  if (action === 'attack') touch.attack = mouse.clicked = true;
+  else if (action === 'special') touch.special = mouse.rclicked = true;
+  else if (action !== 'move') pressed.add(action);
+  updateStick(pointer, event);
+});
+controls.addEventListener('pointermove', event => {
+  const pointer = pointers.get(event.pointerId);
+  if (pointer) updateStick(pointer, event);
+});
+function releaseTouch(id) {
+  const pointer = pointers.get(id);
+  if (!pointer) return;
+  pointers.delete(id);
+  pointer.button.classList.remove('held');
+  if (pointer.action === 'move') {
+    touch.move.x = touch.move.z = 0;
+    pointer.button.firstElementChild.style.transform = '';
+  } else if (pointer.action === 'attack') {
+    touch.attack = false;
+    touch.aim = null;
+  } else if (pointer.action === 'special') {
+    touch.special = false;
+    mouse.rreleased = true;
+  }
+  if (pointer.button.hasPointerCapture(id)) pointer.button.releasePointerCapture(id);
+}
+for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+  controls.addEventListener(name, event => releaseTouch(event.pointerId));
+}
+export function resetTouch() {
+  for (const id of pointers.keys()) releaseTouch(id);
+  touch.active = false;
+}
+addEventListener('blur', resetTouch);

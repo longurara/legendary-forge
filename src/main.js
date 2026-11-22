@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { endFrame, pressed, mouse, pollGamepad, pad } from './input.js';
+import { endFrame, pressed, mouse, pollGamepad, pad, resetTouch } from './input.js';
 import { buildWorld, updateWorld, isBlocked, ROOM_HALF, spawnExit, removeExit, exitPos, floorTheme, setDark, setDarkHook } from './world.js';
 import { Player, SPECIALS } from './player.js';
 import { Slime, Mage } from './enemies.js';
@@ -27,8 +27,10 @@ import { setMusic, updateMusic, unlockMusic } from './music.js';
 import { loadSounds, unlockAudio, play, setListener, getVolume, setVolume, isMuted, setMuted } from './audio.js';
 
 // ================= Khởi tạo =================
+const phoneInput = matchMedia("(pointer: coarse)");
+const portraitPhone = matchMedia("(pointer: coarse) and (orientation: portrait)");
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, phoneInput.matches ? 1.35 : 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -42,7 +44,7 @@ const CAM_OFFSET = new THREE.Vector3(0, 19, 13.5);
 let camZoom = 1;
 
 // Hậu kỳ: bloom làm các hiệu ứng sáng (lửa, phép, tia sét, đuốc) phát quang
-const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: 4 }));
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: phoneInput.matches ? 0 : 4 }));
 composer.setPixelRatio(renderer.getPixelRatio());
 composer.setSize(innerWidth, innerHeight);
 composer.addPass(new RenderPass(scene, camera));
@@ -589,6 +591,7 @@ function restart() {
 }
 
 function setMode(m) {
+  resetTouch();
   document.body.classList.toggle('menu', m === 'menu');
   document.body.classList.toggle('playing', m === 'playing');
 }
@@ -905,6 +908,7 @@ function updateAim() {
 }
 
 // ================= Tương tác (phím E) =================
+const touchActions = Object.fromEntries([...document.querySelectorAll("[data-action]")].map(button => [button.dataset.action, button]));
 function handleInteract() {
   let drop = loot.nearest(player.pos);
   const atAnvil = loot.nearAnvil(player.pos);
@@ -915,6 +919,8 @@ function handleInteract() {
   const atMerchant = inShop && rewards.nearMerchant(player.pos);
   const E = pressed.has('KeyE');
   let text = '';
+  let interactLabel = '';
+  let canEnhance = false;
   // Phân rã vũ khí gần nhất (X) – luôn dùng được, kể cả khi đứng cạnh đe
   if (drop && pressed.has('KeyX')) {
     addScrap(scrapValue(drop.weapon));
@@ -924,22 +930,27 @@ function handleInteract() {
     drop = null;
   }
   if (atExit) {
+    interactLabel = 'Xuống tầng';
     text = `<span class="keycap">E</span> Xuống <b>tầng ${floor + 1}</b> · ${floorTheme(floor + 1).name}`;
     if (E && !fading) descend();
   } else if (pedestal) {
+    interactLabel = 'Chọn';
     const r = REWARDS[pedestal.kind];
     text = `<span class="keycap">E</span> Chọn <b>${r.name}</b> <span class="muted" style="font-size:13px">${r.desc}</span>`;
     if (E) chooseReward(pedestal.kind);
   } else if (chest) {
+    interactLabel = 'Mở rương';
     text = '<span class="keycap">E</span> Mở <b>rương di vật</b>';
     if (E) { rewards.openChest(chest); grantRelic(); }
   } else if (atMerchant) {
+    interactLabel = 'Mua bán';
     text = '<span class="keycap">E</span> Mua bán với <b>thương nhân</b>';
     if (E) { renderShop(); show('shop', true); setMode('menu'); play('uiOpen'); }
   } else if (atAnvil || (loot.anvil && Math.hypot(loot.anvil.pos.x - player.pos.x, loot.anvil.pos.z - player.pos.z) < 2 && !loot.anvil.forging)) {
     // Cường hóa (F): tốn Mảnh Thép, không giới hạn số lần ở đe
     const cw = player.weapon;
     const canPlus = cw && (cw.plus || 0) < MAX_PLUS;
+    canEnhance = canPlus;
     const cost = canPlus ? enhanceCost(cw) : 0;
     const enh = canPlus ? ` <span class="sep">·</span> <span class="keycap">F</span> Cường hóa <b>+${(cw.plus || 0) + 1}</b> <span class="${scrap >= cost ? '' : 'muted'}">(${cost} <i class="ico ico-scrap"></i>)</span>` : ' <span class="sep">·</span> <span class="muted">Đã cường hóa tối đa</span>';
     if (pressed.has('KeyF') && canPlus) {
@@ -957,6 +968,7 @@ function handleInteract() {
     if (!atAnvil) text = `<i class="ico ico-anvil"></i> Đe đã dùng để rèn${enh}`;
     else if (player.weapons.length < 2) text = `<i class="ico ico-anvil"></i> Cần <b>2 vũ khí</b> để rèn${enh}`;
     else {
+      interactLabel = 'Rèn';
       const preview = forgeWeapons(player.weapons[player.slot], player.weapons[1 - player.slot], player.hasRelic('gauntlet') ? 1 : 0);
       text = `<span class="keycap">E</span> Rèn thành <img src="${weaponIcon(preview)}" width="30" height="30" alt=""><span style="color:${RARITY[preview.rarity].css}">${weaponName(preview)}</span>${weaponIcons(preview)}${enh}`;
       if (E) {
@@ -978,6 +990,7 @@ function handleInteract() {
   } else if (drop) {
     const w = drop.weapon;
     const verb = player.weapons.length < 2 ? 'Nhặt' : 'Đổi lấy';
+    interactLabel = verb;
     const aff = affixText(w);
     const diff = weaponScore(w) / weaponScore(player.weapon) - 1;
     const cmp = Math.abs(diff) < 0.03 ? '<span class="cmp eq">=</span>' : diff > 0 ? `<span class="cmp up">▲ ${Math.round(diff * 100)}%</span>` : `<span class="cmp down">▼ ${Math.round(-diff * 100)}%</span>`;
@@ -992,6 +1005,14 @@ function handleInteract() {
       loot.remove(drop);
       if (old) loot.drop(old, player.pos.x, player.pos.z);
     }
+  }
+  if (phoneInput.matches) {
+    const action = touchActions.KeyE;
+    action.hidden = !interactLabel;
+    if (interactLabel && action.textContent !== interactLabel) action.textContent = interactLabel;
+    touchActions.KeyX.hidden = !drop;
+    touchActions.KeyF.hidden = !canEnhance;
+    touchActions.KeyQ.hidden = player.weapons.length < 2;
   }
   hud.prompt.innerHTML = text;
   hud.prompt.classList.toggle('show', !!text);
@@ -1392,6 +1413,10 @@ async function init() {
   $('btn-menu2').onclick = () => { setPaused(false); toMenu(); };
   $('btn-forge').onclick = () => { renderForge(); show('forge', true); play('uiOpen'); };
   updateMenuSouls();
+  portraitPhone.addEventListener('change', () => {
+    resetTouch();
+    if (portraitPhone.matches && started && !paused && !choosing && !player.dead && !inShopOpen()) setPaused(true);
+  });
   addEventListener('blur', () => { if (started && !player.dead && !choosing && !inShopOpen()) setPaused(true); });
   addEventListener('gamepadconnected', () => toast('x_gamepad', 'Đã kết nối tay cầm', 'Cần trái di chuyển · cần phải ngắm · RT đánh · LT kỹ năng · A lướt'));
   hud.start.classList.remove('loading');
