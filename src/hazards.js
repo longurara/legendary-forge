@@ -111,9 +111,25 @@ class Spike {
   }
 }
 
+function disposeLiquidMat(m) {
+  if (!m) return;
+  if (m.userData) m.userData.disposed = true;
+  m.dispose?.();
+}
+function disposeGroupLiquids(g) {
+  if (!g) return;
+  g.traverse((o) => {
+    if (o.material?.uniforms?.uTime) disposeLiquidMat(o.material);
+  });
+  for (const L of lavaPools) {
+    disposeLiquidMat(L.obsMat);
+    disposeLiquidMat(L.lavaMat);
+  }
+}
+
 // Dọn sạch bẫy khi vào Phòng Tập Lò Rèn
 export function clearHazards(scene) {
-  if (group) { scene?.remove(group); group = null; }
+  if (group) { disposeGroupLiquids(group); scene?.remove(group); group = null; }
   ctx.barrels.length = 0;
   spikes.length = 0;
   icePatches.length = 0; lavaPools.length = 0; graves.length = 0;
@@ -124,7 +140,7 @@ export function clearHazards(scene) {
 
 // Đặt bẫy cho tầng mới (gọi sau buildWorld)
 export function buildHazards(scene, floor, rand = Math.random) {
-  if (group) scene.remove(group);
+  if (group) { disposeGroupLiquids(group); scene.remove(group); }
   group = new THREE.Group();
   scene.add(group);
   ctx.barrels.length = 0;
@@ -372,6 +388,7 @@ export function inSteam(x, z) { return steamClouds.some((s) => Math.hypot(x - s.
 // Tạo màn sương hơi nước (từ Tôi Địa Hình hoặc Lửa + Băng): làm mù quái đánh xa
 export function spawnSteamCloud(pos, radius = 3.2, dur = 4.5) {
   if (!group) return;
+  if (steamClouds.length >= 10) steamClouds.shift();
   steamClouds.push({ x: pos.x, z: pos.z, r: radius, t: dur, dur });
   fxSmoke(pos.clone().setY(0.6), { count: 10, color: 0xd8ecf4, size: radius * 0.6, life: 1.5, speed: 2.2, rise: 0.9, alpha: 0.45 });
   play('freeze', { at: pos, rate: 0.6, vol: 0.5 });
@@ -380,6 +397,15 @@ export function spawnSteamCloud(pos, radius = 3.2, dur = 4.5) {
 // Tạo vũng nước (khi băng tan hoặc kỹ năng)
 export function spawnWaterPatch(x, z, r = 2.2, dur = 12, sourceIce = null) {
   if (!group) return null;
+  if (waterPatches.length >= 12) {
+    const old = waterPatches.shift();
+    if (old) {
+      if (old.sourceIce) { old.sourceIce.melted = false; if (old.sourceIce.mesh) old.sourceIce.mesh.visible = true; }
+      group.remove(old.mesh);
+      old.mesh.geometry?.dispose();
+      disposeLiquidMat(old.mesh.material);
+    }
+  }
   const geo = blobGeometry(r, Math.random);
   const mesh = new THREE.Mesh(geo, liquidMaterial('water'));
   mesh.position.set(x, 0.042, z);
@@ -409,14 +435,14 @@ function spawnCyclone(pos, dir, kind, dmg) {
 
 // ---------- Ma Trận Hóa Học Bề Mặt (gọi từ combat.js / player.js khi đòn nguyên tố chạm đất/quái) ----------
 export function reactSurface(pos, radius, element, dir = null, baseDmg = 18) {
-  if (!group || !element || element === 'none' || surfaceDepth >= 2) return false;
+  if (!group || !pos || !element || element === 'none' || surfaceDepth >= 2) return false;
   surfaceDepth++;
   let reacted = false;
   try {
     // 1. LỬA lên BĂNG -> Tan thành Vũng Nước + Màn Sương
     if (element === 'fire') {
       for (const ice of icePatches) {
-        if (ice.melted) continue;
+        if (!ice || ice.melted) continue;
         if (Math.hypot(ice.x - pos.x, ice.z - pos.z) < ice.r + radius) {
           ice.melted = true;
           if (ice.mesh) ice.mesh.visible = false;
@@ -426,48 +452,63 @@ export function reactSurface(pos, radius, element, dir = null, baseDmg = 18) {
           reacted = true;
         }
       }
-      // 2. LỬA lên VŨNG ĐỘC -> Kích nổ khí độc dây chuyền!
+      // 2. LỬA lên VŨNG ĐỘC -> Kích nổ khí độc dây chuyền (thu thập batch & xóa trước để tránh sửa mảng khi đang lặp)!
       const toxics = getToxics();
       const hitIdx = [];
       for (let i = 0; i < toxics.length; i++) {
-        if (Math.hypot(toxics[i].pos.x - pos.x, toxics[i].pos.z - pos.z) < toxics[i].radius + radius) hitIdx.push(i);
+        const ti = toxics[i];
+        if (ti && ti.pos && Math.hypot(ti.pos.x - pos.x, ti.pos.z - pos.z) < ti.radius + radius) hitIdx.push(i);
       }
       if (hitIdx.length) {
-        // Lan dây chuyền sang mọi vũng độc chạm nhau
         const chain = new Set(hitIdx);
         let grew = true;
         while (grew) {
           grew = false;
           for (let i = 0; i < toxics.length; i++) {
-            if (chain.has(i)) continue;
+            const ti = toxics[i];
+            if (!ti || !ti.pos || chain.has(i)) continue;
             for (const j of chain) {
-              if (Math.hypot(toxics[i].pos.x - toxics[j].pos.x, toxics[i].pos.z - toxics[j].pos.z) < toxics[i].radius + toxics[j].radius + 1.8) {
+              const tj = toxics[j];
+              if (tj && tj.pos && Math.hypot(ti.pos.x - tj.pos.x, ti.pos.z - tj.pos.z) < ti.radius + tj.radius + 1.8) {
                 chain.add(i); grew = true; break;
               }
             }
           }
         }
+        const batch = [];
         const sorted = [...chain].sort((a, b) => b - a);
         for (const i of sorted) {
-          const tPos = toxics[i].pos.clone();
-          const tR = Math.max(2.6, toxics[i].radius * 1.9);
+          const t = toxics[i];
+          if (!t || !t.pos) continue;
+          batch.push({ pos: t.pos.clone(), r: Math.max(2.6, t.radius * 1.9) });
           removeToxic(i);
-          explosion(tPos, tR, 0x9fff5a, { smoke: true, scorch: true, core: 0xe8ffb0 });
-          damageNumber(tPos, 'Khí Độc Nổ!', 'react overload');
-          play('explode', { at: tPos, vol: 0.75 });
-          aoe(tPos, tR, Math.round(baseDmg * 1.1 + 18), { element: 'fire', element2: null }, 12, { surface: false });
-          spawnFirePatch(tPos, tR * 0.7, 3.2, 12);
         }
-        reacted = true;
+        for (const b of batch) {
+          explosion(b.pos, b.r, 0x9fff5a, { smoke: true, scorch: true, core: 0xe8ffb0 });
+          damageNumber(b.pos, 'Khí Độc Nổ!', 'react overload');
+          play('explode', { at: b.pos, vol: 0.75 });
+          aoe(b.pos, b.r, Math.round(baseDmg * 1.1 + 18), { element: 'fire', element2: null }, 12, { surface: false });
+          spawnFirePatch(b.pos, b.r * 0.7, 3.2, 12);
+        }
+        if (batch.length) reacted = true;
       }
     }
 
     // 3. SÉT lên VŨNG NƯỚC -> Điện Trường diện rộng (4s)
     if (element === 'lightning') {
       for (const w of waterPatches) {
-        if (w.electrified) continue;
+        if (!w || w.electrified) continue;
         if (Math.hypot(w.x - pos.x, w.z - pos.z) < w.r + radius) {
           w.electrified = true;
+          if (elecPatches.length >= 8) {
+            const old = elecPatches.shift();
+            if (old) {
+              if (old.water) old.water.electrified = false;
+              group.remove(old.mesh);
+              old.mesh.geometry?.dispose();
+              disposeLiquidMat(old.mesh.material);
+            }
+          }
           const mesh = new THREE.Mesh(blobGeometry(w.r * 1.05, Math.random), liquidMaterial('elec'));
           mesh.position.set(w.x, 0.055, w.z);
           mesh.renderOrder = 3;
@@ -484,7 +525,7 @@ export function reactSurface(pos, radius, element, dir = null, baseDmg = 18) {
     // 4. BĂNG lên VŨNG NHAM THẠCH -> Đông cứng thành vỏ Đá Obsidian đi qua được (8s)
     if (element === 'ice') {
       for (const L of lavaPools) {
-        if (L.obsidianT > 0) continue;
+        if (!L || L.obsidianT > 0) continue;
         if (Math.hypot(L.x - pos.x, L.z - pos.z) < L.r + radius) {
           L.obsidianT = 8.5;
           if (!L.obsMat) L.obsMat = liquidMaterial('obsidian');
@@ -500,10 +541,11 @@ export function reactSurface(pos, radius, element, dir = null, baseDmg = 18) {
       // Băng lên Vũng Nước -> Đóng băng trở lại
       for (let i = waterPatches.length - 1; i >= 0; i--) {
         const w = waterPatches[i];
+        if (!w) continue;
         if (Math.hypot(w.x - pos.x, w.z - pos.z) < w.r + radius && w.sourceIce) {
           w.sourceIce.melted = false;
           if (w.sourceIce.mesh) w.sourceIce.mesh.visible = true;
-          group.remove(w.mesh); w.mesh.geometry.dispose(); w.mesh.material.dispose();
+          group.remove(w.mesh); w.mesh.geometry?.dispose(); disposeLiquidMat(w.mesh.material);
           waterPatches.splice(i, 1);
           damageNumber(new THREE.Vector3(w.x, 0.4, w.z), 'Đóng Băng Lại!', 'react shatter');
           play('freeze', { at: { x: w.x, z: w.z } });
@@ -517,9 +559,11 @@ export function reactSurface(pos, radius, element, dir = null, baseDmg = 18) {
       const fires = getFirePatches();
       for (let i = fires.length - 1; i >= 0; i--) {
         const f = fires[i];
+        if (!f || !f.pos) continue;
         if (Math.hypot(f.pos.x - pos.x, f.pos.z - pos.z) < f.radius + radius) {
           const p0 = f.pos.clone();
-          removeFirePatch(i);
+          const idx = fires.indexOf(f);
+          if (idx >= 0) removeFirePatch(idx);
           spawnCyclone(p0, dir, 'fire', baseDmg * 0.65);
           reacted = true;
           break;
@@ -529,9 +573,11 @@ export function reactSurface(pos, radius, element, dir = null, baseDmg = 18) {
         const tox = getToxics();
         for (let i = tox.length - 1; i >= 0; i--) {
           const f = tox[i];
+          if (!f || !f.pos) continue;
           if (Math.hypot(f.pos.x - pos.x, f.pos.z - pos.z) < f.radius + radius) {
             const p0 = f.pos.clone();
-            removeToxic(i);
+            const idx = tox.indexOf(f);
+            if (idx >= 0) removeToxic(idx);
             spawnCyclone(p0, dir, 'poison', baseDmg * 0.6);
             reacted = true;
             break;
@@ -641,7 +687,7 @@ export function updateHazards(dt, rain) {
     }
     if (w.t <= 0) {
       if (w.sourceIce) { w.sourceIce.melted = false; if (w.sourceIce.mesh) w.sourceIce.mesh.visible = true; }
-      group.remove(w.mesh); w.mesh.geometry.dispose(); w.mesh.material.dispose();
+      group.remove(w.mesh); w.mesh.geometry?.dispose(); disposeLiquidMat(w.mesh.material);
       waterPatches.splice(i, 1);
     }
   }
@@ -650,7 +696,7 @@ export function updateHazards(dt, rain) {
   for (let i = elecPatches.length - 1; i >= 0; i--) {
     const ep = elecPatches[i];
     ep.t -= dt; ep.tick -= dt;
-    if (Math.random() < dt * 10) emit(new THREE.Vector3(ep.x + (Math.random() - 0.5) * ep.r * 1.4, 0.25, ep.z + (Math.random() - 0.5) * ep.r * 1.4), { frame: F.elec, color: 0xffe14a, color2: 0x7fdcff, size: 0.9, size2: 0.2, life: 0.16, hdr: 2 });
+    if (Math.random() < dt * 10) emit({ x: ep.x + (Math.random() - 0.5) * ep.r * 1.4, y: 0.25, z: ep.z + (Math.random() - 0.5) * ep.r * 1.4 }, { frame: F.elec, color: 0xffe14a, color2: 0x7fdcff, size: 0.9, size2: 0.2, life: 0.16, hdr: 2 });
     if (ep.tick <= 0) {
       ep.tick = 0.45;
       for (const e of ctx.enemies) {
@@ -663,7 +709,7 @@ export function updateHazards(dt, rain) {
     }
     if (ep.t <= 0) {
       if (ep.water) ep.water.electrified = false;
-      group.remove(ep.mesh); ep.mesh.geometry.dispose(); ep.mesh.material.dispose();
+      group.remove(ep.mesh); ep.mesh.geometry?.dispose(); disposeLiquidMat(ep.mesh.material);
       elecPatches.splice(i, 1);
     }
   }

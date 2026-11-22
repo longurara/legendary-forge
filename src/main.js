@@ -48,7 +48,7 @@ import { loadSounds, unlockAudio, play, setListener, getVolume, setVolume, isMut
 const phoneInput = matchMedia("(pointer: coarse)");
 const portraitPhone = matchMedia("(pointer: coarse) and (orientation: portrait)");
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, phoneInput.matches ? 1.35 : 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, phoneInput.matches ? 1.25 : 1.5));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -62,7 +62,7 @@ const CAM_OFFSET = new THREE.Vector3(0, 22.0, 15.8);
 let camZoom = 1;
 
 // Hậu kỳ: bloom làm các hiệu ứng sáng (lửa, phép, tia sét, đuốc) phát quang
-const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: phoneInput.matches ? 0 : 4 }));
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: phoneInput.matches ? 0 : 2 }));
 composer.setPixelRatio(renderer.getPixelRatio());
 composer.setSize(innerWidth, innerHeight);
 composer.addPass(new RenderPass(scene, camera));
@@ -2210,10 +2210,14 @@ function onDeath() {
 }
 
 function tick(now) {
+  requestAnimationFrame(tick);
   const realDt = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
-  update(realDt);
-  requestAnimationFrame(tick);
+  try {
+    update(realDt);
+  } catch (err) {
+    console.error('[tick]', err);
+  }
 }
 
 function startGame(opts = {}) {
@@ -2538,9 +2542,13 @@ async function init() {
     const e = new PyroMage(scene, 6, -6); e.spawnT = 0; addEnemy(e); ctx.enemies = enemies; play('waveStart', { vol: 0.6 });
   };
   if ($('sb-rage')) $('sb-rage').onclick = () => { player.rage = 100; play('forged', { vol: 0.5 }); };
-  // Đăng ký PWA Service Worker
+  // Đăng ký PWA Service Worker (chỉ bật ở bản build sản phẩm; trong dev tự gỡ SW cũ để tránh kẹt asset)
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    if (import.meta.env.PROD) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    } else {
+      navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister())).catch(() => {});
+    }
   }
   $('btn-shop-leave').onclick = () => { leaveShopPanel(); leaveShop(); };
   $('btn-shop-close').onclick = () => leaveShopPanel();

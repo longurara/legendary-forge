@@ -10,18 +10,24 @@ export function addShake(amount) {
 }
 
 // ---------- Hit stop (đóng băng game trong tích tắc khi đánh trúng) ----------
-export const hitStop = { time: 0 };
+export const hitStop = { time: 0, cd: 0 };
 export function addHitStop(sec) {
+  sec = Math.min(sec, 0.065);
+  if (hitStop.cd > 0 && sec < 0.055) return;
   hitStop.time = Math.max(hitStop.time, sec);
+  hitStop.cd = 0.25;
 }
 
-// ---------- Chất lượng hiệu ứng ----------
+// ---------- Chất lượng hiệu ứng & điều tiết tự động khi tụt FPS ----------
 export const fxQuality = { high: localStorage.getItem('lorenh_fx') !== 'low' };
 export function setFxQuality(high) {
   fxQuality.high = high;
   localStorage.setItem('lorenh_fx', high ? 'high' : 'low');
 }
-const density = () => (fxQuality.high ? 1 : 0.5);
+let smoothDt = 1 / 60;
+let loadScale = 1;
+const frameFx = { explosions: 0, bursts: 0, bolts: 0, rings: 0 };
+const density = () => (fxQuality.high ? 1 : 0.5) * loadScale;
 
 // ---------- Texture ----------
 const loader = new THREE.TextureLoader();
@@ -74,6 +80,7 @@ class ParticlePool {
     this.max = max;
     this.items = [];
     this.cursor = 0;
+    this.dirty = false;
     const geo = new THREE.BufferGeometry();
     const attr = (name, n) => { const a = new THREE.BufferAttribute(new Float32Array(max * n), n); a.setUsage(THREE.DynamicDrawUsage); geo.setAttribute(name, a); return a; };
     this.aPos = attr('position', 3);
@@ -97,27 +104,33 @@ class ParticlePool {
     }
   }
 
-  // Lấy một hạt trống (nếu hết thì ghi đè hạt cũ nhất theo vòng)
+  // Lấy một hạt trống O(1): thử tối đa 4 ô từ cursor, nếu bận thì ghi đè vòng
   take() {
-    for (let k = 0; k < this.max; k++) {
+    for (let k = 0; k < 4; k++) {
       const p = this.items[this.cursor];
       this.cursor = (this.cursor + 1) % this.max;
-      if (!p.live) return p;
+      if (!p.live) { this.dirty = true; return p; }
     }
     const p = this.items[this.cursor];
     this.cursor = (this.cursor + 1) % this.max;
+    this.dirty = true;
     return p;
   }
 
   update(dt, camera, viewH) {
+    if (dt === 0 && !this.dirty) return;
     this.uniforms.uViewH.value = viewH;
     const P = this.aPos.array, C = this.aColor.array, A = this.aAlpha.array, S = this.aSize.array,
       Fr = this.aFrame.array, R = this.aRot.array, St = this.aStretch.array;
+    let anyLive = false;
+    let changed = false;
     for (let i = 0; i < this.max; i++) {
       const p = this.items[i];
-      if (!p.live) { if (A[i] !== 0) { A[i] = 0; S[i] = 0; } continue; }
+      if (!p.live) { if (A[i] !== 0) { A[i] = 0; S[i] = 0; changed = true; } continue; }
+      changed = true;
       p.life -= dt;
       if (p.life <= 0) { p.live = false; A[i] = 0; S[i] = 0; continue; }
+      anyLive = true;
       const t = 1 - p.life / p.maxLife;
       p.vel.y -= p.grav * dt;
       if (p.drag) p.vel.multiplyScalar(Math.max(0, 1 - p.drag * dt));
@@ -147,10 +160,11 @@ class ParticlePool {
       R[i] = rot;
       St[i] = stretch;
     }
-    for (const a of [this.aPos, this.aColor, this.aAlpha, this.aSize, this.aFrame, this.aRot, this.aStretch]) a.needsUpdate = true;
+    this.dirty = anyLive;
+    if (changed) for (const a of [this.aPos, this.aColor, this.aAlpha, this.aSize, this.aFrame, this.aRot, this.aStretch]) a.needsUpdate = true;
   }
 
-  clear() { for (const p of this.items) p.live = false; }
+  clear() { for (const p of this.items) p.live = false; this.dirty = true; }
 }
 
 const tA = new THREE.Vector3(), tB = new THREE.Vector3();
@@ -190,9 +204,13 @@ function randDir(speed, up, out) {
   return out.set(Math.cos(a) * s, up * (0.5 + Math.random()), Math.sin(a) * s);
 }
 const tmpV = new THREE.Vector3();
+const _p1 = new THREE.Vector3(), _p2 = new THREE.Vector3(), _v1 = new THREE.Vector3();
+const _expPos = new THREE.Vector3(), _sPos = new THREE.Vector3();
 
 // Nổ hạt — API cũ, giờ tự chọn kiểu: màu xám/đất → bụi khói, màu tươi → tia lửa phát sáng
 export function burst(pos, color, count = 10, opts = {}) {
+  if (++frameFx.bursts > 24) return;
+  if (frameFx.bursts > 12) count = Math.max(2, Math.round(count * 0.5));
   const { speed = 6, size = 0.14, life = 0.5, up = 4, gravity = 18 } = opts;
   tmpC.set(color).getHSL(hsl);
   const style = opts.style || (hsl.s < 0.3 && hsl.l < 0.85 ? 'dust' : 'spark');
@@ -200,7 +218,7 @@ export function burst(pos, color, count = 10, opts = {}) {
   if (style === 'dust') {
     for (let i = 0; i < n; i++) {
       emit(pos, { smoke: true, frame: Math.random() < 0.5 ? F.dust : F.puff, color, size: size * 4, size2: size * 9,
-        life: life * (1 + Math.random()), vel: randDir(speed * 0.45, up * 0.25, tmpV), grav: -0.6, drag: 3.5, alpha: 0.55, rotV: rv(2) });
+        life: life * (1 + Math.random()), vel: randDir(speed * 0.45, up * 0.25, _v1), grav: -0.6, drag: 3.5, alpha: 0.55, rotV: rv(2) });
     }
     return;
   }
@@ -208,13 +226,13 @@ export function burst(pos, color, count = 10, opts = {}) {
   const hot = tmpC2.getHex();
   for (let i = 0; i < n; i++) {
     emit(pos, { frame: Math.random() < 0.15 ? F.sparkle : F.glow, color: hot, color2: color, size: size * (2.4 + Math.random() * 2), size2: size * 0.6,
-      life: life * (0.6 + Math.random() * 0.6), vel: randDir(speed, up, tmpV), grav: gravity, drag: 1.2, bounce: true });
+      life: life * (0.6 + Math.random() * 0.6), vel: randDir(speed, up, _v1), grav: gravity, drag: 1.2, bounce: true });
   }
   // Tia lửa vệt dài
   const m = n >= 4 ? Math.ceil(n * 0.45) : 0;
   for (let i = 0; i < m; i++) {
     emit(pos, { frame: F.streak, color: hot, color2: color, size: size * 6, size2: size * 3, life: life * (0.35 + Math.random() * 0.3),
-      vel: randDir(speed * 1.6, up * 0.8, tmpV), grav: gravity * 0.6, drag: 2, streak: true, hdr: 2.2 });
+      vel: randDir(speed * 1.6, up * 0.8, _v1), grav: gravity * 0.6, drag: 2, streak: true, hdr: 2.2 });
   }
   // Chớp sáng ở tâm
   if (count >= 8) emit(pos, { frame: F.flare, color: hot, size: size * (10 + Math.min(count, 40) * 0.35), size2: size * 4, life: 0.14, hdr: 1.8, alpha: 0.9 });
@@ -224,11 +242,12 @@ export function burst(pos, color, count = 10, opts = {}) {
 export function smoke(pos, o = {}) {
   const { count = 6, color = 0x3a3430, size = 0.8, life = 1.2, speed = 1.5, rise = 1.2, alpha = 0.6 } = o;
   const n = Math.max(1, Math.round(count * density()));
-  const base = pos.clone();
+  _p1.set(pos.x, pos.y, pos.z);
   for (let i = 0; i < n; i++) {
-    emit(tmpV.copy(base).add(new THREE.Vector3(rv(0.3), rv(0.2), rv(0.3))), {
+    _p2.set(_p1.x + rv(0.3), _p1.y + rv(0.2), _p1.z + rv(0.3));
+    emit(_p2, {
       smoke: true, frame: Math.random() < 0.6 ? F.smoke : F.puff, color, size: size * (0.6 + Math.random() * 0.5), size2: size * 2,
-      life: life * (0.7 + Math.random() * 0.6), vel: randDir(speed, rise, new THREE.Vector3()), grav: -0.4, drag: 2, alpha, rotV: rv(1.5), fadeIn: 0.12,
+      life: life * (0.7 + Math.random() * 0.6), vel: randDir(speed, rise, _v1), grav: -0.4, drag: 2, alpha, rotV: rv(1.5), fadeIn: 0.12,
     });
   }
 }
@@ -236,11 +255,12 @@ export function smoke(pos, o = {}) {
 // Lửa (cháy trên quái, thùng, vùng lửa)
 export function flame(pos, o = {}) {
   const { count = 1, size = 0.6, life = 0.5, spread = 0.3, rise = 2.2 } = o;
-  const base = pos.clone();
+  _p1.set(pos.x, pos.y, pos.z);
   for (let i = 0; i < count; i++) {
-    emit(tmpV.copy(base).add(new THREE.Vector3(rv(spread), 0, rv(spread))), {
+    _p2.set(_p1.x + rv(spread), _p1.y, _p1.z + rv(spread));
+    emit(_p2, {
       frame: Math.random() < 0.5 ? F.flame : F.fire, color: o.color ?? 0xffa040, color2: o.color2 ?? 0xb02000, size: size * (0.7 + Math.random() * 0.6), size2: size * 0.2,
-      life: life * (0.7 + Math.random() * 0.6), vel: new THREE.Vector3(rv(0.4), rise * (0.7 + Math.random() * 0.6), rv(0.4)), grav: -1, drag: 1, rotV: rv(3), fadeIn: 0.15, hdr: o.hdr ?? 1.1, alpha: o.alpha ?? 0.75,
+      life: life * (0.7 + Math.random() * 0.6), vel: _v1.set(rv(0.4), rise * (0.7 + Math.random() * 0.6), rv(0.4)), grav: -1, drag: 1, rotV: rv(3), fadeIn: 0.15, hdr: o.hdr ?? 1.1, alpha: o.alpha ?? 0.75,
     });
   }
 }
@@ -258,22 +278,26 @@ export function hitSpark(pos, color, big = false) {
   emit(pos, { frame: F.impact, color: 0xfff4d8, color2: color, size: 1.5 * s, size2: 2.4 * s, life: 0.12, hdr: 2, alpha: 0.9 });
   emit(pos, { frame: F.star, color: 0xffffff, color2: color, size: 1.6 * s, size2: 0.6 * s, life: 0.1, hdr: 2.4 });
   const n = big ? 7 : 4;
-  for (let i = 0; i < n; i++) emit(pos, { frame: F.streak, color: 0xfff0c0, color2: color, size: 0.8 * s, size2: 0.3, life: 0.18 + Math.random() * 0.12, vel: randDir(14 * s, 5, new THREE.Vector3()), grav: 20, drag: 3, streak: true, hdr: 2.4 });
+  for (let i = 0; i < n; i++) emit(pos, { frame: F.streak, color: 0xfff0c0, color2: color, size: 0.8 * s, size2: 0.3, life: 0.18 + Math.random() * 0.12, vel: randDir(14 * s, 5, _v1), grav: 20, drag: 3, streak: true, hdr: 2.4 });
 }
 
-// Vụ nổ hoàn chỉnh: chớp + cầu lửa + khói + tia lửa + vòng sóng + vết cháy
+// Vụ nổ hoàn chỉnh: chớp + cầu lửa + khói + tia lửa + vòng sóng + vết cháy (có giới hạn mỗi khung)
 export function explosion(pos, radius = 3, color = 0xff7a2a, o = {}) {
-  const p = tmpV.copy(pos).setY(Math.max(0.5, pos.y));
-  const c = p.clone();
+  _expPos.set(pos.x, Math.max(0.5, pos.y), pos.z);
   const core = o.core ?? 0xffe08a;
-  flash(c, core, radius * 1.6, 0.2);
+  if (++frameFx.explosions > 3) {
+    flash(_expPos, core, radius * 1.1, 0.14, false);
+    burst(_expPos, color, Math.max(4, Math.round(radius * 2.5)), { speed: radius * 3, size: 0.12, life: 0.45 });
+    return;
+  }
+  flash(_expPos, core, radius * 1.6, 0.2);
   const n = Math.round(radius * 7 * density());
   for (let i = 0; i < n; i++) {
-    emit(c, { frame: Math.random() < 0.5 ? F.fire : F.flame, color: core, color2: color, size: radius * (0.35 + Math.random() * 0.35), size2: radius * 0.15,
-      life: 0.35 + Math.random() * 0.35, vel: randDir(radius * 3.2, 3, new THREE.Vector3()), drag: 4, grav: -2, rotV: rv(3), hdr: 2.2 });
+    emit(_expPos, { frame: Math.random() < 0.5 ? F.fire : F.flame, color: core, color2: color, size: radius * (0.35 + Math.random() * 0.35), size2: radius * 0.15,
+      life: 0.35 + Math.random() * 0.35, vel: randDir(radius * 3.2, 3, _v1), drag: 4, grav: -2, rotV: rv(3), hdr: 2.2 });
   }
-  burst(c, color, Math.round(radius * 6), { speed: radius * 4, size: 0.14, life: 0.7 });
-  if (o.smoke !== false) smoke(c, { count: Math.round(radius * 2.5), size: radius * 0.55, life: 1.4, speed: radius * 0.9, rise: 1.5, color: o.smokeColor ?? 0x2a2420 });
+  burst(_expPos, color, Math.round(radius * 6), { speed: radius * 4, size: 0.14, life: 0.7 });
+  if (o.smoke !== false) smoke(_expPos, { count: Math.round(radius * 2.5), size: radius * 0.55, life: 1.4, speed: radius * 0.9, rise: 1.5, color: o.smokeColor ?? 0x2a2420 });
   spawnRing(fxScene, pos, radius * 1.1, color, 0.4);
   if (o.scorch !== false) scorch(pos, radius * 0.8);
 }
@@ -309,7 +333,14 @@ export function scorch(pos, radius = 1.5, life = 7) {
   m.scale.setScalar(radius);
   fxScene.add(m);
   decals.push({ mesh: m, t: life, max: life, kind: 'scorch', base: 0.75 });
-  while (decals.filter((d) => d.kind === 'scorch').length > 24) removeDecal(decals.findIndex((d) => d.kind === 'scorch'));
+  let count = 0;
+  for (const d of decals) if (d.kind === 'scorch') count++;
+  while (count > 16) {
+    const idx = decals.findIndex((d) => d.kind === 'scorch');
+    if (idx < 0) break;
+    removeDecal(idx);
+    count--;
+  }
 }
 export function groundRune(pos, radius = 3, color = 0xffcf4a, life = 1, spin = 1.2) {
   if (!fxScene) return;
@@ -318,6 +349,14 @@ export function groundRune(pos, radius = 3, color = 0xffcf4a, life = 1, spin = 1
   m.scale.setScalar(radius);
   fxScene.add(m);
   decals.push({ mesh: m, t: life, max: life, kind: 'rune', spin, base: 1, follow: pos.isVector3 ? pos : null });
+  let count = 0;
+  for (const d of decals) if (d.kind === 'rune') count++;
+  while (count > 8) {
+    const idx = decals.findIndex((d) => d.kind === 'rune');
+    if (idx < 0) break;
+    removeDecal(idx);
+    count--;
+  }
   return m;
 }
 // Vòng phép cố định (không tự biến mất) – dùng cho bệ phần thưởng
@@ -415,7 +454,14 @@ function arcGeometry(r0, r1, start, arc, seg = 32) {
   return g;
 }
 const slashes = [];
+const MAX_SLASHES = 10;
 export function spawnSlash(scene, pos, facing, arc, radius, color, flip) {
+  while (slashes.length >= MAX_SLASHES) {
+    const old = slashes.shift();
+    old.mesh.parent?.remove(old.mesh);
+    old.mesh.geometry.dispose();
+    old.mesh.material.dispose();
+  }
   const geo = arcGeometry(radius * 0.3, radius * 1.02, -Math.PI / 2 - arc / 2, arc);
   const mat = new THREE.ShaderMaterial({
     uniforms: { uColor: { value: new THREE.Color(color) }, uHead: { value: 0 }, uFade: { value: 1 } },
@@ -446,8 +492,8 @@ function updateSlashes(dt) {
       s.sparked = true;
       const side = s.flip ? -1 : 1;
       const th = s.facing + side * s.arc / 2;
-      const p = new THREE.Vector3(s.mesh.position.x + Math.sin(th) * s.radius, 0.85, s.mesh.position.z + Math.cos(th) * s.radius);
-      for (let k = 0; k < 3; k++) emit(p, { frame: F.streak, color: 0xffffff, color2: s.color, size: 0.5, size2: 0.2, life: 0.15, vel: randDir(8, 2, new THREE.Vector3()), drag: 4, streak: true, hdr: 2 });
+      _p1.set(s.mesh.position.x + Math.sin(th) * s.radius, 0.85, s.mesh.position.z + Math.cos(th) * s.radius);
+      for (let k = 0; k < 3; k++) emit(_p1, { frame: F.streak, color: 0xffffff, color2: s.color, size: 0.5, size2: 0.2, life: 0.15, vel: randDir(8, 2, _v1), drag: 4, streak: true, hdr: 2 });
     }
     if (s.life <= 0) {
       s.mesh.parent?.remove(s.mesh);
@@ -462,7 +508,13 @@ function updateSlashes(dt) {
 const rings = [];
 export function spawnRing(scene, pos, radius, color, life = 0.35) {
   scene = scene || fxScene;
-  if (!scene) return;
+  if (!scene || ++frameFx.rings > 8) return;
+  const maxRings = fxQuality.high ? 20 : 10;
+  while (rings.length >= maxRings) {
+    const old = rings.shift();
+    old.mesh.parent?.remove(old.mesh); old.mesh.material.dispose();
+    old.glow.parent?.remove(old.glow); old.glow.material.dispose();
+  }
   const mat = new THREE.MeshBasicMaterial({ map: TEX.ring, color: new THREE.Color(color).multiplyScalar(2), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
   const mesh = new THREE.Mesh(planeGeo, mat);
   mesh.position.set(pos.x, 0.08, pos.z);
@@ -481,36 +533,84 @@ function glowTex() {
   return _glowTex;
 }
 
-// ---------- Tia sét (ống phát sáng gấp khúc + nhánh) ----------
+// ---------- Tia sét (dải chữ thập 3D nhẹ + nhánh, không dùng TubeGeometry) ----------
 const bolts = [];
 function jagged(a, b, seg, jitter) {
   const pts = [];
   for (let i = 0; i <= seg; i++) {
-    const p = new THREE.Vector3().lerpVectors(a, b, i / seg);
-    if (i > 0 && i < seg) p.add(new THREE.Vector3(rv(jitter), rv(jitter * 0.5), rv(jitter)));
-    pts.push(p);
+    const u = i / seg;
+    let x = a.x + (b.x - a.x) * u;
+    let y = a.y + (b.y - a.y) * u;
+    let z = a.z + (b.z - a.z) * u;
+    if (i > 0 && i < seg) { x += rv(jitter); y += rv(jitter * 0.5); z += rv(jitter); }
+    pts.push({ x, y, z });
   }
   return pts;
 }
-function tubeFrom(pts, radius) {
-  const path = new THREE.CurvePath();
-  for (let i = 0; i < pts.length - 1; i++) path.add(new THREE.LineCurve3(pts[i], pts[i + 1]));
-  return new THREE.TubeGeometry(path, pts.length * 2, radius, 5, false);
+function boltRibbonGeo(polylines, halfW) {
+  const pos = [];
+  const idx = [];
+  let base = 0;
+  for (const pts of polylines) {
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+      const len = Math.hypot(dx, dy, dz) || 1;
+      const ux = dx / len, uy = dy / len, uz = dz / len;
+      let rx = 0, ry = 1, rz = 0;
+      if (Math.abs(uy) > 0.9) { rx = 1; ry = 0; }
+      let s1x = uy * rz - uz * ry, s1y = uz * rx - ux * rz, s1z = ux * ry - uy * rx;
+      const l1 = Math.hypot(s1x, s1y, s1z) || 1;
+      s1x /= l1; s1y /= l1; s1z /= l1;
+      let s2x = uy * s1z - uz * s1y, s2y = uz * s1x - ux * s1z, s2z = ux * s1y - uy * s1x;
+      const l2 = Math.hypot(s2x, s2y, s2z) || 1;
+      s2x /= l2; s2y /= l2; s2z /= l2;
+      for (const [sx, sy, sz] of [[s1x * halfW, s1y * halfW, s1z * halfW], [s2x * halfW, s2y * halfW, s2z * halfW]]) {
+        pos.push(
+          a.x - sx, a.y - sy, a.z - sz,
+          a.x + sx, a.y + sy, a.z + sz,
+          b.x + sx, b.y + sy, b.z + sz,
+          b.x - sx, b.y - sy, b.z - sz,
+        );
+        idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        base += 4;
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  return g;
 }
 export function spawnBolt(scene, a, b, color) {
   scene = scene || fxScene;
-  const len = a.distanceTo(b);
-  const pts = jagged(a, b, Math.max(5, Math.round(len * 1.2)), Math.min(0.9, 0.25 + len * 0.05));
-  const group = new THREE.Group();
-  const mk = (geo, c, op) => new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(2.2), transparent: true, opacity: op, blending: THREE.AdditiveBlending, depthWrite: false }));
-  group.add(mk(tubeFrom(pts, 0.045), 0xffffff, 1));
-  group.add(mk(tubeFrom(pts, 0.16), color, 0.45));
-  // Nhánh phụ
-  if (len > 2) {
-    const k = 1 + Math.floor(Math.random() * (pts.length - 2));
-    const end = pts[k].clone().add(new THREE.Vector3(rv(len * 0.25), -len * 0.1, rv(len * 0.25)));
-    group.add(mk(tubeFrom(jagged(pts[k], end, 3, 0.25), 0.03), color, 0.8));
+  if (!scene) return;
+  if (++frameFx.bolts > 8) {
+    emit(b, { frame: F.elec, color, size: 1.5, size2: 2.0, life: 0.14, hdr: 2 });
+    return;
   }
+  const maxBolts = fxQuality.high ? 14 : 8;
+  while (bolts.length >= maxBolts) {
+    const old = bolts.shift();
+    old.group.parent?.remove(old.group);
+    old.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  }
+  const len = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+  const seg = Math.min(7, Math.max(4, Math.round(len * 0.9)));
+  const pts = jagged(a, b, seg, Math.min(0.9, 0.25 + len * 0.05));
+  const glowPolys = [pts];
+  if (len > 2 && pts.length > 2) {
+    const k = 1 + Math.floor(Math.random() * (pts.length - 2));
+    const end = { x: pts[k].x + rv(len * 0.25), y: pts[k].y - len * 0.1, z: pts[k].z + rv(len * 0.25) };
+    glowPolys.push(jagged(pts[k], end, 2, 0.25));
+  }
+  const group = new THREE.Group();
+  const mk = (geo, c, op) => new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+    color: new THREE.Color(c).multiplyScalar(2.2), transparent: true, opacity: op,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+  }));
+  group.add(mk(boltRibbonGeo([pts], 0.045), 0xffffff, 1));
+  group.add(mk(boltRibbonGeo(glowPolys, 0.16), color, 0.45));
   scene.add(group);
   bolts.push({ group, life: 0.22, max: 0.22 });
   emit(b, { frame: F.elec, color, size: 1.8, size2: 2.4, life: 0.18, hdr: 2 });
@@ -552,22 +652,22 @@ function updateRingsAndBolts(dt) {
 export function statusFx(e, dt) {
   const h = (e.isBoss ? 2 : 1) * (e.giant || 1);
   const d = density();
-  if (e.burnT > 0 && Math.random() < dt * 9 * d) flame(tmpV.set(e.pos.x, 0.4 + Math.random() * 0.5 * h, e.pos.z), { size: 0.4 * h, spread: 0.3 * h, life: 0.4, alpha: 0.6 });
+  if (e.burnT > 0 && Math.random() < dt * 9 * d) flame(_sPos.set(e.pos.x, 0.4 + Math.random() * 0.5 * h, e.pos.z), { size: 0.4 * h, spread: 0.3 * h, life: 0.4, alpha: 0.6 });
   if (e.frozenT > 0 && Math.random() < dt * 10 * d) {
-    emit(tmpV.set(e.pos.x + rv(0.5 * h), 0.3 + Math.random() * h, e.pos.z + rv(0.5 * h)), { frame: Math.random() < 0.5 ? F.cross : F.sparkle, color: 0xdff8ff, color2: 0x6fc3ff, size: 0.5, size2: 0.1, life: 0.5, vel: new THREE.Vector3(0, 0.3, 0), rotV: rv(3) });
-    if (Math.random() < 0.4) emit(tmpV.set(e.pos.x, 0.2, e.pos.z), { smoke: true, frame: F.puff, color: 0xbfe8ff, size: 0.8 * h, size2: 1.6 * h, life: 0.8, alpha: 0.25, vel: new THREE.Vector3(rv(0.4), 0.2, rv(0.4)), rotV: rv(1) });
+    emit(_sPos.set(e.pos.x + rv(0.5 * h), 0.3 + Math.random() * h, e.pos.z + rv(0.5 * h)), { frame: Math.random() < 0.5 ? F.cross : F.sparkle, color: 0xdff8ff, color2: 0x6fc3ff, size: 0.5, size2: 0.1, life: 0.5, vel: _v1.set(0, 0.3, 0), rotV: rv(3) });
+    if (Math.random() < 0.4) emit(_sPos.set(e.pos.x, 0.2, e.pos.z), { smoke: true, frame: F.puff, color: 0xbfe8ff, size: 0.8 * h, size2: 1.6 * h, life: 0.8, alpha: 0.25, vel: _v1.set(rv(0.4), 0.2, rv(0.4)), rotV: rv(1) });
   } else if (e.slowT > 0 && Math.random() < dt * 4 * d) {
-    emit(tmpV.set(e.pos.x + rv(0.4), 0.4 + Math.random() * h, e.pos.z + rv(0.4)), { frame: F.sparkle, color: 0xaeeaff, size: 0.35, life: 0.4, vel: new THREE.Vector3(0, -0.4, 0) });
+    emit(_sPos.set(e.pos.x + rv(0.4), 0.4 + Math.random() * h, e.pos.z + rv(0.4)), { frame: F.sparkle, color: 0xaeeaff, size: 0.35, life: 0.4, vel: _v1.set(0, -0.4, 0) });
   }
   if (e.poisonStacks > 0 && Math.random() < dt * (4 + e.poisonStacks * 2) * d) {
-    emit(tmpV.set(e.pos.x + rv(0.4 * h), 0.4 + Math.random() * 0.8 * h, e.pos.z + rv(0.4 * h)), { frame: F.glow, color: 0xbfff7a, color2: 0x3a8a10, size: 0.35, size2: 0.05, life: 0.7, vel: new THREE.Vector3(0, 0.9, 0) });
+    emit(_sPos.set(e.pos.x + rv(0.4 * h), 0.4 + Math.random() * 0.8 * h, e.pos.z + rv(0.4 * h)), { frame: F.glow, color: 0xbfff7a, color2: 0x3a8a10, size: 0.35, size2: 0.05, life: 0.7, vel: _v1.set(0, 0.9, 0) });
   }
   // Boss nổi giận: hào quang đỏ bốc lên
   if (e.phase > 0 && Math.random() < dt * 14 * d) {
-    emit(tmpV.set(e.pos.x + rv(0.8), 0.2, e.pos.z + rv(0.8)), { frame: F.flame, color: 0xff6a4a, color2: 0x8a0010, size: 1.1, size2: 0.2, life: 0.6, vel: new THREE.Vector3(0, 2.5, 0), alpha: 0.6, hdr: 1.3, fadeIn: 0.2 });
+    emit(_sPos.set(e.pos.x + rv(0.8), 0.2, e.pos.z + rv(0.8)), { frame: F.flame, color: 0xff6a4a, color2: 0x8a0010, size: 1.1, size2: 0.2, life: 0.6, vel: _v1.set(0, 2.5, 0), alpha: 0.6, hdr: 1.3, fadeIn: 0.2 });
   }
   if (e.shockT > 0 && Math.random() < dt * 9 * d) {
-    emit(tmpV.set(e.pos.x + rv(0.3), 0.5 + Math.random() * 0.8 * h, e.pos.z + rv(0.3)), { frame: F.elec, color: 0xfff07a, color2: 0x7ab8ff, size: 1.1 * h, size2: 0.9 * h, life: 0.12, hdr: 2.2 });
+    emit(_sPos.set(e.pos.x + rv(0.3), 0.5 + Math.random() * 0.8 * h, e.pos.z + rv(0.3)), { frame: F.elec, color: 0xfff07a, color2: 0x7ab8ff, size: 1.1 * h, size2: 0.9 * h, life: 0.12, hdr: 2.2 });
   }
 }
 
@@ -575,7 +675,13 @@ export function statusFx(e, dt) {
 // shape: 'circle' (radius) | 'sector' (radius, arc, facing) | 'rect' (width, length, facing)
 // kind: 'normal' (đỏ cam) | 'pierce' (đỏ-trắng: Lướt VÀO để Phản Xuyên) | 'interrupt' (tím: Kỹ năng/Đòn nặng để Cắt Chiêu)
 const telegraphs = [];
+const MAX_TELEGRAPHS = 28;
 export function spawnTelegraph(scene, opts) {
+  while (telegraphs.length >= MAX_TELEGRAPHS) {
+    const old = telegraphs.shift();
+    old.group.parent?.remove(old.group);
+    old.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  }
   const { shape = 'circle', pos, radius = 2, arc = 1.6, facing = 0, width = 1.5, length = 8, duration = 0.8, kind = 'normal' } = opts;
   const color = opts.color ?? (kind === 'pierce' ? 0xff2850 : kind === 'interrupt' ? 0xc050ff : 0xff3020);
   const group = new THREE.Group();
@@ -643,21 +749,45 @@ function updateTelegraphs(dt) {
   }
 }
 
-// ---------- Số sát thương bay lên ----------
+// ---------- Số sát thương bay lên (pool DOM tối đa 36, đẩy bằng GPU translate3d) ----------
 const dmgLayer = document.getElementById('dmg-layer');
 const dmgNums = [];
+const dmgPool = [];
+const MAX_DMG_NUMS = 36;
+const lastReactAt = new Map();
 const tmpP = new THREE.Vector3();
 
 export const dmgScale = { player: 1 };
 export function damageNumber(pos, value, kind = '') {
+  if (!dmgLayer || !pos) return;
   if (kind === 'player' && typeof value === 'number') value = Math.max(1, Math.round(value * dmgScale.player));
-  const el = document.createElement('div');
+  if (dmgNums.length >= 22 && (kind === 'burn' || kind === 'poison')) return;
+  if (kind.startsWith('react')) {
+    const key = String(value);
+    const now = performance.now();
+    const prev = lastReactAt.get(key) || 0;
+    if (now - prev < 90) return;
+    lastReactAt.set(key, now);
+  }
+  let el;
+  if (dmgNums.length >= MAX_DMG_NUMS) {
+    el = dmgNums.shift().el;
+  } else if (dmgPool.length) {
+    el = dmgPool.pop();
+  } else {
+    el = document.createElement('div');
+    dmgLayer.appendChild(el);
+  }
   el.className = 'dmg ' + kind;
   el.textContent = value;
-  dmgLayer.appendChild(el);
+  el.style.display = '';
   dmgNums.push({
-    el, pos: pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.6, 1.2, 0)),
-    vy: 2.5, life: 0.8,
+    el,
+    x: pos.x + (Math.random() - 0.5) * 0.6,
+    y: (pos.y || 0) + 1.2,
+    z: pos.z,
+    vy: 2.5,
+    life: 0.8,
   });
 }
 
@@ -666,33 +796,66 @@ function updateDamageNumbers(dt, camera) {
     const d = dmgNums[i];
     d.life -= dt;
     d.vy -= 5 * dt;
-    d.pos.y += d.vy * dt;
-    tmpP.copy(d.pos).project(camera);
+    d.y += d.vy * dt;
+    tmpP.set(d.x, d.y, d.z).project(camera);
     const x = (tmpP.x * 0.5 + 0.5) * innerWidth;
     const y = (-tmpP.y * 0.5 + 0.5) * innerHeight;
     const pop = d.life > 0.65 ? 1 + (d.life - 0.65) * 4 : 1;
-    d.el.style.left = x + 'px';
-    d.el.style.top = y + 'px';
     d.el.style.opacity = Math.min(1, d.life * 3);
-    d.el.style.transform = `translate(-50%,-50%) scale(${pop})`;
-    if (d.life <= 0) { d.el.remove(); dmgNums.splice(i, 1); }
+    d.el.style.transform = `translate3d(${x.toFixed(1)}px,${y.toFixed(1)}px,0) translate(-50%,-50%) scale(${pop.toFixed(2)})`;
+    if (d.life <= 0) {
+      d.el.style.display = 'none';
+      if (dmgPool.length < MAX_DMG_NUMS) dmgPool.push(d.el);
+      else d.el.remove();
+      dmgNums.splice(i, 1);
+    }
   }
 }
 
 export function clearFx() {
   for (const t of telegraphs) t.done = true;
   updateTelegraphs(0);
-  for (const d of dmgNums) d.el.remove();
-  dmgNums.length = 0;
+  while (dmgNums.length) {
+    const d = dmgNums.pop();
+    d.el.style.display = 'none';
+    if (dmgPool.length < MAX_DMG_NUMS) dmgPool.push(d.el);
+    else d.el.remove();
+  }
+  lastReactAt.clear();
+  for (const s of slashes) { s.mesh.parent?.remove(s.mesh); s.mesh.geometry.dispose(); s.mesh.material.dispose(); }
+  slashes.length = 0;
+  for (const r of rings) { r.mesh.parent?.remove(r.mesh); r.mesh.material.dispose(); r.glow.parent?.remove(r.glow); r.glow.material.dispose(); }
+  rings.length = 0;
+  for (const b of bolts) { b.group.parent?.remove(b.group); b.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); }); }
+  bolts.length = 0;
   addPool?.clear();
   smokePool?.clear();
   while (decals.length) removeDecal(decals.length - 1);
   for (const L of lights) L.t = 0;
+  hitStop.time = 0; hitStop.cd = 0;
+  frameFx.explosions = 0; frameFx.bursts = 0; frameFx.bolts = 0; frameFx.rings = 0;
 }
+
+export const fxStats = () => ({
+  dmgNums: dmgNums.length,
+  dmgPool: dmgPool.length,
+  bolts: bolts.length,
+  rings: rings.length,
+  slashes: slashes.length,
+  telegraphs: telegraphs.length,
+  decals: decals.length,
+  loadScale,
+});
 
 // Cập nhật toàn bộ hiệu ứng. `dt` là thời gian game (bị đóng băng khi hit stop),
 // `realDt` là thời gian thật (để số sát thương vẫn bay khi hit stop).
 export function updateFx(dt, realDt, camera) {
+  hitStop.cd = Math.max(0, hitStop.cd - realDt);
+  if (realDt > 0) {
+    smoothDt = smoothDt * 0.9 + Math.min(realDt, 0.1) * 0.1;
+    loadScale = smoothDt <= 0.022 ? 1 : Math.max(0.35, 1 - (smoothDt - 0.022) / 0.03 * 0.65);
+  }
+  frameFx.explosions = 0; frameFx.bursts = 0; frameFx.bolts = 0; frameFx.rings = 0;
   const viewH = fxRenderer ? fxRenderer.domElement.height : innerHeight;
   addPool?.update(dt, camera, viewH);
   smokePool?.update(dt, camera, viewH);
@@ -710,7 +873,7 @@ const NOISE = /* glsl */`
 float h21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
   return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }
-float fbm(vec2 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 5; i++) { v += a * vnoise(p); p = p * 2.03 + 17.1; a *= 0.5; } return v; }
+float fbm(vec2 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { v += a * vnoise(p); p = p * 2.03 + 17.1; a *= 0.5; } return v; }
 // vân nứt kiểu Voronoi (khoảng cách tới cạnh ô)
 float cracks(vec2 p){ vec2 i = floor(p), f = fract(p); float d1 = 8.0, d2 = 8.0;
   for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) { vec2 g = vec2(x, y); vec2 o = vec2(h21(i + g), h21(i + g + 7.7));

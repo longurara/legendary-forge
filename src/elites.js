@@ -146,7 +146,10 @@ export function updateEliteLabels(enemies, camera) {
     tmp.set(e.pos.x, 2.4 * (e.giant || 1) + (e.height || 0), e.pos.z).project(camera);
     const off = Math.abs(tmp.x) > 1 || Math.abs(tmp.y) > 1;
     e.label.style.display = off ? 'none' : '';
-    e.label.style.left = (tmp.x * 0.5 + 0.5) * innerWidth + 'px';
-    e.label.style.top = (-tmp.y * 0.5 + 0.5) * innerHeight + 'px';
+    if (!off) {
+      const x = (tmp.x * 0.5 + 0.5) * innerWidth;
+      const y = (-tmp.y * 0.5 + 0.5) * innerHeight;
+      e.label.style.transform = `translate3d(${x.toFixed(1)}px,${y.toFixed(1)}px,0) translate(-50%,-50%)`;
+    }
   }
 }

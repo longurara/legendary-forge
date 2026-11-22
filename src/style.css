@@ -198,7 +198,7 @@ body.menu .hud { opacity: 0; }
 
 /* ================= Số sát thương + nhãn trong thế giới ================= */
 #dmg-layer { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
-.dmg { position: absolute; font: 700 24px var(--f-body); color: #fff; transform: translate(-50%, -50%); white-space: nowrap;
+.dmg { position: absolute; left: 0; top: 0; font: 700 24px var(--f-body); color: #fff; transform: translate(-50%, -50%); white-space: nowrap; will-change: transform, opacity;
   -webkit-text-stroke: 1px rgba(0, 0, 0, .8); text-shadow: 0 2px 0 #000, 0 0 8px rgba(0, 0, 0, .8); }
 .dmg.big { font-size: 34px; color: #ffd45a; }
 .dmg.player { color: #ff5a4a; }
@@ -336,7 +336,7 @@ body.menu .hud { opacity: 0; }
 .slot .affixes { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
 .slot .affixes span { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: rgba(90, 168, 255, .15); color: #b8d8ff; }
 
-.label.elite { color: #ffcf4a; font-size: 11px; background: rgba(40, 10, 5, .75); border-color: rgba(255, 120, 60, .5); }
+.label.elite { left: 0; top: 0; will-change: transform; color: #ffcf4a; font-size: 11px; background: rgba(40, 10, 5, .75); border-color: rgba(255, 120, 60, .5); }
 .label.reward { font-size: 14px; opacity: 1; background: rgba(15, 8, 5, .88); border-color: rgba(226, 184, 108, .6); }
 .label.reward .ico { width: 18px; height: 18px; }
 
@@ -853,19 +853,57 @@ h3.sec { font: 700 19px var(--f-label); color: var(--gold); margin: 10px 0 4px; 
 .p2hud span { font: 700 12px var(--f-body); color: var(--ink); }
 .p2hud.down b { color: #ff6a5a; }
 
-/* ================= Màn hình chính gọn hơn: lưới 2 cột, co theo chiều cao màn hình ================= */
-#start { gap: clamp(8px, 2vh, 22px); justify-content: center; overflow-y: auto; }
-.title-block h1 { font-size: clamp(44px, 8.5vh, 92px); }
-.title-block .kicker { font-size: clamp(11px, 1.5vh, 16px); }
-.title-block .divider img { width: clamp(70px, 9vh, 110px); }
-#start .menu-panel { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(4px, 0.9vh, 8px) 10px; width: min(560px, 92vw); padding: clamp(8px, 1.4vh, 14px) 16px; }
+/* ================= Màn hình chính gọn hơn: lưới 6 rãnh cân đối, vừa khít chiều cao màn hình ================= */
+#start {
+  gap: clamp(4px, 1.2vh, 14px);
+  padding: clamp(8px, 1.4vh, 16px) 16px;
+  justify-content: safe center;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(226, 184, 108, .45) rgba(0, 0, 0, .3);
+}
+#start::-webkit-scrollbar { width: 6px; }
+#start::-webkit-scrollbar-track { background: rgba(0, 0, 0, .3); }
+#start::-webkit-scrollbar-thumb { background: rgba(184, 140, 74, .75); border-radius: 3px; }
+.title-block h1 { font-size: clamp(36px, 6.8vh, 76px); line-height: 0.94; }
+.title-block .kicker { font-size: clamp(11px, 1.4vh, 15px); }
+.title-block .divider { margin-top: 4px; }
+.title-block .divider img { width: clamp(64px, 8vh, 104px); }
+#start .menu-panel {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: clamp(4px, 0.7vh, 7px) 8px;
+  width: min(640px, 94vw);
+  padding: clamp(8px, 1.2vh, 12px) 14px;
+}
 #start .menu-panel .btn-row { display: contents; }
-#start .menu-panel #btn-play, #start .menu-panel #btn-howto, #start .menu-panel .sound-row, #start .menu-panel #start-best { grid-column: 1 / -1; }
-#start .menu-panel .btn { font-size: clamp(14px, 1.9vh, 18px); padding: clamp(0px, 0.4vh, 4px) 10px; border-width: 11px; border-image-width: 11px; line-height: 1.15; min-width: 0; }
-#start .menu-panel #btn-play { font-size: clamp(18px, 2.6vh, 24px); }
-#start .menu-panel .btn small { display: block; margin: 1px 0 0; font-size: 11px; }
-#start .menu-panel #start-best { margin: 0; font-size: 13px; }
-#start .credits { position: static; margin-top: 4px; font-size: 10px; max-width: 900px; }
+#start .menu-panel #btn-play { grid-column: span 6; font-size: clamp(17px, 2.3vh, 22px); }
+#start .menu-panel #btn-daily,
+#start .menu-panel #btn-bossrush,
+#start .menu-panel #btn-save,
+#start .menu-panel #btn-howto { grid-column: span 3; }
+#start .menu-panel #btn-defense,
+#start .menu-panel #btn-sandbox,
+#start .menu-panel #btn-coop,
+#start .menu-panel #btn-forge,
+#start .menu-panel #btn-village,
+#start .menu-panel #btn-board,
+#start .menu-panel #btn-codex,
+#start .menu-panel #btn-bestiary,
+#start .menu-panel #btn-ach { grid-column: span 2; }
+#start .menu-panel .sound-row { grid-column: span 4; padding-top: 2px; }
+#start .menu-panel #start-best { grid-column: span 2; margin: 0; align-self: center; text-align: right; font-size: 13px; white-space: nowrap; }
+#start .menu-panel .btn {
+  font-size: clamp(13px, 1.7vh, 16px);
+  padding: clamp(1px, 0.35vh, 4px) 8px;
+  border-width: 9px;
+  border-image-width: 9px;
+  line-height: 1.15;
+  min-width: 0;
+}
+#start .menu-panel .btn small { display: block; margin: 1px 0 0; font-size: 10.5px; }
+#start .menu-panel #btn-coop small { display: inline; margin-left: 4px; }
+#start .credits { position: static; margin-top: 2px; font-size: 10px; line-height: 1.25; max-width: 900px; }
 
 /* Hộp thoại cốt truyện: nền tối che hẳn menu phía sau */
 #story { background: rgba(4, 2, 1, .86); z-index: 60; }
@@ -1103,12 +1141,6 @@ h3.sec { font: 700 19px var(--f-label); color: var(--gold); margin: 10px 0 4px; 
 }
 
 /* ================= 12 Tính Năng Mới: Pet, Bộ Di Vật, Phòng Tập, Thủ Thành, Sổ Quái Vật, Save & Victory ================= */
-/* Main Menu gọn gàng, vừa khít chiều cao màn hình 744px+ không bị scrollbar */
-#start .menu-panel { gap: 5px; padding: 12px 18px; }
-#start .menu-panel .btn { padding: 4px 16px; font-size: 18px; border-width: 11px; border-image-width: 11px; }
-#start .menu-panel .btn-row { gap: 6px; }
-#start .menu-panel .btn-row .btn { min-width: 0; flex: 1; padding: 4px 10px; font-size: 16px; }
-
 /* Màn Chuẩn Bị dùng flex + .prep-scroll riêng biệt để nút Quay lại / Vào hầm KHÔNG BAO GIỜ đè lên thẻ nhân vật/Pet */
 #prep .prep-panel { display: flex; flex-direction: column; overflow: hidden !important; max-height: 94vh; }
 .prep-scroll { overflow-y: auto; flex: 1; padding-right: 6px; scrollbar-width: thin; scrollbar-color: rgba(226, 184, 108, .55) rgba(0, 0, 0, .35); }
@@ -1264,6 +1296,10 @@ h3.sec { font: 700 19px var(--f-label); color: var(--gold); margin: 10px 0 4px; 
 
 /* Đảm bảo ưu tiên cuối cùng trong cascade cho màn ngang điện thoại (không bị rule desktop ghi đè) */
 @media (pointer: coarse) and (orientation: landscape) {
+  #start .menu-panel { grid-template-columns: 1fr 1fr; width: auto; gap: 4px 6px; padding: 6px 8px; }
+  #start .menu-panel .btn { grid-column: span 1; min-height: 36px; font-size: 14px; border-width: 6px; border-image-width: 6px; padding: 2px 6px; }
+  #start .menu-panel #btn-play, #start .menu-panel .sound-row, #start .menu-panel #start-best { grid-column: 1 / -1; }
+  #start .menu-panel #start-best { text-align: center; }
   #hud-left { top: var(--top-edge); left: var(--left-edge); width: min(26vw, 200px); max-width: none; padding: 3px 6px; gap: 3px; }
   #hud-right { top: var(--top-edge); right: calc(var(--right-edge) + 128px); padding: 3px 6px; gap: 8px; font-size: 12px; }
   #hud-top { top: var(--top-edge); left: 50%; right: auto; transform: translateX(-50%); align-items: center; max-width: none; gap: 1px; }

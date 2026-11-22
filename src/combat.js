@@ -7,6 +7,9 @@ import { play } from './audio.js';
 // Ngữ cảnh dùng chung, main.js gán vào. barrels: thùng nổ (hazards.js)
 export const ctx = { scene: null, player: null, enemies: [], barrels: [], onHit: null, onReaction: null };
 const NONE = { element: 'none', element2: null };
+const _tmpP = new THREE.Vector3();
+const _tmpV = new THREE.Vector3();
+let _dmgDepth = 0;
 
 function react(enemy, text, color, dmg = 16) {
   damageNumber(enemy.pos, text, 'react ' + color);
@@ -17,7 +20,10 @@ function react(enemy, text, color, dmg = 16) {
 // ---------- Gây sát thương + hiệu ứng / phản ứng nguyên tố ----------
 // Trả về sát thương thực gây ra
 export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true) {
-  if (!enemy.alive) return 0;
+  if (!enemy || !enemy.alive) return 0;
+  _dmgDepth++;
+  if (_dmgDepth >= 3) allowChain = false;
+  try {
   const els = [weapon.element, weapon.element2].filter((e) => e && e !== 'none');
   let mult = 1;
   // Tương tác với trạng thái Ướt (từ Vũng Nước / Băng tan trong Hóa Học Bề Mặt)
@@ -171,6 +177,9 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
   }
   if (ctx.onHit) ctx.onHit(enemy, dmg, weapon);
   return dealt;
+  } finally {
+    _dmgDepth--;
+  }
 }
 
 // ---------- Sát thương vùng ----------
@@ -197,7 +206,9 @@ export function aoe(pos, radius, dmg, weapon = NONE, kb = 6, opts = {}) {
 
 // ---------- Bom hẹn giờ (tinh anh "Nổ Khi Chết", mưa lửa...) ----------
 const bombs = [];
+const MAX_BOMBS = 24;
 export function scheduleBomb(pos, delay, radius, dmgEnemies, dmgPlayer, color = 0xff5a1a) {
+  if (bombs.length >= MAX_BOMBS) return;
   spawnTelegraph(ctx.scene, { shape: 'circle', pos, radius, duration: delay, color: 0xff3020 });
   bombs.push({ pos: pos.clone(), t: delay, radius, dmgEnemies, dmgPlayer, color });
 }
@@ -216,8 +227,20 @@ function updateBombs(dt) {
 
 // ---------- Vùng lửa (di vật Nhẫn Than Hồng, mưa lửa) ----------
 const patches = [];
+const MAX_PATCHES = 18;
 const patchGeo = new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2);
 export function spawnFirePatch(pos, radius, dur, dps, hurtsPlayer = false) {
+  for (const f of patches) {
+    if (f.hurtsPlayer === hurtsPlayer && Math.hypot(f.pos.x - pos.x, f.pos.z - pos.z) < 1.1) {
+      f.t = Math.max(f.t, dur);
+      f.dur = Math.max(f.dur, dur);
+      f.radius = Math.max(f.radius, radius);
+      f.mesh.scale.setScalar(f.radius);
+      f.dps = Math.max(f.dps, dps);
+      return;
+    }
+  }
+  if (patches.length >= MAX_PATCHES) removeFirePatch(0);
   const mesh = new THREE.Mesh(patchGeo, new THREE.MeshBasicMaterial({ color: 0xff6a1a, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false }));
   mesh.scale.setScalar(radius);
   mesh.position.set(pos.x, 0.07, pos.z);
@@ -230,7 +253,7 @@ function updatePatches(dt) {
     const f = patches[i];
     f.t -= dt; f.tick -= dt;
     f.mesh.material.opacity = 0.45 * Math.min(1, f.t / 0.4);
-    if (Math.random() < dt * 14) flame(f.pos.clone().setY(0.1), { spread: f.radius * 0.6, size: 0.7, life: 0.55 });
+    if (Math.random() < dt * 14) flame(_tmpP.set(f.pos.x, 0.1, f.pos.z), { spread: f.radius * 0.6, size: 0.7, life: 0.55 });
     if (f.tick <= 0) {
       f.tick = 0.5;
       for (const e of ctx.enemies) {
@@ -250,7 +273,18 @@ function updatePatches(dt) {
 
 // ---------- Vũng độc (tinh anh "Rỉ Độc"): chỉ hại người chơi, gây trúng độc ----------
 const toxics = [];
+const MAX_TOXICS = 18;
 export function spawnToxic(pos, radius = 1.3, dur = 4) {
+  for (const f of toxics) {
+    if (Math.hypot(f.pos.x - pos.x, f.pos.z - pos.z) < 1.1) {
+      f.t = Math.max(f.t, dur);
+      f.dur = Math.max(f.dur, dur);
+      f.radius = Math.max(f.radius, radius);
+      f.mesh.scale.setScalar(f.radius);
+      return;
+    }
+  }
+  if (toxics.length >= MAX_TOXICS) removeToxic(0);
   const mesh = new THREE.Mesh(patchGeo, new THREE.MeshBasicMaterial({ color: 0x6fd83a, transparent: true, opacity: 0.35, depthWrite: false }));
   mesh.scale.setScalar(radius);
   mesh.position.set(pos.x, 0.06, pos.z);
@@ -263,7 +297,7 @@ function updateToxics(dt) {
     const f = toxics[i];
     f.t -= dt;
     f.mesh.material.opacity = 0.35 * Math.min(1, f.t / 0.5);
-    if (Math.random() < dt * 3) emit(f.pos.clone().setY(0.1), { frame: F.glow, color: 0xbfff7a, color2: 0x3a8a10, size: 0.4, size2: 0, life: 0.8, vel: new THREE.Vector3(0, 0.8, 0) });
+    if (Math.random() < dt * 3) emit(_tmpP.set(f.pos.x, 0.1, f.pos.z), { frame: F.glow, color: 0xbfff7a, color2: 0x3a8a10, size: 0.4, size2: 0, life: 0.8, vel: _tmpV.set(0, 0.8, 0) });
     if (p && !p.dead && p.dashTime <= 0 && Math.hypot(p.pos.x - f.pos.x, p.pos.z - f.pos.z) < f.radius + 0.2) p.poisonT = 3;
     if (f.t <= 0) { ctx.scene.remove(f.mesh); f.mesh.material.dispose(); toxics.splice(i, 1); }
   }
@@ -271,18 +305,52 @@ function updateToxics(dt) {
 
 // ---------- Đạn ----------
 const projectiles = [];
+const MAX_SIDE_PROJ = 70;
+const MAX_TOTAL_PROJ = 140;
 const orbGeo = new THREE.SphereGeometry(0.2, 12, 8);
 const arrowGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.9, 6).rotateX(Math.PI / 2);
+const projMats = new Map();
+function getProjMat(key, make) {
+  if (!projMats.has(key)) {
+    const m = make();
+    m.userData.shared = true;
+    projMats.set(key, m);
+  }
+  return projMats.get(key);
+}
+function capProjectiles(friendly) {
+  let sideCount = 0;
+  let oldestSide = -1;
+  let oldestAny = -1;
+  for (let i = 0; i < projectiles.length; i++) {
+    const p = projectiles[i];
+    if (p.kind === 'boomerang') continue;
+    if (oldestAny === -1) oldestAny = i;
+    if (p.friendly === friendly) {
+      sideCount++;
+      if (oldestSide === -1) oldestSide = i;
+    }
+  }
+  if (sideCount >= MAX_SIDE_PROJ && oldestSide >= 0) removeProjectile(oldestSide);
+  while (projectiles.length >= MAX_TOTAL_PROJ) {
+    const idx = projectiles.findIndex((p) => p.kind !== 'boomerang');
+    if (idx < 0) break;
+    removeProjectile(idx);
+  }
+}
 
 const blocked = (pos) => isBlocked(pos.x, pos.z, -0.6);
 const colorOf = (w) => (w.element === 'none' ? 0xc9b6ff : ELEMENTS[w.element].glow);
 
 // Cầu phép thường của trượng
 export function spawnOrb(origin, dir, weapon, dmg, splash, speed, extra = {}) {
+  capProjectiles(true);
   const color = colorOf(weapon);
   if (extra.bolt) {
     // Tên nỏ / dao ném: xuyên qua quái, bay thẳng
-    const mesh = new THREE.Mesh(arrowGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(extra.knife ? 0xe0e8f0 : color).multiplyScalar(1.8) }));
+    const baseCol = extra.knife ? 0xe0e8f0 : color;
+    const mat = getProjMat('pbolt:' + baseCol, () => new THREE.MeshBasicMaterial({ color: new THREE.Color(baseCol).multiplyScalar(1.8) }));
+    const mesh = new THREE.Mesh(arrowGeo, mat);
     mesh.add(glowSprite(color, extra.explode ? 1.6 : 0.9));
     mesh.rotation.y = Math.atan2(dir.x, dir.z);
     if (extra.knife) mesh.scale.set(1, 1, 0.55);
@@ -292,7 +360,8 @@ export function spawnOrb(origin, dir, weapon, dmg, splash, speed, extra = {}) {
     projectiles.push({ kind: 'pbolt', friendly: true, mesh, vel: dir.clone().multiplyScalar(speed), life: 0.9, weapon, dmg, splash: 0, color, pierce: extra.pierce || 0, explode: !!extra.explode, hitSet: new Set() });
     return;
   }
-  const mesh = new THREE.Mesh(orbGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(color).lerp(new THREE.Color(1, 1, 1), 0.5).multiplyScalar(2) }));
+  const mat = getProjMat('orb:' + color, () => new THREE.MeshBasicMaterial({ color: new THREE.Color(color).lerp(new THREE.Color(1, 1, 1), 0.5).multiplyScalar(2) }));
+  const mesh = new THREE.Mesh(orbGeo, mat);
   mesh.add(glowSprite(color, 1.7));
   mesh.position.copy(origin);
   if (extra.big) mesh.scale.setScalar(2.4);
@@ -315,6 +384,7 @@ export function spawnBoomerang(owner, dir, weapon, dmg) {
 // Sóng kiếm: hình lưỡi liềm bay thẳng, xuyên qua quái
 const waveGeo = new THREE.RingGeometry(0.7, 1.0, 20, 1, -Math.PI / 2 - 0.9, 1.8).rotateX(-Math.PI / 2);
 export function spawnSwordWave(origin, dir, weapon, dmg, scale = 1) {
+  capProjectiles(true);
   const color = weapon.element === 'none' ? 0xfff1c4 : ELEMENTS[weapon.element].glow;
   const mesh = new THREE.Mesh(waveGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(2.2), transparent: true, opacity: 0.85, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
   mesh.position.copy(origin).setY(0.9);
@@ -326,12 +396,15 @@ export function spawnSwordWave(origin, dir, weapon, dmg, scale = 1) {
 
 // Đạn của quái: 'orb' (cầu tím của pháp sư) hoặc 'arrow' (mũi tên nỏ)
 export function enemyShot(origin, dir, dmg = 8, kind = 'orb') {
+  capProjectiles(false);
   let mesh;
   if (kind === 'arrow') {
-    mesh = new THREE.Mesh(arrowGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffe0a0).multiplyScalar(1.6) }));
+    const mat = getProjMat('earrow', () => new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffe0a0).multiplyScalar(1.6) }));
+    mesh = new THREE.Mesh(arrowGeo, mat);
     mesh.rotation.y = Math.atan2(dir.x, dir.z);
   } else {
-    mesh = new THREE.Mesh(orbGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xe0b0ff).multiplyScalar(1.8) }));
+    const mat = getProjMat('eorb', () => new THREE.MeshBasicMaterial({ color: new THREE.Color(0xe0b0ff).multiplyScalar(1.8) }));
+    mesh = new THREE.Mesh(orbGeo, mat);
     mesh.add(glowSprite(0xc06bff, 2));
     mesh.scale.setScalar(1.2);
   }
@@ -343,7 +416,7 @@ export function enemyShot(origin, dir, dmg = 8, kind = 'orb') {
 function removeProjectile(i) {
   const p = projectiles[i];
   p.mesh.parent?.remove(p.mesh);
-  if (p.mesh.material) p.mesh.material.dispose();
+  if (p.mesh.material && !p.mesh.material.userData?.shared) p.mesh.material.dispose();
   if (p.kind === 'boomerang' && p.owner) p.owner.boomerangOut = false;
   projectiles.splice(i, 1);
 }
@@ -408,9 +481,7 @@ export function updateProjectiles(dt) {
     if (p.kind === 'orb' || p.kind === 'bigorb') {
       const big = p.kind === 'bigorb';
       emit(pos, { frame: F.glow, color: p.color, size: big ? 1.4 : 0.6, size2: 0.05, life: big ? 0.35 : 0.22, alpha: 0.8 });
-      if (Math.random() < (big ? 0.8 : 0.3)) emit(pos, { frame: F.sparkle, color: 0xffffff, color2: p.color, size: big ? 0.7 : 0.35, size2: 0, life: 0.4, vel: new THREE.Vector3((Math.random() - 0.5) * 2, Math.random(), (Math.random() - 0.5) * 2) });
-    } else if (p.kind === 'wave') {
-      if (Math.random() < 0.7) emit(pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 1.6 * p.scale, 0, (Math.random() - 0.5) * 1.6 * p.scale)), { frame: F.sparkle, color: 0xffffff, color2: p.color, size: 0.5, size2: 0, life: 0.3 });
+      if (Math.random() < (big ? 0.8 : 0.3)) emit(pos, { frame: F.sparkle, color: 0xffffff, color2: p.color, size: big ? 0.7 : 0.35, size2: 0, life: 0.4, vel: _tmpV.set((Math.random() - 0.5) * 2, Math.random(), (Math.random() - 0.5) * 2) });
     } else if (p.kind === 'arrow' || p.kind === 'pbolt') {
       emit(pos, { frame: F.glow, color: 0xffe0a0, size: 0.35, size2: 0, life: 0.15, alpha: 0.6 });
     }

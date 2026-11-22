@@ -3,22 +3,22 @@
 
 const SOUNDS = {
   // chiến đấu
-  swing: { files: ['blade_01', 'blade_02', 'blade_03'], vol: 0.55, vary: 0.1 },
+  swing: { files: ['blade_01', 'blade_02', 'blade_03'], vol: 0.55, vary: 0.1, gap: 0.04 },
   hit: { files: ['hit_01', 'hit_02'], vol: 0.6, vary: 0.12, gap: 0.03 },
-  hitHeavy: { files: ['slam_04', 'slam_05'], vol: 0.75, vary: 0.08 },
+  hitHeavy: { files: ['slam_04', 'slam_05'], vol: 0.75, vary: 0.08, gap: 0.05 },
   slimeHit: { files: ['creature_slime_01', 'creature_slime_03'], vol: 0.45, vary: 0.15, gap: 0.05 },
-  slimeDie: { files: ['plop_01', 'plop_02'], vol: 0.7, vary: 0.15 },
+  slimeDie: { files: ['plop_01', 'plop_02'], vol: 0.7, vary: 0.15, gap: 0.05 },
   slimeLand: { files: ['plop_02'], vol: 0.18, vary: 0.2, gap: 0.08 },
   bigLand: { files: ['slam_03'], vol: 0.28, vary: 0.1, gap: 0.35 },
   mageHurt: { files: ['creature_monster_01', 'creature_monster_02'], vol: 0.5, vary: 0.1, gap: 0.08 },
-  mageDie: { files: ['creature_roar_01'], vol: 0.55, vary: 0.08 },
+  mageDie: { files: ['creature_roar_01'], vol: 0.55, vary: 0.08, gap: 0.06 },
   mageCast: { files: ['spell_01'], vol: 0.4, vary: 0.08 },
   mageSpawn: { files: ['stones_04'], vol: 0.45, vary: 0.1 },
   cast: { files: ['spell_02'], vol: 0.4, vary: 0.12, gap: 0.05 },
   zap: { files: ['other_06'], vol: 0.45, vary: 0.15, gap: 0.06 },
-  freeze: { files: ['glass_01'], vol: 0.55, vary: 0.1 },
+  freeze: { files: ['glass_01'], vol: 0.55, vary: 0.1, gap: 0.06 },
   ignite: { files: ['spell_fire_07'], vol: 1.6, vary: 0.1, gap: 0.15 },
-  explode: { files: ['explosion'], vol: 0.85, vary: 0.08 },
+  explode: { files: ['explosion'], vol: 0.85, vary: 0.08, gap: 0.06 },
   playerHurt: { prio: true, files: ['hit_03'], vol: 0.8, vary: 0.06 },
   playerDie: { prio: true, files: ['gong_02'], vol: 0.7, rate: 0.6, vary: 0 },
   dash: { files: ['rpg_cloth2', 'rpg_cloth1'], vol: 0.7, vary: 0.1 },
@@ -46,6 +46,8 @@ const SOUNDS = {
 let ctx = null;
 let master = null;
 const buffers = {};
+const rawBuffers = {};
+let decoding = false;
 const lastPlayed = {};
 const listener = { x: 0, z: 0 };
 let volume = Number(localStorage.getItem('lorenh_volume') ?? 0.8);
@@ -53,7 +55,7 @@ let muted = localStorage.getItem('lorenh_muted') === '1';
 let active = 0;
 export const sfxStats = {};          // đếm số lần phát (để kiểm tra)
 window.__sfx = { stats: sfxStats, buffers, get state() { return ctx && ctx.state; } };
-const MAX_VOICES = 32;
+const MAX_VOICES = 20;
 
 function ensureContext() {
   if (ctx) return;
@@ -67,23 +69,46 @@ function applyVolume() {
   if (master) master.gain.value = muted ? 0 : volume;
 }
 
+async function decodePending() {
+  if (!ctx || decoding) return;
+  const entries = Object.entries(rawBuffers);
+  if (!entries.length) return;
+  decoding = true;
+  try {
+    for (const [f, buf] of entries) {
+      delete rawBuffers[f];
+      if (!buf || buffers[f]) continue;
+      try {
+        buffers[f] = await ctx.decodeAudioData(buf.slice(0));
+      } catch (err) {
+        console.warn('[audio] không giải mã được', f, err);
+      }
+    }
+  } finally {
+    decoding = false;
+    if (Object.keys(rawBuffers).length) decodePending();
+  }
+}
+
 export async function loadSounds() {
-  ensureContext();
   const files = new Set(Object.values(SOUNDS).flatMap((s) => s.files));
   await Promise.all([...files].map(async (f) => {
     try {
       const res = await fetch(`/sfx/${f}.ogg`);
-      buffers[f] = await ctx.decodeAudioData(await res.arrayBuffer());
+      if (!res.ok) return;
+      rawBuffers[f] = await res.arrayBuffer();
     } catch (err) {
       console.warn('[audio] không nạp được', f, err);
     }
   }));
+  if (ctx) decodePending();
 }
 
 // Trình duyệt chỉ cho phát âm sau khi người chơi bấm/gõ phím
 export function unlockAudio() {
   ensureContext();
-  if (ctx.state === 'suspended') ctx.resume();
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  decodePending();
 }
 
 export function setListener(pos) { listener.x = pos.x; listener.z = pos.z; }
