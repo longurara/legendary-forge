@@ -1,13 +1,22 @@
 import * as THREE from 'three';
-import { endFrame, pressed, mouse, pollGamepad, pad, resetTouch, keys, coop, touch as touchIn } from './input.js';
-import { buildWorld, updateWorld, isBlocked, isPit, ROOM_HALF, spawnExit, removeExit, exitPos, floorTheme, setDark, setDarkHook } from './world.js';
+import { endFrame, pressed, mouse, pollGamepad, pad, resetTouch, keys, coop, touch as touchIn, getTouchCfg, setTouchCfg, haptic } from './input.js';
+import { buildWorld, updateWorld, isBlocked, isPit, ROOM_HALF, pillars, boxes, pits, spawnExit, removeExit, exitPos, floorTheme, setDark, setDarkHook, setFlameLevel } from './world.js';
 import { Player, SPECIALS } from './player.js';
 import { Slime, Mage } from './enemies.js';
 import { Healer, ShieldBearer, Bomber, Wraith, ShadowLord } from './enemies_new.js';
 import { Armored, Burrower, Totem } from './enemies_more.js';
+import {
+  PyroMage, FrostGuard, Lancer, Necromancer, Berserker,
+  OrcBrute, GoblinRaider, FireImp, FrostDrake, AcidGlub, VenomSpider, GiantWasp, Viper, StoneCrab,
+} from './enemies_pack.js';
+import { ForgeOgre, FrostDragon, EmberDragon, PlagueKing, FrostWarden, spawnTwinReapers } from './bosses_extra.js';
 import { EVENTS_ROOM, QUESTS } from './events.js';
-import { GODS, BOONS, DUOS, godCards } from './gods.js';
-import { genFloorMap, choicesAt, renderMap } from './floormap.js';
+import { GODS, BOONS, DUOS, godCards, GOD_WRATH, pickTrialPair, tickGodWrath } from './gods.js';
+import { genFloorMap, choicesAt, renderMap, propagateChoice, activeBossAnchors, ANCHOR_TYPES } from './floormap.js';
+import { RUNES, BOSS_CORES, randomRune, describeCircuit, fireRunes, updateRunes, clearRunes, attachAwakening, progressAwakening } from './runes.js';
+import { flameState, resetFlameState, hasDynCurse, flameTier, addFlame, addCorruption, purgeCurse, dynCurseById } from './corruption.js';
+import { FallenEcho, EchoManager, recordEcho, findEchoForFloor, removeEcho, hydrateEchoWeapon } from './echo.js';
+import { initForgeUI, openAnvilModal, closeAnvilModal, isAnvilOpen } from './forge_ui.js';
 import { BUILDINGS, STORY, unlockedStory, loadBoard, submitRun } from './village.js';
 import { Minion, Boss, Assassin, Archer, KingSlime, ArchMage } from './enemies_extra.js';
 import { initFx, updateFx, shake, hitStop, clearFx, damageNumber, fxQuality, setFxQuality, dmgScale, explosion, spawnRing as fxRing, flash as fxFlash, smoke, burst, addShake } from './fx.js';
@@ -45,8 +54,8 @@ renderer.toneMappingExposure = 1.15;
 document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 100);
-const CAM_OFFSET = new THREE.Vector3(0, 19, 13.5);
+const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.1, 130);
+const CAM_OFFSET = new THREE.Vector3(0, 22.0, 15.8);
 let camZoom = 1;
 
 // Hậu kỳ: bloom làm các hiệu ứng sáng (lửa, phép, tia sét, đuốc) phát quang
@@ -121,31 +130,57 @@ function updateToasts(dt) {
   }
 }
 
-const TYPE_LABEL = (w) => (TYPES[w.type].ranged ? 'Đánh xa' : 'Cận chiến');
-const affixText = (w) => [...(w.legendText ? ['★ ' + w.legendText] : []), ...(w.affixes || []).map((id) => affixById(id)?.name).filter(Boolean), ...(w.gems || []).map((g) => weaponsMod.GEMS[g]?.name + ' (' + weaponsMod.GEMS[g]?.text + ')')];
+const TYPE_LABEL = (w) => (TYPES[w.type].ranged ? 'Đánh xa' : 'Cận chiến') + (w.altForm ? ` ⇄ ${TYPES[w.altForm.type].name}` : '');
+const affixText = (w) => [
+  ...(w.legendText ? ['★ ' + w.legendText] : []),
+  ...(w.grafted && w.specialType ? [`❖ Chiêu: ${SPECIALS[w.specialType]?.name}`] : []),
+  ...(w.masterworks || []).map((id) => '✦ ' + weaponsMod.MASTERWORKS[id]?.name),
+  ...(w.corrupted ? ['☠ ' + weaponsMod.CORRUPT_TRAITS[w.corrupted]?.name] : []),
+  ...(w.affixes || []).map((id) => affixById(id)?.name).filter(Boolean),
+  ...(w.gems || []).map((g) => weaponsMod.GEMS[g]?.name + ' (' + weaponsMod.GEMS[g]?.text + ')'),
+];
 function renderSlots() {
   for (let i = 0; i < 2; i++) {
     const el = hud.slots[i];
     const w = player.weapons[i];
-    el.className = 'slot' + (i === player.slot ? ' active' : '') + (w ? ' r' + w.rarity : ' empty');
+    el.className = 'slot' + (i === player.slot ? ' active' : '') + (w ? ' r' + w.rarity : ' empty') + (i === player.slot && player.temperedT > 0 ? ' tempered' : '');
     if (!w) {
       el.innerHTML = `<span class="num">${i + 1}</span><div class="icon"></div><div class="info"><div class="name">Trống</div><div class="meta">Nhặt thêm vũ khí bằng phím E</div></div>`;
       continue;
     }
     const r = RARITY[w.rarity];
     const aff = affixText(w);
-    el.title = aff.join('\n');
+    const runes = w.runes || [];
+    const runeDots = runes.length
+      ? `<span class="rune-dots" title="${describeCircuit(runes)}">${runes.map((id) => `<i style="background:${RUNES[id]?.color || '#fff'};color:${RUNES[id]?.color || '#fff'}"></i>`).join('')}</span>`
+      : '';
+    const awTag = w.awakening
+      ? `<div class="awaken-tag${w.awakened ? ' done' : ''}">${w.awakened ? `✦ Thức Tỉnh · ${w.awakening.ultName}` : `Thức Tỉnh: ${w.awakening.text} (${w.awakening.progress}/${w.awakening.goal})`}</div>`
+      : '';
+    el.title = [...aff, ...(runes.length ? ['Mạch Cổ Ngữ: ' + describeCircuit(runes)] : [])].join('\n');
     el.innerHTML = `<span class="num">${i + 1}</span>
       <div class="icon"><img src="${weaponIcon(w)}" alt=""></div>
       <div class="info"><div class="name" style="color:${r.css}">${weaponName(w)}</div>
-      <div class="meta">${weaponIcons(w)}<span>${r.name} · ${TYPE_LABEL(w)}</span><span class="dur${(w.dur ?? 100) <= 0 ? ' broken' : (w.dur ?? 100) < 30 ? ' low' : ''}">${Math.ceil(w.dur ?? 100)}%</span></div>
-      ${aff.length ? `<div class="affixes">${aff.map((a) => `<span>${a}</span>`).join('')}</div>` : ''}</div>`;
+      <div class="meta">${weaponIcons(w)}<span>${r.name} · ${TYPE_LABEL(w)}</span><span class="dur${(w.dur ?? 100) <= 0 ? ' broken' : (w.dur ?? 100) < 30 ? ' low' : ''}">${Math.ceil(w.dur ?? 100)}%</span>${runeDots}</div>
+      <div class="heat-bar" id="heat-bar-${i}"><div class="heat-fill" id="heat-fill-${i}" style="width:${Math.round(w.heat || 0)}%"></div></div>
+      ${awTag}
+      ${aff.length ? `<div class="affixes">${aff.slice(0, 4).map((a) => `<span>${a}</span>`).join('')}</div>` : ''}</div>`;
   }
-  const sp = SPECIALS[player.weapon.type];
+  const sp = SPECIALS[player.activeSpecialType] || SPECIALS.sword;
   $('special-ico').style.setProperty('--i', `url('/ui/icons/${sp.icon}.svg')`);
   $('special-name').textContent = sp.name;
   const el = player.weapon.element !== 'none' ? player.weapon.element : 'none';
-  $('ult-name').textContent = ULTIMATES[el].name;
+  $('ult-name').textContent = player.weapon.awakened && player.weapon.awakening?.ultName ? '✦ ' + player.weapon.awakening.ultName : ULTIMATES[el].name;
+  // Đồng bộ icon vũ khí & kỹ năng lên cụm nút vòng cung trên điện thoại
+  const atkIco = $('touch-atk-ico');
+  if (atkIco) {
+    const wtIco = { daggers: 'x_daggers', crossbow: 'x_crossbow' }[player.weapon.type] || player.weapon.type;
+    atkIco.style.setProperty('--i', `url('/ui/icons/${wtIco}.svg')`);
+  }
+  const spIco = $('touch-sp-ico');
+  if (spIco) spIco.style.setProperty('--i', `url('/ui/icons/${sp.icon}.svg')`);
+  const spLbl = $('touch-sp-lbl');
+  if (spLbl) spLbl.textContent = { sword: 'Đỡ', axe: 'Ném', greatsword: 'Tích', staff: 'Cầu', daggers: 'Dao', crossbow: 'Nổ' }[player.activeSpecialType] || 'Chiêu';
 }
 
 function renderRelics() {
@@ -192,20 +227,33 @@ let shopItems = [];
 let event = null;                // biến cố của đợt hiện tại
 let darkLight = null;
 let slowmoReal = 0;
+// 8 Cơ chế nâng cao
+let runeBag = [];
+let bossCores = [];
+let echoMgr = null;
+let trialState = null;           // { chosenGod, spurnedGod, wrathState }
+let anchorWave = null;           // loại Mỏ Neo Boss đang đánh
+let boostedNext = false;
+let cooledNext = false;
+let trialDuoBoost = false;
+// Quân tiếp viện giữa đợt (cho bản đồ 18x18 rộng)
+let reinforceLeft = 0;
+let reinforceTrigger = 0;
+let reinforcePool = [];
 
 const hasCurse = (id) => run.curses.includes(id);
 const soulMult = () => (1 + run.curses.reduce((s, id) => s + (CURSES.find((c) => c.id === id)?.bonus || 0), 0) + (run.depth || 0) * 0.15) * (player?.stats.hoard ? 2 : 1);
 const deep = (n) => (run.depth || 0) >= n;
 
-function spawnPos(minDist = 5.5, r = Math.random) {
+function spawnPos(minDist = 6.5, r = Math.random) {
   let x, z, tries = 0;
   do {
     x = (r() * 2 - 1) * (ROOM_HALF - 2.5);
     z = (r() * 2 - 1) * (ROOM_HALF - 2.5);
     tries++;
-  } while (tries < 80 && (
+  } while (tries < 90 && (
     Math.hypot(x - player.pos.x, z - player.pos.z) < minDist ||
-    Math.hypot(x - player.pos.x, z - player.pos.z) > 22 ||
+    Math.hypot(x - player.pos.x, z - player.pos.z) > 32 ||
     isBlocked(x, z, 1.3)
   ));
   return [x, z];
@@ -221,11 +269,12 @@ function playerPower() {
 }
 // Độ khó theo tầng/đợt: sát thương quái, tốc độ quái
 function applyDifficulty() {
-  ctx.enemyDmgMul = 1.35 * (1 + (floor - 1) * 0.18 + (wave - 1) * 0.012) * (deep(2) ? 1.15 : 1) * (1 + extraDmgCurse);
+  const ember = flameTier() === 'ember';
+  ctx.enemyDmgMul = 1.35 * (1 + (floor - 1) * 0.18 + (wave - 1) * 0.012) * (deep(2) ? 1.15 : 1) * (1 + extraDmgCurse) * (ember ? 1.15 : 1);
   ctx.bossBane = bossBane;
   ctx.floor = floor;
   ctx.depth = run.depth || 0;
-  ctx.enemySpeed = (ctx.enemySpeed || 1) * (deep(5) ? 1.1 : 1) * (deep(10) ? 1.1 : 1);
+  ctx.enemySpeed = (ctx.enemySpeed || 1) * (deep(5) ? 1.1 : 1) * (deep(10) ? 1.1 : 1) * (ember ? 1.18 : 1);
   dmgScale.player = ctx.enemyDmgMul;
 }
 
@@ -239,47 +288,110 @@ function addEnemy(e, opts = {}) {
     e.hp = Math.round(e.hp * (1 + (wave - 1) * 0.08) * (1 + (floor - 1) * 0.3) * Math.pow(playerPower(), 0.4) * (hasCurse('tough') ? 1.5 : 1) * (deep(1) ? 1.2 : 1) * (opts.hpMul || 1));
     if (floor >= 3) e.eliteSpeed = (e.eliteSpeed || 1) * (1 + Math.min(0.25, (floor - 2) * 0.06));
     const baseChance = wave >= 3 || deep(3) ? Math.min(0.3, 0.04 + wave * 0.02) * (deep(3) ? 2 : 1) : 0;
-    const eliteChance = challengeWave || event?.id === 'elites' ? 1 : baseChance;
-    if (r() < eliteChance) makeElite(e, deep(4) ? 2 + (r() < 0.3 ? 1 : 0) : null, r);
+    const eliteChance = challengeWave || anchorWave || event?.id === 'elites' ? 1 : baseChance;
+    if (r() < eliteChance) {
+      makeElite(e, deep(4) ? 2 + (r() < 0.3 ? 1 : 0) : null, r);
+      if (hasDynCurse('cursed_greed')) e.hp = Math.round(e.hp * 1.3);
+    }
   }
   e.maxHpEff = e.hp;
   enemies.push(e);
 }
 
+// Danh sách toàn bộ 24 loại quái (gồm 14 quái mới + 9 quái 3D Quaternius)
+const MAKE_ENEMY = {
+  mage: Mage, minion: Minion, assassin: Assassin, archer: Archer, healer: Healer,
+  shield: ShieldBearer, bomber: Bomber, wraith: Wraith, armored: Armored, burrower: Burrower,
+  pyro: PyroMage, frostguard: FrostGuard, lancer: Lancer, necro: Necromancer, berserker: Berserker,
+  orc: OrcBrute, goblin: GoblinRaider, imp: FireImp, drake: FrostDrake, glub: AcidGlub,
+  spider: VenomSpider, wasp: GiantWasp, viper: Viper, crab: StoneCrab,
+};
+const BOSS_COUNT = 10;
+function nextBossKind(r = Math.random) {
+  if (!run.bossDeck || !run.bossDeck.length) {
+    run.bossDeck = Array.from({ length: BOSS_COUNT }, (_, i) => i);
+    for (let i = run.bossDeck.length - 1; i > 0; i--) {
+      const j = Math.floor(r() * (i + 1));
+      [run.bossDeck[i], run.bossDeck[j]] = [run.bossDeck[j], run.bossDeck[i]];
+    }
+  }
+  return run.bossDeck.shift();
+}
+function createBosses(kind, level) {
+  if (kind === 9) return spawnTwinReapers(scene, level);
+  const C = [Boss, KingSlime, ArchMage, ShadowLord, ForgeOgre, FrostDragon, EmberDragon, PlagueKing, FrostWarden][kind] || Boss;
+  return [new C(scene, 0, -10, level)];
+}
+
 // ================= Đợt quái =================
 function spawnBossWave() {
-  const level = 1 + Math.floor((floor - 1) / 4);
-  const kind = (floor - 1) % 4;
-  const boss = kind === 0 ? new Boss(scene, 0, -8, level) : kind === 1 ? new KingSlime(scene, 0, -8, level)
-    : kind === 2 ? new ArchMage(scene, 0, -8, level) : new ShadowLord(scene, 0, -8, level);
-  boss.spawnT = -0.4;
+  reinforceLeft = 0;
+  const level = 1 + Math.floor((floor - 1) / 5);
+  const kind = nextBossKind(rngFor(6));
+  const bosses = createBosses(kind, level);
   applyDifficulty();
-  // Máu boss theo tầng và theo sức mạnh hiện tại của người chơi
   const hpMul = (1 + 0.4 * (floor - 1)) * playerPower() * (deep(9) ? 1.3 : 1);
-  boss.hp = boss.maxHp = Math.round(boss.maxHp * hpMul);
-  boss.poiseMax = Math.round(boss.poiseMax * Math.sqrt(hpMul));
-  boss.phases = floor >= 3 ? [0.6, 0.25] : [0.5];
-  if (deep(6)) boss.phases = floor >= 3 ? [0.75, 0.5, 0.25] : [0.6, 0.3];
-  boss.bossKind = kind;
-  if (hasCurse('bossrage')) {
-    boss.hp = boss.maxHp = Math.round(boss.maxHp * 1.5);
-    Object.defineProperty(boss, 'enraged', { get: () => true });
+  const intactAnchors = activeBossAnchors(floorMap);
+  for (const boss of bosses) {
+    boss.spawnT = -0.4;
+    boss.hp = boss.maxHp = Math.round(boss.maxHp * hpMul);
+    boss.poiseMax = Math.round(boss.poiseMax * Math.sqrt(hpMul));
+    boss.phases = bosses.length > 1 ? [0.5] : (floor >= 3 ? [0.6, 0.25] : [0.5]);
+    if (deep(6)) boss.phases = bosses.length > 1 ? [0.6, 0.3] : (floor >= 3 ? [0.75, 0.5, 0.25] : [0.6, 0.3]);
+    boss.bossKind = kind;
+    if (hasCurse('bossrage')) {
+      boss.hp = boss.maxHp = Math.round(boss.maxHp * 1.5);
+      Object.defineProperty(boss, 'enraged', { get: () => true });
+    }
+    for (const pt of boss.parts || []) {
+      pt.maxHp = pt.hp = Math.round(boss.maxHp * (pt.pct || 0.24));
+    }
+    if (intactAnchors.length) {
+      boss.empoweredAnchors = intactAnchors.length;
+      if (intactAnchors.includes('aegis')) boss.shieldHp = Math.round(boss.maxHp * 0.35);
+      if (intactAnchors.includes('frenzy')) boss.timeMul = (boss.timeMul || 1) * 1.22;
+      if (intactAnchors.includes('horde')) boss.anchorHorde = true;
+    }
+    addEnemy(boss);
   }
-  addEnemy(boss);
-  for (let i = 0; i < level + 1; i++) {
-    const [x, z] = spawnPos();
-    const m = kind === 1 ? new Slime(scene, x, z, 'normal') : kind === 3 ? new Wraith(scene, x, z) : new Minion(scene, x, z);
-    m.spawnT = -1 - i * 0.5;
+  const escortKind = [Minion, null, Archer, Wraith, FireImp, FrostDrake, GoblinRaider, VenomSpider, FrostGuard, Wraith][kind];
+  for (let i = 0; i < level + 2; i++) {
+    const [x, z] = spawnPos(8);
+    const m = escortKind ? new escortKind(scene, x, z) : new Slime(scene, x, z, 'normal');
+    m.spawnT = -1 - i * 0.45;
     addEnemy(m);
   }
   ctx.enemies = enemies;
-  showBanner(boss.name, `Boss tầng ${floor} · đợt ${wave}`, 2.6, '#ff6a4a');
+  const title = bosses.length > 1 ? 'Song Tử Tử Thần' : bosses[0].name;
+  const sub = intactAnchors.length
+    ? `Siêu Tiến Hóa (${intactAnchors.map((a) => ANCHOR_TYPES[a]?.name).join(', ')}) · Thưởng ×2!`
+    : bosses.length > 1
+      ? `Boss đôi tầng ${floor} · Hỏa Ảnh & Lôi Ảnh`
+      : `Boss tầng ${floor} · đợt ${wave}`;
+  showBanner(title, sub, 2.8, '#ff6a4a');
   play('anvil');
+}
+
+function spawnReinforcements() {
+  if (reinforceLeft <= 0 || !reinforcePool.length) return;
+  reinforceLeft--;
+  const count = Math.min(8, 4 + Math.floor(floor / 2) + Math.floor(wave / 3));
+  for (let i = 0; i < count; i++) {
+    const kind = reinforcePool[Math.floor(Math.random() * reinforcePool.length)];
+    const [x, z] = spawnPos(9);
+    const e = MAKE_ENEMY[kind] ? new MAKE_ENEMY[kind](scene, x, z) : new Slime(scene, x, z, kind);
+    e.spawnT = -0.35 - i * 0.12;
+    addEnemy(e);
+  }
+  ctx.enemies = enemies;
+  showBanner('Quân Tiếp Viện!', `+${count} quái đang tràn vào đấu trường`, 1.9, '#ffb040');
+  play('waveStart', { rate: 1.15, vol: 0.7 });
 }
 
 function spawnWave() {
   wave++;
   event = null;
+  reinforceLeft = 0;
   ctx.enemySpeed = hasCurse('fast') ? 1.2 : 1;
   setDark(false);
   arenaT = 0; arenaWave = false;
@@ -299,55 +411,86 @@ function spawnWave() {
   }
   let mult = hasCurse('swarm') ? 1.4 : 1;
   let hpMul = 1;
-  if (event?.id === 'horde') { mult *= 2; hpMul = 0.6; }
-  const n = (k) => Math.round(k * mult);
-  const normals = n(Math.min(2 + wave, 9));
-  const bigs = n(Math.min(Math.floor((wave - 1) / 2), 3));
-  const lavas = wave >= 2 ? n(Math.min(Math.floor(wave / 2), 4)) : 0;
-  const mages = wave >= 3 ? n(Math.min(Math.floor((wave - 1) / 2), 4)) : 0;
-  const minions = wave >= 2 ? n(Math.min(Math.floor(wave / 2), 5)) : 0;
-  const assassins = wave >= 6 ? n(Math.min(Math.floor((wave - 4) / 2), 3)) : 0;
-  const archers = wave >= 4 ? n(Math.min(Math.floor((wave - 2) / 3), 3)) : 0;
-  const mothers = wave >= 7 ? n(Math.min(Math.floor((wave - 5) / 3), 2)) : 0;
-  const fl = floor - 1;                                      // tầng sâu có thêm quái mới
-  const shields = wave >= 3 ? n(Math.min(Math.floor(wave / 4) + Math.min(fl, 2), 4)) : 0;
+  if (event?.id === 'horde') { mult *= 1.85; hpMul = 0.62; }
+  const n = (k) => Math.max(0, Math.round(k * mult));
+  const fl = floor - 1;
+  const biome = floorTheme(floor).biome.id;
+
+  // Mật độ quái phong phú ngay từ Đợt 1 cho đấu trường rộng 18x18 (57.6m x 57.6m)
+  const normals = n(Math.min(4 + Math.floor(wave * 0.7), 8));
+  const goblins = n(Math.min(2 + Math.floor(wave / 2) + fl, 6));
+  const minions = n(Math.min(2 + Math.floor(wave * 0.6), 6));
+  const spiders = n(Math.min(1 + Math.floor(wave / 2), 4));
+  const vipers = wave >= 1 ? n(Math.min(1 + Math.floor(wave / 3), 3)) : 0;
+  const bigs = wave >= 2 ? n(Math.min(1 + Math.floor(wave / 3), 3)) : 0;
+  const lavas = wave >= 2 ? n(Math.min(1 + Math.floor(wave / 2), 4)) : 0;
+  const orcs = wave >= 2 ? n(Math.min(1 + Math.floor(wave / 3) + fl, 4)) : 0;
+  const archers = wave >= 2 ? n(Math.min(1 + Math.floor(wave / 3), 4)) : 0;
+  const imps = wave >= 2 ? n(Math.min(1 + Math.floor(wave / 3) + (biome === 'lava' ? 2 : 0), 4)) : 0;
+  const wasps = wave >= 2 ? n(Math.min(1 + Math.floor((wave - 1) / 3), 4)) : 0;
+  const shields = wave >= 3 ? n(Math.min(1 + Math.floor(wave / 4) + Math.min(fl, 2), 4)) : 0;
+  const mages = wave >= 3 ? n(Math.min(1 + Math.floor(wave / 3), 4)) : 0;
+  const pyros = wave >= 3 ? n(Math.min(1 + Math.floor((wave - 2) / 3) + (biome === 'lava' ? 1 : 0), 3)) : 0;
+  const lancers = wave >= 3 ? n(Math.min(1 + Math.floor((wave - 2) / 3) + (biome === 'stone' ? 1 : 0), 3)) : 0;
+  const bombers = wave >= 3 ? n(Math.min(1 + Math.floor(wave / 3) + fl, 5)) : 0;
+  const crabs = wave >= 3 ? n(Math.min(1 + Math.floor((wave - 2) / 4) + (biome === 'stone' ? 1 : 0), 3)) : 0;
   const healers = wave >= 4 ? n(Math.min(1 + Math.floor((wave - 4) / 6) + (fl >= 2 ? 1 : 0), 3)) : 0;
-  const bombers = wave >= 3 ? n(Math.min(Math.floor((wave - 1) / 3) + fl, 5)) : 0;
-  const wraiths = wave >= 8 || fl >= 1 ? n(Math.min(Math.floor(wave / 5) + Math.floor(fl / 2), 4)) : 0;
-  const armoreds = wave >= 5 || fl >= 1 ? n(Math.max(0, Math.min(Math.floor((wave - 3) / 3) + fl, 4))) : 0;
-  const burrowers = wave >= 4 ? n(Math.max(0, Math.min(Math.floor((wave - 2) / 3) + Math.floor(fl / 2), 3))) : 0;
+  const frosts = wave >= 4 || biome === 'ice' ? n(Math.min(1 + Math.floor(wave / 4) + (biome === 'ice' ? 1 : 0), 3)) : 0;
+  const drakes = wave >= 4 || biome === 'ice' ? n(Math.min(1 + Math.floor((wave - 2) / 4) + (biome === 'ice' ? 1 : 0), 3)) : 0;
+  const berserkers = wave >= 4 ? n(Math.min(1 + Math.floor((wave - 3) / 3) + fl, 3)) : 0;
+  const necros = wave >= 4 || biome === 'crypt' ? n(Math.min(1 + Math.floor((wave - 3) / 5) + (biome === 'crypt' ? 1 : 0), 2)) : 0;
+  const glubs = wave >= 4 ? n(Math.min(1 + Math.floor((wave - 3) / 4), 3)) : 0;
+  const burrowers = wave >= 4 ? n(Math.min(1 + Math.floor((wave - 3) / 3) + Math.floor(fl / 2), 3)) : 0;
+  const armoreds = wave >= 5 || fl >= 1 ? n(Math.min(1 + Math.floor((wave - 4) / 3) + fl, 4)) : 0;
+  const assassins = wave >= 5 || fl >= 1 ? n(Math.min(1 + Math.floor((wave - 4) / 3) + fl, 3)) : 0;
+  const wraiths = wave >= 6 || biome === 'crypt' ? n(Math.min(1 + Math.floor(wave / 5) + Math.floor(fl / 2), 4)) : 0;
+  const mothers = wave >= 6 ? n(Math.min(Math.floor((wave - 4) / 3), 2)) : 0;
+
   const list = [
+    ...Array(orcs).fill('orc'), ...Array(frosts).fill('frostguard'), ...Array(berserkers).fill('berserker'),
+    ...Array(lancers).fill('lancer'), ...Array(pyros).fill('pyro'), ...Array(necros).fill('necro'),
+    ...Array(drakes).fill('drake'), ...Array(glubs).fill('glub'), ...Array(crabs).fill('crab'),
     ...Array(armoreds).fill('armored'), ...Array(burrowers).fill('burrower'),
-    ...Array(Math.max(1, normals - bigs)).fill('normal'), ...Array(bigs).fill('big'), ...Array(lavas).fill('lava'),
+    ...Array(goblins).fill('goblin'), ...Array(spiders).fill('spider'), ...Array(vipers).fill('viper'),
+    ...Array(imps).fill('imp'), ...Array(wasps).fill('wasp'),
+    ...Array(Math.max(2, normals - bigs)).fill('normal'), ...Array(bigs).fill('big'), ...Array(lavas).fill('lava'),
     ...Array(mages).fill('mage'), ...Array(minions).fill('minion'), ...Array(assassins).fill('assassin'),
     ...Array(archers).fill('archer'), ...Array(mothers).fill('mother'),
     ...Array(healers).fill('healer'), ...Array(bombers).fill('bomber'), ...Array(wraiths).fill('wraith'), ...Array(shields).fill('shield'),
   ];
   if (arenaWave) list.splice(Math.ceil(list.length / 2));
-  // Giới hạn tổng số quái: bớt slime thường trước
-  const cap = 24 + floor * 2;
-  while (list.length > cap) { const i = list.indexOf('normal'); list.splice(i >= 0 ? i : 0, 1); }
-  const make = { mage: Mage, minion: Minion, assassin: Assassin, archer: Archer, healer: Healer, shield: ShieldBearer, bomber: Bomber, wraith: Wraith, armored: Armored, burrower: Burrower };
+  // Giới hạn tổng số quái nâng lên cho bản đồ rộng (46 + 5*tầng)
+  const cap = 46 + floor * 5;
+  while (list.length > cap) {
+    const i = list.indexOf('normal');
+    list.splice(i >= 0 ? i : Math.floor(R() * list.length), 1);
+  }
   // Đội hình: khiên binh đứng chắn trước quái đánh xa
   const ranged = [];
   for (const kind of list) {
-    let [x, z] = spawnPos(5.5, R);
+    let [x, z] = spawnPos(6.5, R);
     if (kind === 'shield' && ranged.length) {
       const [rx, rz] = ranged.shift();
       const dx = player.pos.x - rx, dz = player.pos.z - rz, d = Math.hypot(dx, dz) || 1;
       const sx = rx + (dx / d) * 2.4, sz = rz + (dz / d) * 2.4;
       if (!isBlocked(sx, sz, 0.8)) { x = sx; z = sz; }
     }
-    if (kind === 'archer' || kind === 'healer' || kind === 'mage') ranged.push([x, z]);
-    const e = make[kind] ? new make[kind](scene, x, z) : new Slime(scene, x, z, kind);
+    if (['archer', 'healer', 'mage', 'pyro', 'necro', 'viper'].includes(kind)) ranged.push([x, z]);
+    const e = MAKE_ENEMY[kind] ? new MAKE_ENEMY[kind](scene, x, z) : new Slime(scene, x, z, kind);
     if (kind === 'shield') e.facing = Math.atan2(player.pos.x - x, player.pos.z - z);
-    e.spawnT = -R() * 0.6;
+    e.spawnT = -R() * 0.7;
     addEnemy(e, { hpMul, r: R });
+  }
+  // Lên lịch Quân Tiếp Viện giữa đợt từ Đợt 2 trở đi (khi hạ ~62% quân ban đầu)
+  if (wave >= 2 && !arenaWave) {
+    reinforceLeft = floor >= 3 ? 2 : 1;
+    reinforceTrigger = Math.max(3, Math.floor(list.length * 0.38));
+    reinforcePool = [...new Set(list.filter((k) => k !== 'healer' && k !== 'mother'))];
   }
   // Kẻ Săn Đầu: từ tầng 2, săn bạn qua các tầng; để chạy thoát thì lần sau mạnh hơn
   if (floor >= 2 && !arenaWave && (run.nemesisLv > 0 ? R() < 0.5 : R() < 0.15)) {
     const lv = (run.nemesisLv || 0) + 1;
-    const [x, z] = spawnPos(10, R);
+    const [x, z] = spawnPos(12, R);
     const nm = new Assassin(scene, x, z);
     nm.spawnT = -1.2;
     nm.hp = Math.round(nm.hp * (5 + lv * 2));
@@ -361,43 +504,55 @@ function spawnWave() {
     for (const m of nm.mats) if (m.color) m.color.lerp(new THREE.Color(0x8a1a3a), 0.5);
     setTimeout(() => showBanner('Kẻ Săn Đầu đã tới!', 'Hạ hắn trong 35 giây trước khi hắn bỏ chạy', 2.6, '#ff5a8a'), 2800);
   }
-  // Cột Tế: thỉnh thoảng xuất hiện, cường hóa quái xung quanh
-  if (wave >= 4 && !arenaWave && R() < 0.35) {
-    const [x, z] = spawnPos(8, R);
-    const t = new Totem(scene, x, z, { hp: Math.round(60 * (1 + (floor - 1) * 0.4)) });
+  // Cột Tế: thỉnh thoảng xuất hiện, hoặc chắc chắn xuất hiện trong phòng Mỏ Neo Boss
+  if (anchorWave || (wave >= 4 && !arenaWave && R() < 0.35)) {
+    const [x, z] = anchorWave ? [0, -6] : spawnPos(9, R);
+    const t = new Totem(scene, x, z, { hp: Math.round((anchorWave ? 110 : 60) * (1 + (floor - 1) * 0.4)) });
     t.spawnT = 0; t.maxHpEff = t.hp; enemies.push(t);
   }
-  // Thủ Lĩnh (mini-boss) ở đợt thứ 3 của mỗi tầng
+  // Thủ Lĩnh (mini-boss) ở đợt thứ 3 của mỗi tầng (8 chủng Thủ Lĩnh đa dạng!)
   if (wave % 5 === 3 && !arenaWave) {
-    const [x, z] = spawnPos(8, R);
-    const C = [ShieldBearer, Minion, Assassin, Wraith][Math.floor(R() * 4)];
+    const [x, z] = spawnPos(10, R);
+    const miniPool = [
+      [ShieldBearer, 'Khiên Binh'], [Minion, 'Lính Xương'], [Assassin, 'Sát Thủ'], [Wraith, 'Bóng Ma'],
+      [OrcBrute, 'Chiến Binh Orc'], [FrostGuard, 'Vệ Binh Băng'], [Berserker, 'Cuồng Chiến'], [Lancer, 'Kỵ Binh Xương'],
+    ];
+    const [C, label] = miniPool[Math.floor(R() * miniPool.length)];
     const mb = new C(scene, x, z);
     mb.spawnT = -0.8;
-    mb.hp = Math.round(mb.hp * 5);
+    mb.hp = Math.round(mb.hp * 4.5);
     addEnemy(mb, { r: R });
     if (!mb.elite) makeElite(mb, 3, R);
     mb.miniBoss = true;
-    mb.name = 'Thủ Lĩnh ' + ({ ShieldBearer: 'Khiên Binh', Minion: 'Lính Xương', Assassin: 'Sát Thủ', Wraith: 'Bóng Ma' }[C.name] || '');
-    mb.group.scale.multiplyScalar(1.35);
+    mb.name = 'Thủ Lĩnh ' + label;
+    mb.group.scale.multiplyScalar(1.32);
     mb.maxHpEff = mb.hp;
     mb.poiseMax = Math.round(mb.hp * 0.4);
     mb.dropChance = 0;
   }
   ctx.enemies = enemies;
   if (player.hasRelic('badge')) player.shieldHp = 25;
-  const parts = [minions && `${minions} lính xương`, shields && `${shields} khiên binh`, archers && `${archers} cung thủ`, assassins && `${assassins} sát thủ`, mages && `${mages} pháp sư`,
-    healers && `${healers} pháp sư hồi máu`, bombers && `${bombers} slime bom`, wraiths && `${wraiths} bóng ma`].filter(Boolean).slice(0, 4).join(' · ');
-  if (challengeWave) showBanner(`Đợt ${wave}: Thử Thách`, 'Toàn quái tinh anh · thưởng di vật', 2.4, '#ff6a4a');
+  const parts = [
+    orcs && `${orcs} Orc`, goblins && `${goblins} yêu tinh`, spiders && `${spiders} nhện độc`,
+    imps && `${imps} tiểu quỷ`, lancers && `${lancers} kỵ binh`, pyros && `${pyros} hỏa sư`,
+    frosts && `${frosts} vệ binh băng`, berserkers && `${berserkers} cuồng chiến`, necros && `${necros} chiêu hồn sư`,
+    minions && `${minions} lính xương`, shields && `${shields} khiên binh`, archers && `${archers} cung thủ`,
+  ].filter(Boolean).slice(0, 4).join(' · ');
+  if (anchorWave) showBanner(`Mỏ Neo: ${ANCHOR_TYPES[anchorWave]?.name || 'Boss'}`, 'Dọn sạch để tước sức mạnh Boss cuối tầng · rơi Cổ Ngữ', 2.6, '#ff4080');
+  else if (trialState) showBanner(GOD_WRATH[trialState.spurnedGod.id].name, GOD_WRATH[trialState.spurnedGod.id].desc, 2.8, trialState.spurnedGod.color);
+  else if (challengeWave) showBanner(`Đợt ${wave}: Thử Thách`, 'Toàn quái tinh anh · thưởng di vật', 2.4, '#ff6a4a');
   else if (event) showBanner(event.name, event.desc, 2.6, event.color);
   else if (enemies.some((e) => e.miniBoss)) showBanner('Thủ Lĩnh xuất hiện!', enemies.find((e) => e.miniBoss).name + ' · hạ để nhận rương di vật', 2.6, '#ff8a4a');
-  else showBanner(`Đợt ${wave}`, parts);
+  else showBanner(`Đợt ${wave}`, `${enemies.length} quái · ${parts}`);
   renderEvent();
   play('waveStart');
 }
 
 function renderEvent() {
   const el = $('event-chip');
-  if (event) { el.innerHTML = `<i class="ico" style="--i:url('/ui/icons/${event.icon}.svg');color:${event.color}"></i>${event.name}`; el.style.display = ''; }
+  if (trialState) { el.innerHTML = `<i class="ico" style="--i:url('/ui/icons/${trialState.spurnedGod.icon}.svg');color:${trialState.spurnedGod.color}"></i>${GOD_WRATH[trialState.spurnedGod.id].name}`; el.style.display = ''; }
+  else if (anchorWave) { el.innerHTML = `<i class="ico" style="--i:url('/ui/icons/x_cursed.svg');color:#ff4080"></i>Mỏ Neo: ${ANCHOR_TYPES[anchorWave]?.name || ''}`; el.style.display = ''; }
+  else if (event) { el.innerHTML = `<i class="ico" style="--i:url('/ui/icons/${event.icon}.svg');color:${event.color}"></i>${event.name}`; el.style.display = ''; }
   else if (challengeWave) { el.innerHTML = '<i class="ico" style="--i:url(\'/ui/icons/x_skull-signet.svg\');color:#ff6a4a"></i>Thử thách'; el.style.display = ''; }
   else el.style.display = 'none';
 }
@@ -408,11 +563,35 @@ function onWaveCleared() {
   meta.stats.maxWave = Math.max(meta.stats.maxWave || 0, wave);
   setDark(false);
   event = null;
-  renderEvent();
   if (arenaWave) { arenaWave = false; addGold(50); addSouls(15); showBanner('Chiến thắng Đấu Trường!', '+50 vàng · +15 Hồn Thép', 2.4, '#ffb040'); }
+  // Thưởng phòng Song Tượng Thần (Trial of the Gods): nhận nốt thẻ của vị thần bị từ chối + tăng cơ hội Song Thần!
+  if (trialState) {
+    const sp = trialState.spurnedGod;
+    const free = BOONS.filter((b) => b.god === sp.id && !player.perkLv[b.id]);
+    const b = free[Math.floor(Math.random() * free.length)];
+    if (b) {
+      player.perkLv[b.id] = 1;
+      b.apply(player.base, 1, player);
+      player.recalc();
+      toast(b.icon, `Chinh phục ${sp.name}: ${b.name}`, b.desc(1));
+    }
+    trialDuoBoost = true;
+    trialState = null;
+    showBanner('Vượt Qua Song Tượng Thần!', 'Nhận phước cả 2 vị thần · mở mạnh thẻ Song Thần', 2.6, '#ffe060');
+  }
+  // Thưởng phá Mỏ Neo Boss
+  if (anchorWave) {
+    const aName = ANCHOR_TYPES[anchorWave]?.name || 'Mỏ Neo';
+    anchorWave = null;
+    const rId = randomRune();
+    loot.spawnPickup('rune', 0, -2, RUNES[rId]);
+    showBanner(`Đã Phá ${aName}!`, 'Boss cuối tầng đã bị suy yếu · rơi 1 Cổ Ngữ', 2.6, '#ff60a0');
+  }
+  renderEvent();
   // Phần thưởng đã chọn từ bệ
   if (nextReward) { grantReward(nextReward); nextReward = null; }
   if (challengeWave) { challengeWave = false; rewards.spawnChest(0, -3); }
+  boostedNext = false; cooledNext = false;
   if (run.bossrush && wave % 5 === 0) { pendingLevels += 2; player.heal(Math.round(player.maxHp * 0.4)); if (!choosing) openLevelUp(); }
   if (wave % 5 === 0) {
     exitOpen = true;
@@ -461,9 +640,15 @@ function offerRewards() {
 }
 
 function chooseReward(kind) {
-  // ghi lại đường đi trên bản đồ tầng
+  // ghi lại đường đi và lan truyền hiệu ứng sang các nút nối tiếp trên bản đồ tầng (cơ chế #7)
   const step = (wave - 1) % 5, ch = choicesAt(floorMap, step);
-  if (ch) { const idx = ch.find((i) => floorMap.layers[step][i].kind === kind); if (idx != null) floorMap.path[step] = idx; }
+  let chosenNode = null;
+  if (ch) {
+    const idx = ch.find((i) => floorMap.layers[step][i].kind === kind);
+    if (idx != null) chosenNode = propagateChoice(floorMap, step, idx);
+  }
+  boostedNext = !!chosenNode?.boosted;
+  cooledNext = !!chosenNode?.cooled;
   rewards.clearPedestals();
   choosingReward = false;
   play('uiConfirm');
@@ -472,18 +657,26 @@ function chooseReward(kind) {
     return;
   }
   if (kind === 'event') { openEventRoom(); return; }
+  if (kind === 'trial') { openTrialRoom(); return; }
   if (kind === 'treasure') {
     // Phòng kho báu: 2 rương + vàng rải khắp nơi, không có quái
     rewards.spawnChest(-3, -4); rewards.spawnChest(3, -4);
-    for (let i = 0; i < 16; i++) { const [x, z] = spawnPos(1.5); loot.spawnPickup('gold', x, z, 4); }
+    for (let i = 0; i < (boostedNext ? 22 : 16); i++) { const [x, z] = spawnPos(1.5); loot.spawnPickup('gold', x, z, 4); }
     showBanner('Phòng Kho Báu', 'Mở rương (E) và nhặt vàng trước khi đợt sau tới', 2.4, '#ffd060');
     intermission = 15;
+    return;
+  }
+  if (kind === 'anchor') {
+    anchorWave = chosenNode?.anchorType || 'aegis';
+    showBanner('Mỏ Neo Boss: ' + (ANCHOR_TYPES[anchorWave]?.name || ''), 'Đợt sau sẽ phá Mỏ Neo này để làm yếu Boss!', 2.2, '#ff4080');
+    intermission = 2.5;
+    renderNextReward();
     return;
   }
   if (kind === 'challenge') challengeWave = true;
   else nextReward = kind;
   const r = REWARDS[kind];
-  showBanner(r.name, kind === 'challenge' ? r.desc : 'Nhận khi dọn sạch đợt tới', 1.8, '#' + r.color.toString(16).padStart(6, '0'));
+  showBanner(r.name + (boostedNext ? ' ★' : ''), kind === 'challenge' ? r.desc : (boostedNext ? 'Nút cường hóa: phần thưởng tốt hơn!' : 'Nhận khi dọn sạch đợt tới'), 1.8, '#' + r.color.toString(16).padStart(6, '0'));
   intermission = 2.5;
   renderNextReward();
 }
@@ -492,33 +685,40 @@ function renderNextReward() {
   const el = $('next-reward');
   if (nextReward) {
     const r = REWARDS[nextReward];
-    el.innerHTML = `<i class="ico" style="--i:url('/ui/icons/${r.icon}.svg');color:#${r.color.toString(16).padStart(6, '0')}"></i>Phần thưởng: ${r.name}`;
+    el.innerHTML = `<i class="ico" style="--i:url('/ui/icons/${r.icon}.svg');color:#${r.color.toString(16).padStart(6, '0')}"></i>Phần thưởng: ${r.name}${boostedNext ? ' ★' : ''}`;
     el.style.display = '';
   } else el.style.display = 'none';
 }
 
 function grantReward(kind) {
   const at = player.pos.clone().add(new THREE.Vector3(0, 0, -2));
-  if (kind === 'weapon') { const w = randomWeapon(wave + 3); w.rarity = Math.min(2, Math.max(1, w.rarity + 1)); w.affixes = rollAffixes(w.rarity); loot.drop(w, at.x, at.z); }
-  else if (kind === 'perk') { pendingLevels++; if (!choosing) openLevelUp(); }
-  else if (kind === 'souls') addSouls(25);
-  else if (kind === 'gold') addGold(40);
-  else if (kind === 'potion') player.heal(player.maxHp);
+  const mul = boostedNext ? 1.5 : 1;
+  if (kind === 'weapon') {
+    const w = randomWeapon(wave + (boostedNext ? 5 : 3));
+    w.rarity = Math.min(2, Math.max(cooledNext ? 0 : 1, w.rarity + (boostedNext ? 1 : cooledNext ? 0 : 1)));
+    w.affixes = rollAffixes(w.rarity);
+    loot.drop(w, at.x, at.z);
+  } else if (kind === 'perk') { pendingLevels++; if (!choosing) openLevelUp(); }
+  else if (kind === 'souls') addSouls(Math.round(25 * mul));
+  else if (kind === 'gold') addGold(Math.round(40 * mul));
+  else if (kind === 'potion') { player.heal(player.maxHp); addFlame(25); }
   else if (kind === 'relic') rewards.spawnChest(at.x, at.z);
   nextReward = null;
   renderNextReward();
 }
 
 function addSouls(v) {
-  v = Math.max(1, Math.round(v * (1 + (meta.up.souls || 0) * 0.2) * soulMult()));
+  const emberMul = flameTier() === 'ember' ? 2 : 1;
+  v = Math.max(1, Math.round(v * (1 + (meta.up.souls || 0) * 0.2) * soulMult() * emberMul));
   runSouls += v;
   meta.souls += v;
   saveMeta(meta);
 }
 function addScrap(v) { if (v > 0 && player.hasRelic('greed')) v *= 2; scrap += v; $('scrap').textContent = scrap; }
 function addGold(v) {
-  v = Math.round(v * (player.hasRelic('goldbag') ? 1.5 : 1) * (player.stats.hoard ? 2 : 1));
-  gold += v;
+  const emberMul = v > 0 && flameTier() === 'ember' ? 2 : 1;
+  v = Math.round(v * (v > 0 && player.hasRelic('goldbag') ? 1.5 : 1) * (v > 0 && player.stats.hoard ? 2 : 1) * emberMul);
+  gold = Math.max(0, gold + v);
 }
 
 function grantRelic() {
@@ -538,18 +738,22 @@ function openShopRoom() {
   inShop = true;
   rewards.spawnMerchant(0, -7);
   const R = rngFor(3);
+  const disc = boostedNext ? 0.7 : 1;
+  const p = (v) => Math.max(10, Math.round(v * disc));
   const w1 = randomWeapon(wave + 2, R); w1.rarity = Math.max(1, w1.rarity); w1.affixes = rollAffixes(w1.rarity, [], R);
   const w2 = randomWeapon(wave + 4, R); w2.rarity = 2; w2.affixes = rollAffixes(2, [], R);
+  const r1 = RUNES[randomRune(R)];
   shopItems = [
-    { id: 'potion', name: 'Bình máu lớn', icon: 'potion', desc: 'Hồi 50% máu', price: 30 },
-    { id: 'perk', name: 'Thẻ năng lực', icon: 'level', desc: 'Lên thêm 1 cấp', price: 60 },
-    { id: 'weapon', name: weaponName(w1), icon: null, weapon: w1, desc: RARITY[w1.rarity].name, price: 55 },
-    { id: 'weapon', name: weaponName(w2), icon: null, weapon: w2, desc: RARITY[2].name, price: 120 },
-    { id: 'relic', name: 'Di vật bí ẩn', icon: 'x_locked-chest', desc: 'Một di vật ngẫu nhiên', price: 110 },
-    { id: 'maxhp', name: 'Áo giáp vá', icon: 'p_hp', desc: '+15 máu tối đa', price: 70 },
-    { id: 'affix', name: 'Đá phụ tố', icon: 'x_rune', desc: 'Thêm 1 phụ tố cho vũ khí đang cầm', price: 80 },
+    { id: 'potion', name: 'Bình máu lớn', icon: 'potion', desc: 'Hồi 50% máu · +20 Ánh Lửa', price: p(30), dark: 20 },
+    { id: 'perk', name: 'Thẻ năng lực', icon: 'level', desc: 'Lên thêm 1 cấp', price: p(60), dark: 30 },
+    { id: 'rune', name: r1.name, icon: r1.icon, runeId: r1.id, desc: `Cổ Ngữ: ${r1.desc}`, price: p(45), dark: 25 },
+    { id: 'weapon', name: weaponName(w1), icon: null, weapon: w1, desc: RARITY[w1.rarity].name, price: p(55), dark: 30 },
+    { id: 'weapon', name: weaponName(w2), icon: null, weapon: w2, desc: RARITY[2].name, price: p(120), dark: 45 },
+    { id: 'relic', name: 'Di vật bí ẩn', icon: 'x_locked-chest', desc: 'Một di vật ngẫu nhiên', price: p(110), dark: 40 },
+    { id: 'maxhp', name: 'Áo giáp vá', icon: 'p_hp', desc: '+15 máu tối đa', price: p(70), dark: 30 },
+    { id: 'affix', name: 'Đá phụ tố', icon: 'x_rune', desc: 'Thêm 1 phụ tố cho vũ khí đang cầm', price: p(80), dark: 35 },
   ].filter((it) => !(hasCurse('nopot') && it.id === 'potion'));
-  showBanner('Thương nhân', 'Lại gần và bấm E để mua đồ', 2.2, '#ffa040');
+  showBanner('Thương nhân' + (boostedNext ? ' (Giảm giá 30% ★)' : ''), 'Lại gần và bấm E để mua bằng Vàng hoặc Tha Hóa', 2.4, '#ffa040');
   intermission = Infinity;
 }
 
@@ -561,23 +765,29 @@ function renderShop() {
     return `<div class="shop-item${it.sold ? ' sold' : ''}">
       <div class="si-icon">${icon}</div>
       <div class="si-info"><h4 style="color:${color}">${it.name} ${it.weapon ? weaponIcons(it.weapon) : ''}</h4><p>${it.desc}${it.weapon && it.weapon.affixes.length ? ' · ' + affixText(it.weapon).join(', ') : ''}</p></div>
-      <button class="btn buy" data-i="${i}" ${it.sold || gold < it.price ? 'disabled' : ''}>${it.sold ? 'Đã mua' : `<i class="ico ico-gold"></i>${it.price}`}</button>
+      <div class="si-btns">
+        <button class="btn buy" data-i="${i}" ${it.sold || gold < it.price ? 'disabled' : ''}>${it.sold ? 'Đã mua' : `<i class="ico ico-gold"></i>${it.price}`}</button>
+        ${it.sold ? '' : `<button class="btn dark-btn" data-dark="${i}" title="Mua miễn phí nhưng tăng Tha Hóa">+${it.dark || 30} Tha Hóa</button>`}
+      </div>
     </div>`;
   }).join('');
-  for (const b of $('shop-items').querySelectorAll('.buy')) b.onclick = () => buyItem(Number(b.dataset.i));
+  for (const b of $('shop-items').querySelectorAll('.buy')) b.onclick = () => buyItem(Number(b.dataset.i), false);
+  for (const b of $('shop-items').querySelectorAll('[data-dark]')) b.onclick = () => buyItem(Number(b.dataset.dark), true);
 }
 
-function buyItem(i) {
+function buyItem(i, useDark = false) {
   const it = shopItems[i];
-  if (!it || it.sold || gold < it.price) { play('uiBack'); return; }
-  gold -= it.price;
+  if (!it || it.sold || (!useDark && gold < it.price)) { play('uiBack'); return; }
+  if (useDark) addCorruption(it.dark || 30, player.pos, scene);
+  else gold -= it.price;
   it.sold = true;
   play('pickup');
-  if (it.id === 'potion') player.heal(Math.round(player.maxHp * 0.5));
+  if (it.id === 'potion') { player.heal(Math.round(player.maxHp * 0.5)); addFlame(20); }
   else if (it.id === 'perk') { pendingLevels++; }
+  else if (it.id === 'rune') { pickRune(it.runeId); }
   else if (it.id === 'weapon') { const old = player.pickUp(it.weapon); recordCodex(it.weapon); if (old) loot.drop(old, player.pos.x, player.pos.z + 1.5); }
   else if (it.id === 'relic') grantRelic();
-  else if (it.id === 'maxhp') { player.maxHp += 15; player.hp += 15; }
+  else if (it.id === 'maxhp') { player.bonusMaxHp = (player.bonusMaxHp || 0) + 15; player.recalc(); player.hp = Math.min(player.maxHp, player.hp + 15); }
   else if (it.id === 'affix') { const w = player.weapon; w.affixes = (w.affixes || []).concat(rollAffixes(1, w.affixes || [])); player.equip(player.slot); }
   renderShop();
   renderSlots();
@@ -605,6 +815,18 @@ function restart() {
   clearFx();
   clearProjectiles();
   clearAbilities();
+  clearRunes();
+  resetFlameState();
+  runeBag = [];
+  bossCores = [];
+  trialState = null;
+  anchorWave = null;
+  boostedNext = false;
+  cooledNext = false;
+  trialDuoBoost = false;
+  reinforceLeft = 0;
+  run.bossDeck = null;
+  echoMgr?.clear();
   loot.clear();
   rewards.clear();
   if (run.daily) setSeed(daySeed());
@@ -634,6 +856,7 @@ function restart() {
   buildWorld(scene, 1);
   buildHazards(scene, 1, rngFor(4));
   maybeSecret();
+  maybeSpawnEchoGrave();
   choosing = false;
   choosingReward = false;
   nextReward = null;
@@ -642,9 +865,11 @@ function restart() {
   event = null;
   ctx.enemySpeed = hasCurse('fast') ? 1.2 : 1;
   setDark(false);
+  setFlameLevel(flameState.flame);
   renderEvent();
   renderNextReward();
-  for (const id of ['levelup', 'boss-bar', 'gameover', 'pause', 'howto', 'shop']) show(id, false);
+  renderFlameHud();
+  for (const id of ['levelup', 'boss-bar', 'gameover', 'pause', 'howto', 'shop', 'anvil-modal']) show(id, false);
   wave = 0;
   kills = 0;
   intermission = 1;
@@ -668,7 +893,7 @@ function setPaused(p) {
   if (!p) show('howto', false);
   setMode(p ? 'menu' : 'playing');
 }
-const inShopOpen = () => !$('shop').classList.contains('hidden') || !$('eventroom').classList.contains('hidden') || !$('floormap').classList.contains('hidden');
+const inShopOpen = () => !$('shop').classList.contains('hidden') || !$('eventroom').classList.contains('hidden') || !$('floormap').classList.contains('hidden') || isAnvilOpen();
 
 // ================= Xuống tầng =================
 function descend() {
@@ -677,6 +902,12 @@ function descend() {
   setTimeout(() => {
     floor++;
     bossBane = 0;
+    trialState = null;
+    anchorWave = null;
+    boostedNext = false;
+    cooledNext = false;
+    clearRunes();
+    echoMgr?.clear();
     meta.stats.maxFloor = Math.max(meta.stats.maxFloor || 0, floor);
     if (floor === 5 && !run.daily && (run.depth || 0) >= (meta.depthMax || 0) && (meta.depthMax || 0) < 10) {
       meta.depthMax = (run.depth || 0) + 1;
@@ -694,6 +925,8 @@ function descend() {
     const theme = buildWorld(scene, floor);
     buildHazards(scene, floor, rngFor(4));
     maybeSecret();
+    maybeSpawnEchoGrave();
+    addFlame(30);
     player.pos.set(0, 0, ROOM_HALF - 4);
     player.heal(Math.round(player.maxHp * 0.3));
     camera.position.copy(player.pos).add(CAM_OFFSET);
@@ -721,7 +954,7 @@ function updateArrows() {
   let used = 0;
   if (started && !player.dead) {
     for (const e of enemies) {
-      if (e.dead || used >= 14) continue;
+      if (e.dead || used >= 24) continue;
       tmpV.set(e.pos.x, 1, e.pos.z).project(camera);
       if (Math.abs(tmpV.x) < 0.95 && Math.abs(tmpV.y) < 0.92 && tmpV.z < 1) continue;
       let x = tmpV.x, y = tmpV.y;
@@ -740,6 +973,107 @@ function updateArrows() {
   for (let i = used; i < arrowPool.length; i++) arrowPool[i].style.display = 'none';
 }
 
+// ================= Radar Đấu Trường (Minimap góc phải cho bản đồ 18x18) =================
+let minimapCtx = null;
+function drawMinimap() {
+  const wrap = $('minimap-wrap');
+  const cv = $('minimap');
+  if (!wrap || !cv) return;
+  const visible = started && !player.dead;
+  wrap.classList.toggle('hidden', !visible);
+  if (!visible) return;
+  if (!minimapCtx) minimapCtx = cv.getContext('2d');
+  const g = minimapCtx;
+  const W = cv.width, H = cv.height;
+  const pad = 6, span = W - pad * 2;
+  const toX = (wx) => pad + ((wx + ROOM_HALF) / (ROOM_HALF * 2)) * span;
+  const toY = (wz) => pad + ((wz + ROOM_HALF) / (ROOM_HALF * 2)) * span;
+  const sc = span / (ROOM_HALF * 2);
+
+  g.clearRect(0, 0, W, H);
+  // Nền sàn tối
+  g.fillStyle = '#1b130e';
+  g.fillRect(0, 0, W, H);
+  g.strokeStyle = 'rgba(226, 184, 108, 0.32)';
+  g.lineWidth = 1;
+  g.strokeRect(pad, pad, span, span);
+  // Hố / Vực
+  g.fillStyle = '#070506';
+  for (const b of pits) {
+    g.fillRect(toX(b.x - b.hx), toY(b.z - b.hz), b.hx * 2 * sc, b.hz * 2 * sc);
+  }
+  // Tường thấp
+  g.fillStyle = '#6c5a4a';
+  for (const b of boxes) {
+    if (b.pit) continue;
+    g.fillRect(toX(b.x - b.hx), toY(b.z - b.hz), Math.max(2, b.hx * 2 * sc), Math.max(2, b.hz * 2 * sc));
+  }
+  // Cột đá
+  for (const p of pillars) {
+    g.fillStyle = p.destructible ? '#8f7b66' : '#584b3e';
+    g.beginPath();
+    g.arc(toX(p.x), toY(p.z), Math.max(1.8, p.r * sc), 0, Math.PI * 2);
+    g.fill();
+  }
+  // Nắp hầm xuống tầng
+  const ex = exitOpen && exitPos();
+  if (ex) {
+    g.fillStyle = '#7fd8ff';
+    g.beginPath(); g.arc(toX(ex.x), toY(ex.z), 4.5, 0, Math.PI * 2); g.fill();
+  }
+  // Đe Rèn
+  if (loot?.anvil) {
+    g.fillStyle = '#ffaa30';
+    g.fillRect(toX(loot.anvil.pos.x) - 3, toY(loot.anvil.pos.z) - 3, 6, 6);
+  }
+  // Bệ phần thưởng & Rương di vật
+  if (rewards?.pedestals?.length) {
+    g.fillStyle = '#ffe060';
+    for (const p of rewards.pedestals) {
+      g.beginPath(); g.arc(toX(p.pos.x), toY(p.pos.z), 3, 0, Math.PI * 2); g.fill();
+    }
+  }
+  if (rewards?.chests?.length) {
+    g.fillStyle = '#ffd040';
+    for (const c of rewards.chests) {
+      if (c.opened) continue;
+      g.fillRect(toX(c.pos.x) - 2.5, toY(c.pos.z) - 2.5, 5, 5);
+    }
+  }
+  // Mộ Bóng Ma Thợ Rèn
+  if (echoMgr?.grave) {
+    g.fillStyle = '#70e8ff';
+    g.beginPath(); g.arc(toX(echoMgr.grave.pos.x), toY(echoMgr.grave.pos.z), 3.5, 0, Math.PI * 2); g.fill();
+  }
+  // Quái (đỏ = thường, cam = tinh anh / Thủ lĩnh, vàng lớn = Boss)
+  for (const e of enemies) {
+    if (e.dead) continue;
+    const x = toX(e.pos.x), y = toY(e.pos.z);
+    if (e.isBoss) {
+      g.fillStyle = '#ffcf4a';
+      g.beginPath(); g.arc(x, y, 4.6, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = '#ff3a2a'; g.lineWidth = 1.4; g.stroke();
+    } else if (e.miniBoss || e.elite) {
+      g.fillStyle = '#ff9830';
+      g.beginPath(); g.arc(x, y, 2.8, 0, Math.PI * 2); g.fill();
+    } else {
+      g.fillStyle = '#ff4a3a';
+      g.beginPath(); g.arc(x, y, 2.0, 0, Math.PI * 2); g.fill();
+    }
+  }
+  // Người chơi (mũi tên trắng xanh theo hướng ngắm)
+  const px = toX(player.pos.x), py = toY(player.pos.z);
+  g.save();
+  g.translate(px, py);
+  g.rotate(-player.facing + Math.PI);
+  g.fillStyle = '#ffffff';
+  g.beginPath();
+  g.moveTo(0, -5); g.lineTo(3.5, 4); g.lineTo(0, 2); g.lineTo(-3.5, 4);
+  g.closePath();
+  g.fill();
+  g.restore();
+}
+
 // ================= Khi hạ quái =================
 function onKill(e) {
   if (e.noReward) return;
@@ -751,25 +1085,55 @@ function onKill(e) {
   if (st.killHeal) player.heal(st.killHeal);
   const dropMult = event?.id === 'bloodmoon' ? 2 : 1;
   // Hồn Thép & vàng
-  if (e.isBoss) { for (let i = 0; i < 8; i++) loot.spawnPickup('soul', e.pos.x, e.pos.z, 5); for (let i = 0; i < 6; i++) loot.spawnPickup('gold', e.pos.x, e.pos.z, 6); }
-  else {
+  if (e.isBoss) {
+    const multA = e.empoweredAnchors ? 2 : 1;
+    for (let i = 0; i < 8 * multA; i++) loot.spawnPickup('soul', e.pos.x, e.pos.z, 5);
+    for (let i = 0; i < 6 * multA; i++) loot.spawnPickup('gold', e.pos.x, e.pos.z, 6);
+  } else {
     loot.spawnPickup('soul', e.pos.x, e.pos.z, Math.ceil((e.xp || 1) / 2) + (player.hasRelic('skull') ? 1 : 0));
     if (Math.random() < 0.55 * dropMult) loot.spawnPickup('gold', e.pos.x, e.pos.z, (e.elite ? 5 : 1) + Math.floor(Math.random() * 2));
+  }
+  // Ánh Lửa hồi nhẹ khi hạ quái; Boss hạ -> Thanh Tẩy 1 lời nguyền & hồi +50 Lửa
+  addFlame(e.isBoss ? 50 : e.elite ? 6 : 2.5);
+  if (e.isBoss) {
+    purgeCurse(player.pos, scene);
+    if (e.empoweredAnchors) rewards.spawnChest(e.pos.x - 2, e.pos.z);
+  }
+  // Lời nguyền Hồn Nổ (volatile_soul): quái chết nổ bóng tối
+  if (hasDynCurse('volatile_soul') && !e.isBoss) {
+    explosion(e.pos, 2.5, 0x9a40ff, { smoke: false, scorch: false, core: 0xe0b0ff });
+    combat.aoe(e.pos, 2.5, Math.round(18 * player.stats.dmg), { element: 'none', element2: null }, 8, { player: 10, surface: false });
+  }
+  // Mạch Cổ Ngữ (Ấn Kết Liễu) & Thức Tỉnh Vũ Khí
+  fireRunes(player, 'kill', e.pos, player.aimDir(), Math.round(24 * player.dmgMul()));
+  progressAwakening(player, 'kill');
+  // Bóng Ma Thợ Rèn bị hạ -> rơi Quả Cầu Hồn Khí để chọn Di Sản!
+  if (e.isEcho && e.echo) {
+    removeEcho(meta, e.echo.id);
+    saveMeta(meta);
+    echoMgr?.spawnSoulOrb(e.echo, e.pos);
+    showBanner('Hạ Bóng Ma Thợ Rèn!', 'Lại gần Quả Cầu Hồn Khí (E) để đoạt di sản', 2.6, '#9fe8ff');
   }
   // Bình máu
   const potionChance = hasCurse('nopot') || deep(7) ? (e.isBoss && !deep(7) ? 1 : 0) : e.isBoss ? 1 : 0.03 * (1 + st.luck) * dropMult;
   if (Math.random() < potionChance) loot.spawnPickup('potion', e.pos.x, e.pos.z);
   // Vũ khí rơi
   if (e.isBoss) {
-    const w = randomWeapon(wave); w.rarity = Math.max(2, w.rarity); w.affixes = rollAffixes(w.rarity);
-    loot.drop(w, e.pos.x, e.pos.z);
-    rewards.spawnChest(e.pos.x + 2, e.pos.z);
-    meta.stats.bossKills = (meta.stats.bossKills || 0) + 1;
-    runInfo().bossKilled = true;
-    run.bossKilled = true;
-    showBanner('Đã hạ Boss!', 'Rơi vũ khí Sử thi và rương di vật', 2.5, '#ffcf4a');
-    player.slowmoT = 1.6;
-    slowmoReal = 1.6;
+    const otherBossAlive = enemies.some((o) => o !== e && o.isBoss && !o.dead);
+    if (otherBossAlive) {
+      showBanner('Hấp Thụ Song Sinh!', `${e.sibling?.name || 'Kẻ còn lại'} hấp thụ linh hồn đồng đội và cuồng nộ!`, 2.6, '#ff9a3a');
+      player.slowmoT = 0.7;
+    } else {
+      const w = randomWeapon(wave); w.rarity = Math.max(2, w.rarity); w.affixes = rollAffixes(w.rarity);
+      loot.drop(w, e.pos.x, e.pos.z);
+      rewards.spawnChest(e.pos.x + 2, e.pos.z);
+      meta.stats.bossKills = (meta.stats.bossKills || 0) + 1;
+      runInfo().bossKilled = true;
+      run.bossKilled = true;
+      showBanner('Đã hạ Boss!', 'Rơi vũ khí Sử thi và rương di vật', 2.5, '#ffcf4a');
+      player.slowmoT = 1.6;
+      slowmoReal = 1.6;
+    }
   } else if (Math.random() < e.dropChance * 0.35 * (1 + st.luck) * dropMult) {
     const w = randomWeapon(wave);
     if (w.rarity < 2 && Math.random() < st.luck * 0.3) { w.rarity++; w.affixes = rollAffixes(w.rarity); }
@@ -790,10 +1154,15 @@ function onKill(e) {
   if (st.killboom && !e.isBoss) combat.fireBurst(e.pos, Math.round(10 * st.dmg));
   if (st.killinvis) player.iframes = Math.max(player.iframes, 0.6);
   if (player.weapon.legend === 'bloodfire') player.heal(3);
-  // Ngọc: tinh anh 35%, Thủ Lĩnh và boss chắc chắn rơi
-  if ((e.elite && Math.random() < 0.35) || e.miniBoss || e.isBoss) {
+  // Ngọc & Cổ Ngữ Lập Trình: tinh anh, Thủ Lĩnh và Boss rơi
+  const runeChance = (e.elite ? 0.32 : 0) * (hasDynCurse('cursed_greed') ? 2 : 1);
+  if (Math.random() < runeChance || e.miniBoss || e.isBoss) {
+    const rid = randomRune();
+    loot.spawnPickup('rune', e.pos.x, e.pos.z, RUNES[rid]);
+  }
+  if ((e.elite && Math.random() < 0.25) || e.miniBoss || e.isBoss) {
     const kinds = ['ruby', 'sapphire', 'emerald', 'topaz'];
-    loot.spawnPickup('gem', e.pos.x, e.pos.z, kinds[Math.floor(Math.random() * kinds.length)]);
+    loot.spawnPickup('gem', e.pos.x + 0.5, e.pos.z, kinds[Math.floor(Math.random() * kinds.length)]);
   }
   // Độ thuần thục vũ khí (lưu vĩnh viễn)
   const wt = player.weapon.type;
@@ -822,7 +1191,8 @@ function openLevelUp() {
   if (player.dead) return;
   if (luTitle) $('lu-title').innerHTML = luTitle;
   const nCards = meta.up.cards ? 4 : 3;
-  const gc = player.patron ? godCards(player.perkLv, player.patron) : [];
+  const gc = player.patron ? godCards(player.perkLv, player.patron, trialDuoBoost) : [];
+  if (trialDuoBoost && gc.some((c) => c.duo)) trialDuoBoost = false;
   perkChoices = [...gc, ...rollPerks(player.perkLv, nCards - gc.length)];
   if (!perkChoices.length) { pendingLevels = 0; return; }
   choosing = true;
@@ -1035,6 +1405,7 @@ function handleInteract() {
       const d = Math.round((bossFin.maxHp || bossFin.maxHpEff) * 0.07);
       bossFin.takeHit(d, new THREE.Vector3(0, 0, 1), 0, true, 'big');
       damageNumber(bossFin.pos, 'Trọng Kích!', 'react ult');
+      haptic(30);
       fxFlash(bossFin.pos.clone().setY(2), 0xffcf4a, 5, 0.25); addShake(0.7); play('hitHeavy'); player.slowmoT = 0.4;
     }
   } else if (fin) {
@@ -1047,7 +1418,10 @@ function handleInteract() {
       player.playOnce?.('2H_Melee_Attack_Chop', 0.35);
       fin.takeHit(fin.hp + 9999, new THREE.Vector3(dx / d, 0, dz / d), 10, true);
       damageNumber(fin.pos, 'Kết Liễu!', 'react ult');
-      if (!player.hasRelic('fury')) player.heal(Math.round(player.maxHp * 0.06));
+      haptic(26);
+      const finHealMul = player.weapon?.corrupted === 'c_finisher' ? 2 : 1;
+      if (!player.hasRelic('fury')) player.heal(Math.round(player.maxHp * 0.06 * finHealMul));
+      addFlame(18);
       player.gainRage(12);
       player.iframes = Math.max(player.iframes, 0.35);
       player.slowmoT = Math.max(player.slowmoT, 0.25);
@@ -1072,14 +1446,37 @@ function handleInteract() {
     interactLabel = 'Mua bán';
     text = '<span class="keycap">E</span> Mua bán với <b>thương nhân</b>';
     if (E) { renderShop(); show('shop', true); setMode('menu'); play('uiOpen'); }
+  } else if (echoMgr?.nearOrb(player.pos)) {
+    const orb = echoMgr.nearOrb(player.pos);
+    interactLabel = 'Di Sản';
+    text = `<span class="keycap">E</span> Nhận <b>Di Sản Hồn Khí</b> <span class="muted" style="font-size:13px">${orb.echo.wName}</span>`;
+    if (E) { const ec = echoMgr.consumeOrb(); if (ec) openEchoReward(ec); }
+  } else if (echoMgr?.nearGrave(player.pos)) {
+    const gr = echoMgr.nearGrave(player.pos);
+    interactLabel = 'Đánh thức';
+    text = `<span class="keycap">E</span> Đánh thức <b>Bóng Ma Thợ Rèn</b> <span class="muted" style="font-size:13px">giữ ${gr.echo.wName}</span>`;
+    if (E) {
+      const aw = echoMgr.awakenGrave();
+      if (aw) {
+        const fe = new FallenEcho(scene, aw.pos.x, aw.pos.z, aw.echo, floor);
+        fe.spawnT = 0;
+        enemies.push(fe);
+        ctx.enemies = enemies;
+        showBanner('Bóng Ma Thợ Rèn Thức Giấc!', `Đối đầu bản sao cũ cầm ${aw.echo.wName}`, 2.6, '#70e0ff');
+      }
+    }
   } else if ((atAnvil || (loot.anvil && Math.hypot(loot.anvil.pos.x - player.pos.x, loot.anvil.pos.z - player.pos.z) < 2)) && repairAtAnvil() && false) {
   } else if (atAnvil || (loot.anvil && Math.hypot(loot.anvil.pos.x - player.pos.x, loot.anvil.pos.z - player.pos.z) < 2 && !loot.anvil.forging)) {
-    // Cường hóa (F): tốn Mảnh Thép, không giới hạn số lần ở đe
+    // Cường hóa nhanh (F) + Mở Xưởng Đe Rèn Tương Tác (E)
     const cw = player.weapon;
-    const canPlus = cw && (cw.plus || 0) < MAX_PLUS;
+    const canPlus = cw && !cw.corrupted && (cw.plus || 0) < MAX_PLUS;
     canEnhance = canPlus;
     const cost = canPlus ? Math.max(1, Math.round(enhanceCost(cw) * (1 - 0.1 * vil('smith')))) : 0;
-    const enh = canPlus ? ` <span class="sep">·</span> <span class="keycap">F</span> Cường hóa <b>+${(cw.plus || 0) + 1}</b> <span class="${scrap >= cost ? '' : 'muted'}">(${cost} <i class="ico ico-scrap"></i>)</span>` : ' <span class="sep">·</span> <span class="muted">Đã cường hóa tối đa</span>';
+    const enh = cw?.corrupted
+      ? ' <span class="sep">·</span> <span class="muted">Đã Hắc Hóa</span>'
+      : canPlus
+        ? ` <span class="sep">·</span> <span class="keycap">F</span> Cường hóa <b>+${(cw.plus || 0) + 1}</b> <span class="${scrap >= cost ? '' : 'muted'}">(${cost} <i class="ico ico-scrap"></i>)</span>`
+        : ' <span class="sep">·</span> <span class="muted">Đã cường hóa tối đa</span>';
     if (pressed.has('KeyF') && canPlus) {
       if (scrap >= cost) {
         addScrap(-cost);
@@ -1092,31 +1489,9 @@ function handleInteract() {
         showBanner(weaponName(cw), `Cường hóa +${cw.plus} · +${cw.plus * 12}% sát thương`, 1.6, '#ffcf4a');
       } else { play('uiBack'); showBanner('Thiếu Mảnh Thép', `Cần ${cost}, đang có ${scrap}. Phân rã vũ khí thừa bằng phím X`, 1.6, '#c9c9c9'); }
     }
-    if (!atAnvil) text = `<i class="ico ico-anvil"></i> Đe đã dùng để rèn${enh}`;
-    else if (player.weapons.length < 2) text = `<i class="ico ico-anvil"></i> Cần <b>2 vũ khí</b> để rèn${enh}`;
-    else {
-      interactLabel = 'Rèn';
-      const preview = forgeWeapons(player.weapons[player.slot], player.weapons[1 - player.slot], player.hasRelic('gauntlet') ? 1 : 0);
-      const recipe = weaponsMod.applyRecipe(preview, player.weapons[player.slot], player.weapons[1 - player.slot]);
-      text = `<span class="keycap">E</span> Rèn thành <img src="${weaponIcon(preview)}" width="30" height="30" alt=""><span style="color:${RARITY[preview.rarity].css}">${weaponName(preview)}</span>${weaponIcons(preview)}${enh}`;
-      if (E) {
-        const a = player.weapons[player.slot], b = player.weapons[1 - player.slot];
-        const result = forgeWeapons(a, b, player.hasRelic('gauntlet') ? 1 : 0);
-        result.plus = Math.floor(((a.plus || 0) + (b.plus || 0)) / 2);   // giữ lại một nửa cấp cường hóa
-        result.gems = [...(a.gems || []), ...(b.gems || [])].slice(0, weaponsMod.socketsOf(result) + 1);
-        if (weaponsMod.applyRecipe(result, a, b)) setTimeout(() => toast('x_sword-stone', 'Công thức huyền thoại!', result.title + ': ' + result.legendText), 900);
-        loot.anvilUses = (loot.anvilUses || 1) - 1;
-        const keep = loot.anvilUses > 0;
-        loot.startForge(() => {
-          player.setWeapons([result], 0);
-          recordCodex(result);
-          if (result.rarity === 3) meta.stats.legendary = (meta.stats.legendary || 0) + 1;
-          showBanner(weaponName(result), `${RARITY[result.rarity].name} · ${affixText(result).join(' · ') || 'đã rèn xong!'}`, 2.8, RARITY[result.rarity].css);
-          if (keep && loot.anvil) { loot.anvil.used = false; }
-          checkAchievements();
-        });
-      }
-    }
+    interactLabel = 'Xưởng Đe';
+    text = `<span class="keycap">E</span> Mở <b>Xưởng Đe Rèn</b> <span class="muted" style="font-size:13px">3 Khuôn · Tôi Quá Tải · Cổ Ngữ (${runeBag.length})${bossCores.length ? ' · Lõi Boss!' : ''}</span>${enh}`;
+    if (E) openAnvilModal();
   } else if (drop) {
     const w = drop.weapon;
     const verb = player.weapons.length < 2 ? 'Nhặt' : 'Đổi lấy';
@@ -1136,13 +1511,26 @@ function handleInteract() {
       if (old) loot.drop(old, player.pos.x, player.pos.z);
     }
   }
-  if (phoneInput.matches) {
-    const action = touchActions.KeyE;
-    action.hidden = !interactLabel;
-    if (interactLabel && action.textContent !== interactLabel) action.textContent = interactLabel;
-    touchActions.KeyX.hidden = !drop;
-    touchActions.KeyF.hidden = !canEnhance;
-    touchActions.KeyQ.hidden = player.weapons.length < 2;
+  const touchInteract = $('touch-interact');
+  if (touchInteract) {
+    touchInteract.hidden = !interactLabel;
+    const isUrgent = !!(bossFin || fin);
+    touchInteract.classList.toggle('urgent', isUrgent);
+    const lbl = $('touch-interact-lbl');
+    if (lbl && interactLabel && lbl.textContent !== interactLabel) lbl.textContent = interactLabel;
+    const ico = $('touch-interact-ico');
+    if (ico && interactLabel) {
+      const iName = isUrgent ? 'x_skull-signet'
+        : interactLabel === 'Xưởng Đe' ? 'anvil'
+          : interactLabel === 'Mở rương' ? 'x_locked-chest'
+            : interactLabel === 'Mua bán' ? 'x_shop'
+              : interactLabel === 'Xuống tầng' ? 'upgrade'
+                : 'x_sword-stone';
+      ico.style.setProperty('--i', `url('/ui/icons/${iName}.svg')`);
+    }
+    if (touchActions.KeyX) touchActions.KeyX.hidden = !drop;
+    if (touchActions.KeyF) touchActions.KeyF.hidden = !canEnhance;
+    if (touchActions.KeyQ) touchActions.KeyQ.hidden = player.weapons.length < 2 && !player.weapon?.altForm;
   }
   hud.prompt.innerHTML = text;
   hud.prompt.classList.toggle('show', !!text);
@@ -1222,7 +1610,16 @@ function update(realDt, render = true) {
 
     updateProjectiles(dt);
     updateAbilities(dt);
+    updateRunes(dt);
     updateHazards(dt, event?.id === 'firerain');
+    // Cơn Thịnh Nộ của vị thần bị từ chối trong Song Tượng Thần (cơ chế #7)
+    if (trialState && enemies.some((e) => e.alive)) {
+      tickGodWrath(trialState.spurnedGod.id, dt, trialState.wrathState, scene, player, enemies);
+    }
+    // Ánh Lửa giảm dần khi giao chiến (cơ chế #6)
+    if (enemies.some((e) => e.alive) && !player.dead) {
+      addFlame(-dt * (0.95 + (floor - 1) * 0.18));
+    }
 
     const born = [];
     enemies = enemies.filter((e) => {
@@ -1243,6 +1640,10 @@ function update(realDt, render = true) {
     enemies.push(...born);
     ctx.enemies = enemies;
     if (born.length || kills % 10 === 0) checkAchievements();
+    // Quân tiếp viện giữa đợt khi quái ban đầu giảm dưới ngưỡng
+    if (reinforceLeft > 0 && !player.dead && enemies.length > 0 && enemies.length <= reinforceTrigger) {
+      spawnReinforcements();
+    }
 
     // Khế Ước Máu: mất máu dần nhưng không chết
     if (player.hasRelic('pact') && !player.dead && player.hp > 1) player.hp = Math.max(1, player.hp - dt);
@@ -1276,14 +1677,13 @@ function update(realDt, render = true) {
     if (arenaT > 0 && !player.dead) {
       arenaT -= dt;
       arenaSpawn -= dt;
-      if (arenaSpawn <= 0 && enemies.length < 14) {
-        arenaSpawn = 2.2;
-        const pool = ['normal', 'big', 'lava', 'minion', 'bomber', 'archer', 'shield', 'wraith', 'assassin'];
-        const make = { minion: Minion, bomber: Bomber, archer: Archer, shield: ShieldBearer, wraith: Wraith, assassin: Assassin };
-        for (let k = 0; k < 2; k++) {
-          const kind = pool[Math.floor(Math.random() * Math.min(pool.length, 4 + wave))];
-          const [x, z] = spawnPos(7);
-          const e = make[kind] ? new make[kind](scene, x, z) : new Slime(scene, x, z, kind);
+      if (arenaSpawn <= 0 && enemies.length < 22) {
+        arenaSpawn = 2.0;
+        const pool = ['normal', 'goblin', 'spider', 'viper', 'minion', 'orc', 'imp', 'wasp', 'bomber', 'archer', 'shield', 'lancer', 'pyro', 'frostguard', 'berserker', 'crab', 'drake', 'glub', 'wraith', 'assassin'];
+        for (let k = 0; k < 3; k++) {
+          const kind = pool[Math.floor(Math.random() * Math.min(pool.length, 6 + wave * 2))];
+          const [x, z] = spawnPos(8);
+          const e = MAKE_ENEMY[kind] ? new MAKE_ENEMY[kind](scene, x, z) : new Slime(scene, x, z, kind);
           addEnemy(e);
         }
         ctx.enemies = enemies;
@@ -1304,12 +1704,20 @@ function update(realDt, render = true) {
 
     loot.update(dt, camera, player, time);
     rewards.update(dt, camera, time, player.pos);
+    echoMgr?.update(dt, camera, time, player.pos);
     updateEliteLabels(enemies, camera);
     for (const p of loot.updatePickups(dt, player, player.stats.magnet)) {
       if (p.kind === 'soul') { addSouls(p.value); play('drop', { vol: 0.6, rate: 1.4 }); }
-      else if (p.kind === 'gold') { addGold(p.value); play('drop', { vol: 0.5, rate: 1.8 }); }
-      else if (p.kind === 'potion') { if (!player.hasRelic('fury')) player.heal(25); play('heal'); }
-      else if (p.kind === 'gem') pickGem(p.value);
+      else if (p.kind === 'gold') {
+        addGold(p.value);
+        if (hasDynCurse('blood_gold') && !player.hasRelic('fury') && player.weapon?.corrupted !== 'c_finisher') player.heal(2);
+        play('drop', { vol: 0.5, rate: 1.8 });
+      } else if (p.kind === 'potion') {
+        if (!player.hasRelic('fury') && player.weapon?.corrupted !== 'c_finisher') player.heal(25);
+        play('heal');
+      } else if (p.kind === 'gem') pickGem(p.value);
+      else if (p.kind === 'rune') pickRune(typeof p.value === 'string' ? p.value : p.value?.id);
+      else if (p.kind === 'core') pickCore(typeof p.value === 'string' ? p.value : p.value?.id);
       else if (p.kind === 'scrap') { addScrap(p.value); play('pickup', { vol: 0.35, rate: 1.6 }); }
     }
   }
@@ -1376,21 +1784,90 @@ function updateHud(realDt) {
   $('special-ring').classList.toggle('ready', spP >= 1 && !player.boomerangOut);
   $('rage-fill').style.width = player.rage + '%';
   $('rage').classList.toggle('full', player.rage >= 100);
+  // Đồng bộ vòng hồi chiêu, Nộ & Nhiệt Lưỡi trực tiếp lên cụm nút cảm ứng
+  const tDash = $('touch-dash');
+  if (tDash) {
+    const dashCost = hasDynCurse('shadow_step') ? 30 : 22;
+    tDash.style.setProperty('--p', Math.max(0, dashP).toFixed(3));
+    tDash.classList.toggle('ready', player.dashStock > 0 && player.stamina >= dashCost);
+    tDash.classList.toggle('no-stam', player.stamina < dashCost);
+    const ds = $('touch-dash-stock');
+    if (ds) ds.textContent = player.stats.dashCharges > 1 ? '×' + player.dashStock : '';
+  }
+  const cw = player.weapon;
+  const cwHz = cw ? player.heatZone(cw) : 'cold';
+  const cwHot = cwHz === 'hot' || cwHz === 'critical';
+  const tSp = $('touch-special');
+  if (tSp) {
+    tSp.style.setProperty('--p', Math.max(0, spP).toFixed(3));
+    tSp.classList.toggle('ready', spP >= 1 && !player.boomerangOut && player.stamina >= 18);
+    tSp.classList.toggle('hot', cwHot);
+  }
+  const tUlt = $('touch-ult');
+  if (tUlt) {
+    tUlt.style.setProperty('--p', Math.min(1, player.rage / 100).toFixed(3));
+    tUlt.classList.toggle('full', player.rage >= 100);
+    const pct = $('touch-ult-pct');
+    if (pct) pct.textContent = player.rage >= 100 ? 'NỘ!' : Math.floor(player.rage) + '%';
+  }
+  const tSwap = $('touch-swap');
+  if (tSwap) {
+    tSwap.classList.toggle('hot', cwHot);
+    tSwap.classList.toggle('twin', !!cw?.altForm);
+    const sl = $('touch-swap-lbl');
+    if (sl) sl.textContent = cwHot ? 'Tôi!' : cw?.altForm ? 'Biến' : 'Đổi';
+  }
   $('gold').textContent = gold;
   const alive = enemies.filter((e) => !e.dead).length;
   hud.left.textContent = alive ? `· còn ${alive} quái` : '';
   $('floor').textContent = floor;
   updateArrows();
+  drawMinimap();
   $('lvl').textContent = player.level;
   $('xp-fill').style.width = Math.min(100, (player.xp / xpForLevel(player.level)) * 100) + '%';
   $('souls').textContent = meta.souls;
-  const boss = enemies.find((e) => e.isBoss && !e.dead) || enemies.find((e) => e.miniBoss && !e.dead);
+  const activeBosses = enemies.filter((e) => e.isBoss && !e.dead);
+  const boss = activeBosses[0] || enemies.find((e) => e.miniBoss && !e.dead);
   show('boss-bar', !!boss && started);
   if (boss) {
-    $('boss-name').textContent = boss.name + (boss.stunned ? ' · Choáng!' : boss.enraged ? ' · Nổi giận!' : '');
-    $('boss-fill').style.width = Math.max(0, (boss.hp / (boss.maxHp || boss.maxHpEff)) * 100) + '%';
-    $('boss-poise').style.width = boss.poiseMax ? Math.min(100, (boss.stunned ? 100 : boss.poise / boss.poiseMax * 100)) + '%' : '0%';
+    if (activeBosses.length > 1) {
+      const hpSum = activeBosses.reduce((s, b) => s + Math.max(0, b.hp), 0);
+      const maxSum = activeBosses.reduce((s, b) => s + (b.maxHp || b.maxHpEff || 1), 0);
+      const poisePct = Math.max(...activeBosses.map((b) => (b.poiseMax ? (b.stunned ? 100 : (b.poise / b.poiseMax) * 100) : 0)));
+      const allParts = activeBosses.flatMap((b) => b.parts || []);
+      $('boss-name').textContent = 'Song Tử Tử Thần · ' + activeBosses.map((b) => b.role === 'flame' ? 'Hỏa Ảnh' : 'Lôi Ảnh').join(' & ');
+      $('boss-fill').style.width = Math.max(0, (hpSum / maxSum) * 100) + '%';
+      $('boss-poise').style.width = Math.min(100, poisePct) + '%';
+      const bp = $('boss-parts');
+      if (bp) {
+        bp.innerHTML = allParts.length
+          ? allParts.map((pt) => `<span class="bpart${pt.broken ? ' broken' : ''}"><i class="ico" style="--i:url('/ui/icons/${pt.icon}.svg')"></i>${pt.name}${pt.broken ? ' ✕' : ` ${Math.max(0, Math.ceil((pt.hp / pt.maxHp) * 100))}%`}</span>`).join('')
+          : '';
+      }
+    } else {
+      $('boss-name').textContent = boss.name + (boss.stunned ? ' · Choáng!' : boss.absorbed ? ' · Hấp Thụ!' : boss.enraged ? ' · Nổi giận!' : '');
+      $('boss-fill').style.width = Math.max(0, (boss.hp / (boss.maxHp || boss.maxHpEff)) * 100) + '%';
+      $('boss-poise').style.width = boss.poiseMax ? Math.min(100, (boss.stunned ? 100 : boss.poise / boss.poiseMax * 100)) + '%' : '0%';
+      const bp = $('boss-parts');
+      if (bp) {
+        bp.innerHTML = boss.parts?.length
+          ? boss.parts.map((pt) => `<span class="bpart${pt.broken ? ' broken' : ''}"><i class="ico" style="--i:url('/ui/icons/${pt.icon}.svg')"></i>${pt.name}${pt.broken ? ' ✕' : ` ${Math.max(0, Math.ceil((pt.hp / pt.maxHp) * 100))}%`}</span>`).join('')
+          : '';
+      }
+    }
   }
+  // Thanh Nhiệt Lưỡi thời gian thực cho từng ô vũ khí & ánh sáng Ánh Lửa
+  for (let i = 0; i < 2; i++) {
+    const w = player.weapons?.[i];
+    const bar = $('heat-bar-' + i), fill = $('heat-fill-' + i);
+    if (!w || !bar || !fill) continue;
+    fill.style.width = Math.round(w.heat || 0) + '%';
+    const hz = player.heatZone(w);
+    bar.className = 'heat-bar' + (hz !== 'cold' ? ' ' + hz : '');
+    hud.slots[i]?.classList.toggle('tempered', i === player.slot && player.temperedT > 0);
+  }
+  setFlameLevel(flameState.flame);
+  renderFlameHud();
   hurtFlash = Math.max(0, hurtFlash - realDt * 2.5);
   hud.hurt.style.opacity = hurtFlash;
   const low = !player.dead && player.hp / player.maxHp < 0.3;
@@ -1420,6 +1897,9 @@ function onDeath() {
   }
   meta.stats.deaths = (meta.stats.deaths || 0) + 1;
   meta.stats.runs = (meta.stats.runs || 0) + 1;
+  // Ghi lại Bóng Ma Thợ Rèn Kế Thừa (cơ chế #8a) từ vũ khí mạnh nhất của lượt này
+  const bestW = [...(player.weapons || [])].sort((a, b) => weaponScore(b) - weaponScore(a))[0];
+  if (bestW) recordEcho(meta, floor, run.char, bestW, player.patron);
   const rank = submitRun({ floor, wave, kills, char: run.char, depth: run.depth || 0, boss: !!run.bossKilled, date: todayKey(), mode: run.bossrush ? 'Boss Rush' : run.daily ? 'Hằng ngày' : '' });
   checkAchievements();
   saveMeta(meta);
@@ -1480,7 +1960,10 @@ function renderDaily() {
   $('daily-best').textContent = b ? `Hôm nay: đợt ${b}` : 'Chưa chơi hôm nay';
 }
 
-function leaveShopPanel() { show('shop', false); show('floormap', false); setMode('playing'); play('uiClose'); }
+function leaveShopPanel() {
+  if (isAnvilOpen()) { closeAnvilModal(); return; }
+  show('shop', false); show('floormap', false); setMode('playing'); play('uiClose');
+}
 
 // ================= Âm lượng =================
 function syncSoundUI() {
@@ -1498,6 +1981,20 @@ async function init() {
   initFx(scene, renderer);
   applyFxQuality();
   $('btn-fx').onclick = () => { setFxQuality(!fxQuality.high); applyFxQuality(); play('uiClick'); };
+  // Cài đặt điều khiển cảm ứng trong menu Tạm Dừng
+  const syncTouchSettingsUI = () => {
+    const cfg = getTouchCfg();
+    const sm = $('btn-stick-mode');
+    if (sm) sm.textContent = 'Cần di chuyển: ' + (cfg.floating ? 'Thả nổi' : 'Cố định');
+    const hp = $('btn-haptic');
+    if (hp) hp.textContent = 'Rung phản hồi: ' + (cfg.haptic ? 'Bật' : 'Tắt');
+    const sl = $('touch-alpha-slider');
+    if (sl) sl.value = String(Math.round(cfg.alpha * 100));
+  };
+  syncTouchSettingsUI();
+  if ($('btn-stick-mode')) $('btn-stick-mode').onclick = () => { setTouchCfg({ floating: !getTouchCfg().floating }); syncTouchSettingsUI(); play('uiClick'); };
+  if ($('btn-haptic')) $('btn-haptic').onclick = () => { setTouchCfg({ haptic: !getTouchCfg().haptic }); syncTouchSettingsUI(); play('uiClick'); };
+  if ($('touch-alpha-slider')) $('touch-alpha-slider').oninput = (e) => { setTouchCfg({ alpha: Number(e.target.value) / 100 }); };
   ctx.scene = scene;
   player = new Player(scene);
   player.masteryOf = (t) => masteryLv((meta.mastery || {})[t] || 0);
@@ -1527,7 +2024,8 @@ async function init() {
       }
       showBanner('Phá 3 pha lê hộ thể!', `${b.name} bất tử khi pha lê còn đứng`, 2.4, '#b070ff');
     }
-    const mk = { 0: () => Minion, 1: () => null, 2: () => Healer, 3: () => Wraith }[b.bossKind ?? 0]();
+    const mkList = [Minion, null, Healer, Wraith, FireImp, FrostDrake, GoblinRaider, VenomSpider, FrostGuard, Wraith];
+    const mk = b.bossKind === 1 ? null : (mkList[b.bossKind ?? 0] || Minion);
     for (let i = 0; i < 1 + b.phase; i++) {
       const a = Math.random() * Math.PI * 2;
       const x = b.pos.x + Math.cos(a) * 4, z = b.pos.z + Math.sin(a) * 4;
@@ -1538,10 +2036,61 @@ async function init() {
     }
     ctx.enemies = enemies;
   };
-  ctx.onReaction = () => { meta.stats.reactions = (meta.stats.reactions || 0) + 1; questProgress('react'); };
+  ctx.reactSurface = hazards.reactSurface;
+  ctx.addFlame = addFlame;
+  ctx.onReaction = (text, enemy, dmg) => {
+    meta.stats.reactions = (meta.stats.reactions || 0) + 1;
+    questProgress('react');
+    if (enemy) fireRunes(player, 'react', enemy.pos, player.aimDir(), Math.round((dmg || 18) * 1.1));
+    progressAwakening(player, 'react');
+  };
   ctx.onPerfect = () => { meta.stats.perfect = (meta.stats.perfect || 0) + 1; };
+  ctx.onPartBreak = (boss, part) => {
+    showBanner(`Đã Phá ${part.name}!`, part.core ? `Rơi ${BOSS_CORES[part.core]?.name}! Đem về Đe để rèn vũ khí Boss` : `${boss.name} bị suy yếu vĩnh viễn!`, 2.8, '#ffcf4a');
+    if (part.core && BOSS_CORES[part.core]) {
+      loot.spawnPickup('core', boss.pos.x + (Math.random() - 0.5) * 2, boss.pos.z + 1.5, BOSS_CORES[part.core]);
+    }
+    progressAwakening(player, 'stun');
+  };
+  ctx.onSpellBreak = (enemy) => {
+    const rid = randomRune();
+    if (Math.random() < 0.55) loot.spawnPickup('rune', enemy.pos.x, enemy.pos.z, RUNES[rid]);
+    else loot.spawnPickup('scrap', enemy.pos.x, enemy.pos.z, 4);
+  };
+  ctx.onBloodGoldHit = (pos) => {
+    const loss = Math.min(gold, Math.max(2, Math.floor(gold * 0.15)));
+    if (loss <= 0) return;
+    gold -= loss;
+    const chunks = Math.min(5, Math.max(1, Math.ceil(loss / 4)));
+    for (let i = 0; i < chunks; i++) loot.spawnPickup('gold', pos.x + (Math.random() - 0.5) * 2.4, pos.z + (Math.random() - 0.5) * 2.4, Math.ceil(loss / chunks));
+    damageNumber(pos, `-${loss} Vàng!`, 'burn');
+  };
+  ctx.onAwaken = (w) => {
+    renderSlots();
+    showBanner('✦ Vũ Khí Thức Tỉnh!', `${weaponName(w)} · Mở khóa Tuyệt Kỹ: ${w.awakening?.ultName}`, 3.0, '#ffe8a0');
+    toast('x_energy-sword', 'Vũ Khí Thức Tỉnh!', `${weaponName(w)} → ${w.awakening?.ultName}`);
+  };
+  flameState.onBanner = (a, b, sec, col) => showBanner(a, b, sec, col);
+  flameState.onCurseAdded = () => { player.recalc(); renderFlameHud(); };
+  flameState.onChange = () => renderFlameHud();
+
   loot = new Loot(scene);
   rewards = new Rewards(scene);
+  echoMgr = new EchoManager(scene);
+  initForgeUI({
+    player, scene, setMode, toast, addScrap,
+    getScrap: () => scrap,
+    getRuneBag: () => runeBag,
+    takeRuneFromBag: (i) => runeBag.splice(i, 1)[0],
+    returnRuneToBag: (id) => runeBag.push(id),
+    getBossCores: () => bossCores,
+    consumeBossCore: (i) => bossCores.splice(i, 1)[0],
+    canForge: () => !!loot.anvil && !loot.anvil.used && (loot.anvilUses ?? 1) > 0,
+    getEnhanceCost: (w) => Math.max(1, Math.round(enhanceCost(w) * (1 - 0.1 * vil('smith')))),
+    dynCurseName: (id) => dynCurseById(id)?.name || id,
+    refreshHud: () => { renderSlots(); renderFlameHud(); $('scrap').textContent = scrap; },
+    performAnvilForge,
+  });
   ctx.enemies = enemies;
   player.onWeaponsChanged = renderSlots;
   restart();
@@ -1549,7 +2098,7 @@ async function init() {
   camera.lookAt(0, 0, -1);
   darkLight = new THREE.PointLight(0xffd8a0, 0, 12, 1.5);
   scene.add(darkLight);
-  setDarkHook((on) => { darkLight.intensity = on ? 22 : 0; });
+  setDarkHook((k) => { darkLight.intensity = typeof k === 'number' ? k * 22 : k ? 22 : 0; });
 
   hud.startBest.textContent = best ? `Kỷ lục: đợt ${best}` : 'Chưa có kỷ lục';
   renderDaily();
@@ -1594,14 +2143,38 @@ async function init() {
 
   window.__game = {
     player, scene, camera, renderer, mouse, pad, loot, rewards, startGame, combat, weapons: weaponsMod, setPaused, meta,
+    hazards, echoMgr, flameState, RUNES, BOSS_CORES,
+    addFlame, addCorruption, purgeCurse, openAnvilModal, closeAnvilModal, openTrialRoom, pickRune, pickCore,
     get enemies() { return enemies; },
     get wave() { return wave; },
     get floor() { return floor; },
     get gold() { return gold; },
+    get scrap() { return scrap; },
+    get runeBag() { return runeBag; },
+    get bossCores() { return bossCores; },
+    get floorMap() { return floorMap; },
     get choosingReward() { return choosingReward; },
-    spawnBoss(kind = 0) { const C = [Boss, KingSlime, ArchMage, ShadowLord][kind]; const b = new C(scene, 0, -8, 1); b.spawnT = 0; b.phases = [0.5]; b.bossKind = kind; addEnemy(b); ctx.enemies = enemies; return b; },
-    spawn(name, x = 0, z = -5) { const C = { Minion, Assassin, Archer, Mage, Healer, ShieldBearer, Bomber, Wraith, Armored, Burrower, Totem }[name]; const e = C ? new C(scene, x, z) : new Slime(scene, x, z, name); e.spawnT = 0; addEnemy(e); ctx.enemies = enemies; return e; },
-    grantRelic, chooseReward, openShopRoom, descend, addGold,
+    spawnBoss(kind = 0) {
+      const list = createBosses(kind, 1);
+      for (const b of list) { b.spawnT = 0; b.phases = [0.5]; b.bossKind = kind; addEnemy(b); }
+      ctx.enemies = enemies;
+      return list.length === 1 ? list[0] : list;
+    },
+    spawn(name, x = 0, z = -5) {
+      const C = {
+        Minion, Assassin, Archer, Mage, Healer, ShieldBearer, Bomber, Wraith, Armored, Burrower, Totem,
+        PyroMage, FrostGuard, Lancer, Necromancer, Berserker,
+        OrcBrute, GoblinRaider, FireImp, FrostDrake, AcidGlub, VenomSpider, GiantWasp, Viper, StoneCrab,
+      }[name];
+      const e = C ? new C(scene, x, z) : new Slime(scene, x, z, name);
+      e.spawnT = 0; addEnemy(e); ctx.enemies = enemies; return e;
+    },
+    spawnEcho() {
+      const snap = { id: 'echo_test', floor, charId: 'knight', weapon: { type: 'greatsword', element: 'fire', element2: 'lightning', rarity: 2, affixes: ['crit'], plus: 2, title: 'Đại Kiếm Hồn Cũ' }, wName: 'Đại Kiếm Hồn Cũ' };
+      const fe = new FallenEcho(scene, 0, -5, snap, floor);
+      fe.spawnT = 0; enemies.push(fe); ctx.enemies = enemies; return fe;
+    },
+    grantRelic, chooseReward, openShopRoom, descend, addGold, addScrap,
     step(n = 1, render = false) { for (let i = 0; i < n; i++) update(1 / 60, render || i === n - 1); },
     set god(v) { player.god = v; },
   };
@@ -1646,6 +2219,8 @@ let extraDmgCurse = 0;       // quái gây thêm sát thương (Cướp túi)
 function eventApi() {
   return {
     player, gold: () => gold, addGold, addSouls, addScrap, grantRelic, rand: Math.random,
+    addFlame, addCorruption: (v) => addCorruption(v, player.pos, scene), purgeCurse: () => purgeCurse(player.pos, scene),
+    grantRune: () => pickRune(randomRune()),
     heal: (pct) => player.heal(Math.round(player.maxHp * pct)),
     levelUp: () => { pendingLevels++; },
     banner: (a, b) => showBanner(a, b, 2, '#9fd0ff'),
@@ -1908,4 +2483,155 @@ function updateP2(dt, time) {
   $('p2-text').textContent = player2.dead ? (reviveT > 0 ? `Đang hồi sinh ${Math.round(reviveT / 2 * 100)}%` : 'Gục ngã · đứng cạnh để hồi sinh') : `${Math.ceil(player2.hp)} / ${player2.maxHp}`;
   $('p2hud').classList.toggle('down', player2.dead);
   if (player.dead && !player2.dead) hud.prompt.innerHTML = reviveT > 0 ? `Đang được hồi sinh ${Math.round(reviveT / 2 * 100)}%` : 'Bạn đã gục ngã · chờ đồng đội tới hồi sinh';
+}
+
+
+// ================= 8 Cơ chế phức tạp: Hàm hỗ trợ & Kết nối UI =================
+function renderFlameHud() {
+  const ff = $('flame-fill'), fv = $('flame-val'), cf = $('corr-fill'), cv = $('corr-val'), dc = $('dyn-curses');
+  if (ff) ff.style.width = Math.round(flameState.flame) + '%';
+  if (fv) fv.textContent = Math.round(flameState.flame);
+  if (ff?.parentElement) ff.parentElement.classList.toggle('ember', flameTier() === 'ember');
+  if (cf) cf.style.width = Math.round(flameState.corruption) + '%';
+  if (cv) cv.textContent = Math.round(flameState.corruption);
+  if (dc) {
+    dc.innerHTML = flameState.curses.map((id) => {
+      const c = dynCurseById(id);
+      return c ? `<div class="dyn-curse-ico" title="${c.name}: ${c.desc}"><i class="ico" style="--i:url('/ui/icons/${c.icon}.svg')"></i></div>` : '';
+    }).join('');
+  }
+}
+
+function pickRune(id) {
+  const r = RUNES[id];
+  if (!r) return;
+  play('dropRare', { vol: 0.65 });
+  // Tự động gắn vào ô Cổ Ngữ trống trên vũ khí đang cầm (hoặc cất vào Túi Cổ Ngữ để tự sắp xếp tại Đe)
+  const w = player.weapon;
+  w.runes = w.runes || [];
+  if (w.runes.length < weaponsMod.socketsOf(w)) {
+    w.runes.push(id);
+    renderSlots();
+    toast(r.icon, `Khảm ${r.name}`, `${r.desc} · Vào Xưởng Đe để sắp xếp mạch`);
+  } else {
+    runeBag.push(id);
+    toast(r.icon, `Nhặt ${r.name}`, `Đã cất vào Túi Cổ Ngữ (${runeBag.length}) · Sắp xếp tại Xưởng Đe`);
+  }
+}
+
+function pickCore(id) {
+  const c = BOSS_CORES[id];
+  if (!c) return;
+  bossCores.push(id);
+  play('forged');
+  toast(c.icon, `Thu được ${c.name}!`, `Mang tới Đe Rèn (E) để rèn ${c.title}`);
+}
+
+function performAnvilForge(result, opts = {}) {
+  if (opts.consumeUse !== false && loot.anvil) {
+    loot.anvilUses = (loot.anvilUses || 1) - 1;
+  }
+  const keep = (loot.anvilUses || 0) > 0;
+  const onDone = () => {
+    const keepOther = opts.mode === 'core' && player.weapons.length > 1 ? [player.weapons[1 - player.slot]] : [];
+    player.setWeapons([result, ...keepOther], 0);
+    recordCodex(result);
+    if (result.rarity === 3) meta.stats.legendary = (meta.stats.legendary || 0) + 1;
+    if (opts.recipe) setTimeout(() => toast('x_sword-stone', 'Công thức huyền thoại!', result.title + ': ' + result.legendText), 500);
+    if (opts.bossCore) setTimeout(() => toast(opts.bossCore.icon, 'Rèn Thành Công Vũ Khí Boss!', result.title + ': ' + result.legendText), 500);
+    const sub = opts.mode === 'graft' ? `Ghép Chiêu · ${SPECIALS[result.specialType]?.name}`
+      : opts.mode === 'twin' ? `Song Dạng (${TYPES[result.type].name} ⇄ ${TYPES[result.altForm.type].name}) · Bấm Q biến hình!`
+        : `${RARITY[result.rarity].name} · ${affixText(result).join(' · ') || 'đã rèn xong!'}`;
+    showBanner(weaponName(result), sub, 2.8, RARITY[result.rarity].css);
+    if (keep && loot.anvil) loot.anvil.used = false;
+    checkAchievements();
+  };
+  if (loot.anvil) loot.startForge(onDone);
+  else onDone();
+}
+
+// Phòng Song Tượng Thần (Trial of the Gods — cơ chế #7)
+function openTrialRoom() {
+  const [gA, gB] = pickTrialPair(rngFor(9));
+  choosing = true;
+  perkChoices = [gA, gB].map((g, idx) => {
+    const other = idx === 0 ? gB : gA;
+    return {
+      id: 'trial_' + g.id, name: g.name, icon: g.icon, color: g.color, max: 99, godPick: true,
+      desc: () => `Chọn ${g.name} · ${other.name} sẽ nổi giận (${GOD_WRATH[other.id].name}) trong đợt tới!`,
+      apply: (s, lv, p) => {
+        p.patron = g.id;
+        const free = BOONS.filter((b) => b.god === g.id && !p.perkLv[b.id]);
+        const b = free[Math.floor(Math.random() * free.length)];
+        if (b) { p.perkLv[b.id] = 1; b.apply(p.base, 1, p); toast(b.icon, `${g.name}: ${b.name}`, b.desc(1)); }
+        trialState = { chosenGod: g, spurnedGod: other, wrathState: { t: 2.0 } };
+        intermission = 2.0;
+      },
+    };
+  });
+  $('lu-title').innerHTML = '<b>Song Tượng Thần</b> · Chọn 1 Thần';
+  $('lu-cards').innerHTML = perkChoices.map((p, i) => `<button class="card god" data-i="${i}">
+      <span class="keycap">${i + 1}</span>
+      <i class="ico card-ico" style="--i:url('/ui/icons/${p.icon}.svg');color:${p.color}"></i>
+      <h3 style="color:${p.color}">${p.name}</h3>
+      <div class="lv"><span class="godtag" style="color:${p.color}">Tranh Chấp Thần Linh</span></div>
+      <p>${p.desc()}</p></button>`).join('');
+  for (const b of $('lu-cards').querySelectorAll('.card')) { b.onclick = () => pickPerk(Number(b.dataset.i)); b.onmouseenter = () => play('uiHover'); }
+  show('levelup', true); setMode('menu'); play('forged');
+  intermission = Infinity;
+}
+
+// Hộp thoại chọn Di Sản khi đánh bại Bóng Ma Thợ Rèn (cơ chế #8a)
+function openEchoReward(echo) {
+  const oldW = hydrateEchoWeapon(echo.weapon);
+  $('ev-title').textContent = 'Di Sản Thợ Rèn';
+  $('ev-text').textContent = `Linh hồn cũ tan biến, để lại thanh "${echo.wName}" từng đồng hành cùng bạn ở tầng ${echo.floor}. Bạn muốn đoạt lại nó hay hấp thụ tinh hoa vào vũ khí hiện tại?`;
+  $('ev-icon').style.setProperty('--i', `url('/ui/icons/x_sword-stone.svg')`);
+  const choices = [
+    {
+      text: `Đoạt Lại Hồn Khí (${weaponName(oldW)})`,
+      sub: `${RARITY[oldW.rarity].name} · mang theo nguyên tố & phụ tố cũ`,
+      run: () => {
+        attachAwakening(oldW);
+        const dropOld = player.pickUp(oldW);
+        recordCodex(oldW);
+        if (dropOld) loot.drop(dropOld, player.pos.x, player.pos.z + 1.4);
+        renderSlots();
+        showBanner('Đã Đoạt Lại Di Sản!', weaponName(oldW), 2.5, '#9fe8ff');
+      },
+    },
+    {
+      text: 'Rèn Nuốt Hồn vào vũ khí đang cầm',
+      sub: 'Vũ khí hiện tại +1 cường hóa, thừa hưởng 1 nguyên tố/phụ tố của Bóng Ma',
+      run: () => {
+        const cur = player.weapon;
+        cur.plus = Math.min(MAX_PLUS, (cur.plus || 0) + 1);
+        if (oldW.element && oldW.element !== 'none') {
+          if (cur.element === 'none') cur.element = oldW.element;
+          else if (!cur.element2 && cur.element !== oldW.element) cur.element2 = oldW.element;
+        }
+        const extra = (oldW.affixes || []).find((a) => !(cur.affixes || []).includes(a));
+        if (extra) cur.affixes = [...(cur.affixes || []), extra];
+        player.equip(player.slot);
+        renderSlots();
+        showBanner('Đã Hấp Thụ Hồn Khí!', `${weaponName(cur)} mạnh lên rõ rệt`, 2.5, '#ffe2a0');
+      },
+    },
+  ];
+  $('ev-choices').innerHTML = choices.map((c, i) => `<button class="btn ev-choice" data-i="${i}"><b>${c.text}</b><small>${c.sub}</small></button>`).join('');
+  for (const b of $('ev-choices').querySelectorAll('button')) {
+    b.onclick = () => {
+      show('eventroom', false); setMode('playing'); play('forged');
+      choices[+b.dataset.i].run();
+    };
+  }
+  show('eventroom', true); setMode('menu'); play('uiOpen');
+}
+
+function maybeSpawnEchoGrave() {
+  if (!echoMgr || run.bossrush) return;
+  const ec = findEchoForFloor(meta, floor);
+  if (!ec) return;
+  const [x, z] = spawnPos(5);
+  echoMgr.spawnGrave(ec, x, z);
 }

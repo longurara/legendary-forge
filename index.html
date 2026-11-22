@@ -28,6 +28,17 @@
           <span class="keycap">R</span>
           <div class="ragebar"><div id="rage-fill"></div><span id="ult-name"></span></div>
         </div>
+        <div class="fc-row">
+          <div class="fc-item" title="Ánh Lửa: Dưới 25 vào chế độ Lửa Tàn (Quái mạnh hơn nhưng Chí Mạng +40% & Rơi đồ ×2)">
+            <i class="ico el-fire"></i>
+            <div class="fc-bar flame"><div id="flame-fill"></div><span id="flame-val">85</span></div>
+          </div>
+          <div class="fc-item" title="Tha Hóa: Đạt 100 nhận 1 Lời Nguyền 2 Mặt. Hạ Boss hoặc hiến vũ khí ở Đe để Thanh Tẩy">
+            <i class="ico" style="--i:url('/ui/icons/x_cursed.svg');color:#c070ff"></i>
+            <div class="fc-bar corr"><div id="corr-fill"></div><span id="corr-val">0</span></div>
+          </div>
+        </div>
+        <div id="dyn-curses" class="dyn-curses"></div>
       </div>
       <div id="relics"></div>
 
@@ -53,6 +64,7 @@
         <div class="boss-name"><i class="ico ico-boss"></i><span id="boss-name"></span></div>
         <div class="bar boss"><div id="boss-fill"></div></div>
         <div class="poise"><div id="boss-poise"></div></div>
+        <div id="boss-parts" class="boss-parts"></div>
       </div>
 
       <div id="slots">
@@ -62,6 +74,9 @@
       </div>
 
       <div id="prompt"></div>
+      <div id="minimap-wrap" class="hidden" title="Radar Đấu Trường · Tab xem Bản Đồ Tầng">
+        <canvas id="minimap" width="136" height="136"></canvas>
+      </div>
       <div id="hint">
         <span><span class="keycap">W</span><span class="keycap">A</span><span class="keycap">S</span><span class="keycap">D</span> di chuyển</span>
         <span><span class="keycap wide">Chuột trái</span> tấn công</span>
@@ -72,20 +87,49 @@
     </div>
 
     <div id="touch-controls" aria-label="Điều khiển cảm ứng">
-      <button id="move-stick" data-action="move" aria-label="Cần di chuyển"><span></span></button>
-      <button id="touch-pause" data-action="Escape" aria-label="Tạm dừng">Ⅱ</button>
-      <div class="touch-combat">
-        <button data-action="KeyR">Nộ</button>
-        <button data-action="special">Kỹ năng</button>
-        <button data-action="Space">Lướt</button>
-        <button data-action="attack">Đánh</button>
+      <div id="move-zone" data-action="move" aria-label="Vùng di chuyển">
+        <div id="move-stick"><i class="stick-arrow"></i><span></span></div>
+      </div>
+      <div class="touch-top-bar">
+        <button id="touch-map" data-action="Tab" aria-label="Bản đồ tầng"><i class="ico" style="--i:url('/ui/icons/x_scroll.svg')"></i></button>
+        <button id="touch-fs" type="button" aria-label="Toàn màn hình">⛶</button>
+        <button id="touch-pause" data-action="Escape" aria-label="Tạm dừng">Ⅱ</button>
       </div>
       <div class="touch-context">
-        <button data-action="KeyE" hidden>Tương tác</button>
-        <button data-action="KeyX" hidden>Phân rã</button>
-        <button data-action="KeyF" hidden>Cường hóa</button>
+        <div class="touch-ctx-sub">
+          <button data-action="KeyX" hidden>Phân rã</button>
+          <button data-action="KeyF" hidden>Cường hóa</button>
+        </div>
+        <button id="touch-interact" data-action="KeyE" hidden>
+          <i id="touch-interact-ico" class="ico" style="--i:url('/ui/icons/x_sword-stone.svg')"></i>
+          <small id="touch-interact-lbl">Tương tác</small>
+        </button>
       </div>
-      <button id="touch-swap" data-action="KeyQ" hidden>Đổi vũ khí</button>
+      <div class="touch-combat">
+        <button id="touch-attack" class="tc-main" data-action="attack" aria-label="Tấn công">
+          <i class="aim-ind"></i>
+          <i id="touch-atk-ico" class="ico" style="--i:url('/ui/icons/sword.svg')"></i>
+          <small>Đánh</small>
+        </button>
+        <button id="touch-dash" class="tc-sat tc-dash" data-action="Space" aria-label="Lướt">
+          <i class="ico ico-dash"></i>
+          <b id="touch-dash-stock"></b>
+          <small>Lướt</small>
+        </button>
+        <button id="touch-special" class="tc-sat tc-special" data-action="special" aria-label="Kỹ năng">
+          <i class="aim-ind"></i>
+          <i id="touch-sp-ico" class="ico ico-special"></i>
+          <small id="touch-sp-lbl">Chiêu</small>
+        </button>
+        <button id="touch-ult" class="tc-sat tc-ult" data-action="KeyR" aria-label="Tuyệt kỹ">
+          <i class="ico" style="--i:url('/ui/icons/x_energy-sword.svg')"></i>
+          <small id="touch-ult-pct">0%</small>
+        </button>
+        <button id="touch-swap" class="tc-sat tc-swap" data-action="KeyQ" hidden aria-label="Đổi hoặc Tôi vũ khí">
+          <i class="ico ico-swap"></i>
+          <small id="touch-swap-lbl">Đổi</small>
+        </button>
+      </div>
     </div>
     <div id="rotate-phone"><strong>Xoay ngang điện thoại</strong><span>để chơi bằng hai tay</span></div>
 
@@ -132,7 +176,7 @@
         <div class="howto-grid">
           <div class="howto-col">
             <h3>Điều khiển</h3>
-            <p class="touch-guide">Di chuyển bằng cần trái. Giữ Đánh để nhắm quái gần nhất hoặc kéo nút Đánh để tự ngắm. Chạm Lướt để né. Giữ Kỹ năng để tích lực khi dùng đại kiếm. Chạm Nộ khi thanh đầy để tung tuyệt kỹ.</p>
+            <p class="touch-guide">Chạm nửa trái màn hình để kéo cần di chuyển thả nổi. Giữ nút <b>Đánh</b> hoặc <b>Chiêu</b> để tự ngắm quái gần nhất, hoặc <b>kéo hướng</b> trên nút để ngắm tự do. Nút <b>Lướt</b> nằm sát bên trái nút Đánh để né &amp; Phản Xuyên nhanh; bấm <b>Tôi/Đổi</b> khi nút sáng cam để Tôi Vũ Khí hoặc Biến Hình. Góc trên phải có nút <b>Bản đồ tầng</b> &amp; <b>Toàn màn hình</b>.</p>
             <div class="ctrl"><span><span class="keycap">W</span><span class="keycap">A</span><span class="keycap">S</span><span class="keycap">D</span></span>Di chuyển</div>
             <div class="ctrl"><span><span class="keycap wide">Chuột</span></span>Ngắm hướng đánh</div>
             <div class="ctrl"><span><span class="keycap wide">Chuột trái</span></span>Tấn công (giữ để đánh liên tục)</div>
@@ -163,11 +207,12 @@
             <p class="muted small">Nguyên tố mới: <b class="c-poison">Độc</b> (cộng dồn), <b class="c-wind">Gió</b> (hất văng mạnh), <b class="c-holy">Thánh</b> (+50% lên quái xương). Độc + Lửa = <b>Khí Nổ</b> · Gió + Lửa = <b>Lốc Lửa</b> · Gió + Băng = <b>Bão Tuyết</b> · Thánh + Sét = <b>Phán Xét</b>.</p>
             <h3>Phản ứng nguyên tố</h3>
             <p class="muted small"><b class="c-fire">Lửa</b> + <b class="c-ice">Băng</b> = <b>Tan Chảy</b> (gấp đôi sát thương) · <b class="c-lightning">Sét</b> vào quái bị đóng băng = <b>Vỡ Băng</b> (nổ lan) · <b class="c-fire">Lửa</b> + <b class="c-lightning">Sét</b> = <b>Quá Tải</b> (nổ hất văng) · <b class="c-blood">Huyết</b> vào quái đang dính hiệu ứng = <b>Huyết Tế</b> (hồi nhiều máu)</p>
-            <h3>Đe rèn</h3>
-            <p class="muted small">Sau mỗi 3 đợt, đe rèn xuất hiện. Mang <b>2 vũ khí</b> tới đe và bấm <span class="keycap">E</span> để ghép thành 1 vũ khí mạnh hơn: tăng một bậc độ hiếm và gộp nguyên tố của cả hai.</p>
-            <h3>Lên cấp &amp; Lò Rèn</h3>
-            <p class="muted small">Hạ quái để nhận kinh nghiệm; mỗi lần lên cấp chọn 1 trong 3 thẻ năng lực. Quái rơi <b>Hồn Thép</b>: dùng ở <b>Lò Rèn</b> ngoài màn hình chính để nâng cấp vĩnh viễn. Mỗi 5 đợt có <b>Boss</b>, hãy né vùng đỏ trên sàn! Hạ boss sẽ mở <b>lối xuống tầng mới</b>, mỗi tầng một boss khác. Sau mỗi đợt, đi tới một <b>bệ phần thưởng</b> để chọn phần thưởng cho đợt sau: vũ khí, thẻ, vàng, di vật, thương nhân hay thử thách. Cẩn thận <b>thùng thuốc nổ</b> và <b>bẫy gai</b>!</p>
-            <p class="muted small">Mỗi tầng là một vùng khác nhau: <b>Hầm Đá</b>, <b>Hang Băng</b> (mặt băng trơn trượt), <b>Lò Nham Thạch</b> (vũng nham bỏng chân), <b>Hầm Mộ</b> (mộ sống dậy). Boss mạnh lên theo sức mạnh của bạn và <b>nổi giận</b> khi mất nửa máu. Đánh <b>Khiên Binh</b> từ phía sau, ưu tiên hạ <b>Pháp Sư Hồi Máu</b>, tránh xa <b>Slime Bom</b> đang nhấp nháy.</p>
+            <h3>Đe rèn &amp; Chế Tác Sâu</h3>
+            <p class="muted small">Sau mỗi 3 đợt, Đe Rèn xuất hiện. Bấm <span class="keycap">E</span> để mở <b>Xưởng Đe Rèn</b> với 4 tính năng: <b>Rèn 3 Khuôn</b> (Hợp Nhất / <b>Ghép Chiêu Chuột Phải</b> / <b>Vũ Khí Biến Hình</b>), <b>Tôi Quá Tải</b> (căn nhịp búa nhận Ẩn Tính Kiệt Tác hoặc Hắc Hóa), <b>Mạch Cổ Ngữ</b> (nối <i>Kích Hoạt → Biến Đổi → Hiệu Ứng</i>), và <b>Bồi Lửa / Thanh Tẩy</b>.</p>
+            <h3>Cơ Chế Nâng Cao</h3>
+            <p class="muted small"><b>Nhiệt Lưỡi &amp; Tôi Vũ Khí:</b> Đánh liên tục làm nóng lưỡi (50°–85° tăng +25% sát thương &amp; phá choáng; chạm 100° sẽ Quá Nhiệt). Nhấn <span class="keycap">Q</span> để <b>Tôi Đổi Vũ Khí / Đòn Biến Hình</b>, dùng Chuột Phải để <b>Phóng Nhiệt</b>, hoặc lướt qua Băng/Nước để <b>Tôi Địa Hình</b> tạo sương mù che đạn.</p>
+            <p class="muted small"><b>Tam Giác Phản Phá &amp; Phá Bộ Phận:</b> Đòn cảnh báo <b>Đỏ-Trắng</b>: lướt thẳng VÀO để <b>Phản Xuyên</b>! Đòn <b>Tím</b>: dùng Kỹ năng / Đòn nặng để <b>Cắt Chiêu</b>! Phá bộ phận Boss rơi <b>Lõi Boss</b> để rèn vũ khí độc quyền; hoàn thành thử thách trên vũ khí Huyền Thoại để <b>Thức Tỉnh</b> tuyệt kỹ riêng.</p>
+            <p class="muted small"><b>Hóa Học Bề Mặt · Ánh Lửa &amp; Tha Hóa · Bóng Ma:</b> Lửa làm tan băng thành Nước (Sét vào Nước tạo Điện Trường); Băng đông cứng Nham thành Obsidian; Gió cuốn Lửa/Độc thành Lốc; đòn nặng làm sập Cột Đá. Đấu trường rộng <b>18×18</b> tích hợp <b>Radar góc phải</b> với <b>24 chủng quái</b> (Orc, Goblin, Nhện, Ong, Mãng Xà, Ấu Long...) và <b>10 Boss độc quyền</b> (Rồng Băng, Hỏa Long, Chúa Quỷ Lò Rèn, Vua Nấm, Song Tử Tử Thần...).</p>
             <div class="rarities"><span class="r0">Thường</span><span class="r1">Hiếm</span><span class="r2">Sử thi</span><span class="r3">Huyền thoại</span></div>
           </div>
         </div>
@@ -266,6 +311,23 @@
       </div>
     </div>
 
+    <!-- ===== Xưởng Đe Rèn Tương Tác ===== -->
+    <div id="anvil-modal" class="overlay hidden">
+      <div class="panel big wide anvil-panel">
+        <div class="anvil-head">
+          <h2><i class="ico ico-anvil"></i> Xưởng Đe Rèn</h2>
+          <div class="anvil-res">
+            <span><i class="ico ico-scrap"></i> <b id="anvil-scrap">0</b> Mảnh Thép</span>
+            <span><i class="ico el-fire"></i> <b id="anvil-flame">85</b> Lửa</span>
+            <span><i class="ico" style="--i:url('/ui/icons/x_cursed.svg');color:#c070ff"></i> <b id="anvil-corr">0</b> Tha Hóa</span>
+          </div>
+        </div>
+        <div id="anvil-tabs" class="anvil-tabs"></div>
+        <div id="anvil-body" class="anvil-body"></div>
+        <div class="btn-row center"><button id="btn-anvil-close" class="btn primary">Rời Đe (Esc)</button></div>
+      </div>
+    </div>
+
     <div id="shop" class="overlay hidden">
       <div class="panel big">
         <h2>Thương Nhân</h2>
@@ -310,6 +372,11 @@
         <button id="btn-restart" class="btn">Chơi lại</button>
         <button id="btn-menu2" class="btn">Về màn hình chính</button>
         <button id="btn-fx" class="btn">Hiệu ứng: Cao</button>
+        <div class="touch-settings">
+          <button id="btn-stick-mode" class="btn">Cần di chuyển: Thả nổi</button>
+          <button id="btn-haptic" class="btn">Rung phản hồi: Bật</button>
+          <label class="touch-alpha-row"><span>Độ rõ nút cảm ứng</span><input id="touch-alpha-slider" type="range" min="45" max="100" value="90" /></label>
+        </div>
         <div class="sound-row"><button class="mute-btn" title="Tắt tiếng (M)"><i class="ico ico-speaker"></i><i class="ico ico-speaker-off"></i></button><input class="vol-slider" type="range" min="0" max="100" /></div>
       </div>
     </div>

@@ -1,3 +1,8 @@
+import * as THREE from 'three';
+import { scheduleBomb, dealDamage } from './combat.js';
+import { spawnTelegraph, spawnBolt, spawnRing, damageNumber, smoke } from './fx.js';
+import { play } from './audio.js';
+
 // Thần Hộ Mệnh: mỗi tầng chọn một vị thần; thẻ của thần thay đổi lối chơi (không chỉ cộng chỉ số).
 // Có thẻ của 2 thần sẽ mở thẻ Song Thần.
 export const GODS = [
@@ -39,12 +44,83 @@ export const DUOS = [
 export const godsOf = (levels) => new Set(BOONS.filter((b) => levels[b.id]).map((b) => b.god));
 
 // Thẻ thần đưa vào lần lên cấp: 1–2 thẻ của thần đang thờ + thẻ Song Thần đủ điều kiện
-export function godCards(levels, patron) {
+export function godCards(levels, patron, boostDuo = false) {
   const owned = godsOf(levels);
   const duos = DUOS.filter((d) => !levels[d.id] && d.gods.every((g) => owned.has(g)));
   const mine = BOONS.filter((b) => b.god === patron && !levels[b.id]);
   const out = [];
   if (duos.length) out.push(duos[Math.floor(Math.random() * duos.length)]);
+  if (boostDuo && duos.length > 1) {
+    const rest = duos.filter((d) => !out.includes(d));
+    if (rest.length) out.push(rest[Math.floor(Math.random() * rest.length)]);
+  }
   while (out.length < 2 && mine.length) out.push(mine.splice(Math.floor(Math.random() * mine.length), 1)[0]);
   return out;
+}
+
+// ---------- Tranh Chấp Thần Linh (Trial of the Gods — cơ chế #7) ----------
+export const GOD_WRATH = {
+  fire: { name: 'Cơn Giận Hỏa Thần', desc: 'Cột nham thạch phun trào liên tục khắp đấu trường' },
+  storm: { name: 'Cơn Giận Lôi Thần', desc: 'Lưới sét giáng xuống quanh bạn định kỳ' },
+  shadow: { name: 'Cơn Giận Dạ Thần', desc: 'Bóng đêm bùng nổ xung kích làm chậm & sát thương quanh bạn' },
+  wind: { name: 'Cơn Giận Phong Thần', desc: 'Cuồng phong giật mạnh xô đẩy bạn khắp phòng' },
+};
+
+export function pickTrialPair(rand = Math.random) {
+  const pool = [...GODS].sort(() => rand() - 0.5);
+  return [pool[0], pool[1]];
+}
+
+// Chạy thiên tai của vị thần bị từ chối trong phòng Song Tượng Thần
+export function tickGodWrath(godId, dt, state, scene, player, enemies) {
+  if (!godId || !player || player.dead) return;
+  state.t = (state.t || 2.2) - dt;
+  if (state.t > 0) return;
+
+  if (godId === 'fire') {
+    state.t = 2.6;
+    for (let i = 0; i < 2; i++) {
+      const at = player.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 6, 0, (Math.random() - 0.5) * 6));
+      scheduleBomb(at, 1.05, 2.2, 10, 14, 0xff5a1a);
+    }
+  } else if (godId === 'storm') {
+    state.t = 2.4;
+    const at = player.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 3, 0, (Math.random() - 0.5) * 3));
+    spawnTelegraph(scene, { shape: 'circle', pos: at, radius: 2.1, duration: 0.9, color: 0xffe14a });
+    setTimeout(() => {
+      if (player.dead) return;
+      spawnBolt(scene, at.clone().setY(10), at.clone().setY(0.3), 0xffe14a);
+      spawnRing(scene, at, 2.1, 0xffe14a, 0.35);
+      play('zap', { at });
+      if (Math.hypot(player.pos.x - at.x, player.pos.z - at.z) < 2.1 + player.radius) {
+        if (player.hurt(15)) damageNumber(player.pos, 15, 'player');
+      }
+    }, 900);
+  } else if (godId === 'shadow') {
+    state.t = 3.0;
+    const at = player.pos.clone();
+    spawnTelegraph(scene, { shape: 'circle', pos: at, radius: 3.0, duration: 0.95, color: 0xb89aff });
+    setTimeout(() => {
+      if (player.dead) return;
+      smoke(at.clone().setY(0.8), { count: 8, color: 0x2a1040, size: 1.5, life: 0.9, alpha: 0.65 });
+      spawnRing(scene, at, 3.0, 0xb89aff, 0.4);
+      play('dash', { at, rate: 0.5 });
+      if (Math.hypot(player.pos.x - at.x, player.pos.z - at.z) < 3.0 + player.radius) {
+        player.slowT = 2.2;
+        if (player.hurt(14)) damageNumber(player.pos, 14, 'player');
+      }
+    }, 950);
+  } else if (godId === 'wind') {
+    state.t = 2.8;
+    const a = Math.random() * Math.PI * 2;
+    const gx = Math.cos(a), gz = Math.sin(a);
+    spawnRing(scene, player.pos, 5, 0xa8f0d8, 0.45);
+    play('dash', { at: player.pos, rate: 0.6 });
+    damageNumber(player.pos, 'Gió Quật!', 'react shatter');
+    player.pos.x += gx * 2.4;
+    player.pos.z += gz * 2.4;
+    for (const e of enemies) {
+      if (e.alive && !e.isBoss) { e.knock.x += gx * 7; e.knock.z += gz * 7; }
+    }
+  }
 }

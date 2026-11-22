@@ -98,7 +98,29 @@ export function applyAffixes(stats, w) {
   for (const id of w.affixes || []) affixById(id)?.apply(stats);
   if (w.plus) stats.dmg *= 1 + 0.12 * w.plus;          // cường hóa: +12% sát thương mỗi cấp
   for (const g of w.gems || []) GEMS[g]?.apply(stats);
+  for (const mw of w.masterworks || []) MASTERWORKS[mw]?.apply(stats);
+  if (w.corrupted) stats.dmg *= 1.35;                  // vũ khí hắc hóa: +35% sát thương
+  if (w.awakened) stats.dmg *= 1.15;                   // vũ khí thức tỉnh: +15% sát thương
+  if (w.grafted) stats.specialPower = (stats.specialPower || 1) + 0.15;
 }
+
+// ---------- Ẩn tính Kiệt Tác (Tôi Quá Tải thành công) & Ám Khí Hắc Hóa ----------
+export const MASTERWORKS = {
+  mw_reach: { id: 'mw_reach', name: 'Kiệt Tác: Trường Nhận', text: '+30% tầm đánh', apply: (s) => { s.range += 0.3; } },
+  mw_spark: { id: 'mw_spark', name: 'Kiệt Tác: Tàn Hỏa', text: 'Mỗi đòn thứ 2 bắn tia lửa xuyên giáp', apply: (s) => { s.mwSpark = true; } },
+  mw_socket: { id: 'mw_socket', name: 'Kiệt Tác: Khắc Mạch', text: '+1 ô Mạch Cổ Ngữ (tối đa 4)', apply: () => {} },
+  mw_heat: { id: 'mw_heat', name: 'Kiệt Tác: Tâm Lò', text: 'Vùng Nóng Đỏ mở rộng (40°–92°)', apply: (s) => { s.wideHeat = true; } },
+  mw_poise: { id: 'mw_poise', name: 'Kiệt Tác: Phá Giáp', text: '+45% sát thương thanh Choáng', apply: (s) => { s.poiseMul = (s.poiseMul || 1) + 0.45; } },
+};
+export const MASTERWORK_KEYS = Object.keys(MASTERWORKS);
+
+export const CORRUPT_TRAITS = {
+  c_whiff: { id: 'c_whiff', name: 'Hắc Hóa: Khát Máu', text: '+35% sát thương · vung hụt mất 2 máu' },
+  c_brittle: { id: 'c_brittle', name: 'Hắc Hóa: Giòn Sắc', text: '+35% sát thương · độ bền giảm nhanh gấp đôi' },
+  c_finisher: { id: 'c_finisher', name: 'Hắc Hóa: Sát Ý', text: '+35% sát thương · không hồi máu từ bình, Kết Liễu hồi ×2' },
+  c_overheat: { id: 'c_overheat', name: 'Hắc Hóa: Nóng Chảy', text: '+35% sát thương · Nhiệt tích nhanh +50%' },
+};
+export const CORRUPT_KEYS = Object.keys(CORRUPT_TRAITS);
 
 // Khóa trong Sổ Rèn: loại + các nguyên tố (không phân biệt thứ tự)
 export function codexKey(w) {
@@ -109,7 +131,14 @@ export function codexKey(w) {
 // ---------- Tạo vũ khí ----------
 let nextId = 1;
 export function makeWeapon(type, element = 'none', rarity = 0, element2 = null, affixes = null) {
-  return { id: nextId++, type, element, rarity, element2, affixes: affixes ?? rollAffixes(Math.min(rarity, 3)) };
+  return {
+    id: nextId++, type, element, rarity, element2,
+    affixes: affixes ?? rollAffixes(Math.min(rarity, 3)),
+    heat: 0, overheatT: 0, dur: 100,
+    specialType: null, grafted: false, altForm: null,
+    masterworks: [], temperCount: 0, corrupted: null,
+    runes: [], awakening: null, awakened: false,
+  };
 }
 
 export function weaponName(w) {
@@ -117,17 +146,20 @@ export function weaponName(w) {
   if (w.element !== 'none') n += ' ' + ELEMENTS[w.element].name;
   if (w.element2) n += '-' + ELEMENTS[w.element2].name;
   if (w.title) n = w.title;
-  return (w.rarity === 3 ? '★ ' : '') + n + (w.plus ? ` +${w.plus}` : '');
+  const tag = (w.awakened ? '✦ ' : w.rarity === 3 ? '★ ' : '')
+    + (w.altForm ? '⇄ ' : w.grafted ? '❖ ' : '')
+    + (w.corrupted ? '☠ ' : '');
+  return tag + n + (w.plus ? ` +${w.plus}` : '');
 }
 
-// ---------- Ngọc khảm: rơi từ tinh anh, tự khảm vào ô trống ----------
+// ---------- Ngọc khảm cơ bản (giữ tương thích) ----------
 export const GEMS = {
   ruby: { name: 'Hồng Ngọc', color: '#ff5a6a', text: '+10% sát thương', apply: (s) => { s.dmg += 0.1; } },
   sapphire: { name: 'Lam Ngọc', color: '#5aa8ff', text: '+6% chí mạng', apply: (s) => { s.crit += 0.06; } },
   emerald: { name: 'Lục Ngọc', color: '#6fe38a', text: '+2% hút máu', apply: (s) => { s.leech += 0.02; } },
   topaz: { name: 'Hoàng Ngọc', color: '#ffcf4a', text: '+8% tốc đánh', apply: (s) => { s.atk += 0.08; } },
 };
-export const socketsOf = (w) => [1, 1, 2, 3][w.rarity] || 1;
+export const socketsOf = (w) => Math.min(4, ([2, 2, 3, 4][w.rarity] || 2) + ((w.masterworks || []).includes('mw_socket') ? 1 : 0));
 
 // ---------- Công thức rèn đặc biệt: đúng cặp nguyên tố → vũ khí huyền thoại có hiệu ứng riêng ----------
 export const RECIPES = [
@@ -167,7 +199,7 @@ export function randomWeapon(wave, rand = Math.random) {
   return makeWeapon(type, element, rarity, null, rollAffixes(Math.min(rarity, 3), [], rand));
 }
 
-// Rèn: giữ loại của vũ khí đang cầm, độ hiếm +1, gộp nguyên tố và phụ tố của cả hai
+// Rèn chuẩn: giữ loại của vũ khí đang cầm, độ hiếm +1, gộp nguyên tố, phụ tố, cổ ngữ và kiệt tác
 export function forgeWeapons(a, b, extraAffix = 0) {
   const rarity = Math.min(3, Math.max(a.rarity, b.rarity) + 1);
   const pool = [a.element, a.element2, b.element, b.element2].filter((e) => e && e !== 'none');
@@ -178,7 +210,79 @@ export function forgeWeapons(a, b, extraAffix = 0) {
   let affixes = [...new Set([...(a.affixes || []), ...(b.affixes || [])])].slice(0, cap);
   if (affixes.length < Math.min(rarity, cap)) affixes = affixes.concat(rollAffixes(Math.min(rarity, cap) - affixes.length, affixes));
   if (extraAffix && affixes.length < cap) affixes = affixes.concat(rollAffixes(1, affixes));
-  return makeWeapon(a.type, element, rarity, element2, affixes);
+  const res = makeWeapon(a.type, element, rarity, element2, affixes);
+  res.plus = Math.floor(((a.plus || 0) + (b.plus || 0)) / 2);
+  res.gems = [...(a.gems || []), ...(b.gems || [])].slice(0, 3);
+  res.masterworks = [...new Set([...(a.masterworks || []), ...(b.masterworks || [])])].slice(0, 3);
+  res.runes = [...(a.runes || []), ...(b.runes || [])].slice(0, socketsOf(res));
+  if (a.specialType) { res.specialType = a.specialType; res.grafted = true; }
+  return res;
+}
+
+// Khuôn 2 — Ghép Chiêu (Aspect Graft): giữ đòn đánh thường của A, kế thừa kỹ năng Chuột Phải của B
+export function graftWeapons(a, b, extraAffix = 0) {
+  const res = forgeWeapons(a, b, extraAffix);
+  res.specialType = b.specialType || b.type;
+  res.grafted = true;
+  if (!res.title) res.title = `${TYPES[a.type].name} ghép ${TYPES[res.specialType].name}`;
+  return res;
+}
+
+// Khuôn 3 — Vũ Khí Biến Hình (Twin-Form / Trick Weapon): bấm Q biến hình tức thì giữa dạng A và dạng B
+export function twinForgeWeapons(a, b, extraAffix = 0) {
+  const rarity = Math.min(3, Math.max(a.rarity, b.rarity) + 1);
+  const cap = Math.min(4, rarity + extraAffix);
+  const sharedAff = [...new Set([...(a.affixes || []), ...(b.affixes || [])])].slice(0, cap);
+  const res = makeWeapon(a.type, a.element, rarity, a.element2 || null, sharedAff);
+  res.plus = Math.floor(((a.plus || 0) + (b.plus || 0)) / 2);
+  res.gems = [...(a.gems || []), ...(b.gems || [])].slice(0, 3);
+  res.masterworks = [...new Set([...(a.masterworks || []), ...(b.masterworks || [])])].slice(0, 3);
+  res.runes = [...(a.runes || []), ...(b.runes || [])].slice(0, socketsOf(res));
+  res.specialType = a.specialType || null;
+  res.altForm = {
+    type: b.type,
+    element: b.element || 'none',
+    element2: b.element2 || null,
+    specialType: b.specialType || null,
+    title: b.title || null,
+  };
+  return res;
+}
+
+// Chuyển đổi qua lại giữa 2 dạng của Vũ Khí Biến Hình
+export function swapWeaponForm(w) {
+  if (!w || !w.altForm) return false;
+  const prev = {
+    type: w.type,
+    element: w.element,
+    element2: w.element2,
+    specialType: w.specialType,
+    title: w.title,
+  };
+  const next = w.altForm;
+  w.type = next.type;
+  w.element = next.element;
+  w.element2 = next.element2;
+  w.specialType = next.specialType;
+  w.title = next.title;
+  w.altForm = prev;
+  return true;
+}
+
+// Rèn Lõi Boss thành Vũ Khí Độc Quyền của Boss
+export function makeBossWeapon(base, core) {
+  const affixes = [...new Set([...(base?.affixes || []), ...rollAffixes(3, base?.affixes || [])])].slice(0, 3);
+  const w = makeWeapon(core.weaponType, core.element, 3, core.element2, affixes);
+  w.title = core.title;
+  w.legend = core.legend;
+  w.legendText = core.text;
+  w.bossCore = core.id;
+  if (core.altForm) w.altForm = { ...core.altForm };
+  w.plus = base?.plus || 0;
+  w.gems = [...(base?.gems || [])];
+  w.runes = [...(base?.runes || [])].slice(0, socketsOf(w));
+  w.masterworks = [...(base?.masterworks || [])];
+  return w;
 }
 
 // ---------- Model vũ khí (hướng theo +Z, chuôi ở gốc) ----------
@@ -256,6 +360,35 @@ function tintWeapon(m, w) {
       o.material.emissive.set(rar.css);
       o.material.emissiveIntensity = rar.glow * 0.3;
     }
+    if (w.awakened) {
+      o.material.emissive.lerp(new THREE.Color(0xffe8a0), 0.45);
+      o.material.emissiveIntensity += 0.55;
+    }
+    if (w.corrupted) {
+      o.material.emissive.lerp(new THREE.Color(0xb030ff), 0.4);
+      o.material.emissiveIntensity += 0.35;
+    }
+    o.material.userData.baseEm = o.material.emissive.clone();
+    o.material.userData.baseEmI = o.material.emissiveIntensity;
+  });
+}
+
+const HOT_COL = new THREE.Color(0xff4a10);
+const WHITE_HOT = new THREE.Color(0xfff0c0);
+export function updateWeaponHeatVisual(held, w, time = 0) {
+  if (!held || !w) return;
+  const h = (w.heat || 0) / 100;
+  const hot = h > 0.4 ? (h - 0.4) / 0.6 : 0;
+  const pulse = w.overheatT > 0 ? 0.5 + 0.5 * Math.sin(time * 24) : 0;
+  held.traverse((o) => {
+    if (!o.isMesh || !o.material?.emissive || !o.material.userData.baseEm) return;
+    o.material.emissive.copy(o.material.userData.baseEm);
+    if (hot > 0) {
+      o.material.emissive.lerp(h > 0.85 ? WHITE_HOT : HOT_COL, Math.min(1, hot * 0.85 + pulse * 0.25));
+      o.material.emissiveIntensity = o.material.userData.baseEmI + hot * 1.4 + pulse * 0.6;
+    } else {
+      o.material.emissiveIntensity = o.material.userData.baseEmI;
+    }
   });
 }
 
@@ -272,6 +405,9 @@ export function buildHeldWeapon(w) {
 }
 
 export function slashColor(w) {
+  if ((w.heat || 0) >= 85) return 0xfff0c0;
+  if ((w.heat || 0) >= 50) return 0xff7a2a;
+  if (w.awakened) return 0xfff0a0;
   if (w.rarity === 3) return 0xffc84a;
   return w.element === 'none' ? 0xfff1c4 : ELEMENTS[w.element].glow;
 }

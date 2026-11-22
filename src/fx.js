@@ -571,38 +571,53 @@ export function statusFx(e, dt) {
   }
 }
 
-// ---------- Vùng cảnh báo đòn đánh của quái (đỏ, lấp đầy dần) ----------
+// ---------- Vùng cảnh báo đòn đánh của quái (phân màu theo Tam Giác Phản Phá) ----------
 // shape: 'circle' (radius) | 'sector' (radius, arc, facing) | 'rect' (width, length, facing)
+// kind: 'normal' (đỏ cam) | 'pierce' (đỏ-trắng: Lướt VÀO để Phản Xuyên) | 'interrupt' (tím: Kỹ năng/Đòn nặng để Cắt Chiêu)
 const telegraphs = [];
 export function spawnTelegraph(scene, opts) {
-  const { shape = 'circle', pos, radius = 2, arc = 1.6, facing = 0, width = 1.5, length = 8, duration = 0.8, color = 0xff3020 } = opts;
+  const { shape = 'circle', pos, radius = 2, arc = 1.6, facing = 0, width = 1.5, length = 8, duration = 0.8, kind = 'normal' } = opts;
+  const color = opts.color ?? (kind === 'pierce' ? 0xff2850 : kind === 'interrupt' ? 0xc050ff : 0xff3020);
   const group = new THREE.Group();
-  const mk = (geo, opacity) => new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
-    color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+  const mk = (geo, opacity, col = color) => new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+    color: col, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
   }));
   let base, fill, edge;
   if (shape === 'rect') {
     const g = new THREE.PlaneGeometry(width, length).translate(0, length / 2, 0);
     g.rotateX(-Math.PI / 2);
     g.scale(1, 1, -1);                               // kéo dài theo +Z
-    base = mk(g, 0.16); fill = mk(g.clone(), 0.3);
-    edge = new THREE.LineSegments(new THREE.EdgesGeometry(g), new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.8 }));
+    base = mk(g, 0.16); fill = mk(g.clone(), 0.34);
+    edge = new THREE.LineSegments(new THREE.EdgesGeometry(g), new THREE.LineBasicMaterial({ color: kind === 'pierce' ? 0xffffff : color, transparent: true, opacity: 0.9 }));
   } else {
     const start = shape === 'sector' ? -Math.PI / 2 - arc / 2 : 0;
     const len = shape === 'sector' ? arc : Math.PI * 2;
     const g = new THREE.CircleGeometry(radius, 40, start, len);
     g.rotateX(-Math.PI / 2);
-    base = mk(g, 0.16); fill = mk(g.clone(), 0.32);
-    const ring = new THREE.RingGeometry(radius * 0.95, radius, 48, 1, start, len);
+    base = mk(g, 0.16); fill = mk(g.clone(), 0.34);
+    const ring = new THREE.RingGeometry(radius * 0.93, radius, 48, 1, start, len);
     ring.rotateX(-Math.PI / 2);
-    edge = mk(ring, 0.85);
+    edge = mk(ring, 0.9, kind === 'pierce' ? 0xffeef2 : kind === 'interrupt' ? 0xe8a8ff : color);
   }
   group.add(base, fill, edge);
+  // Dấu hiệu phụ trực quan cho đòn Phản Xuyên (viền trắng chói) và Cắt Chiêu (vòng cổ ngữ tím xoay)
+  if (kind === 'interrupt') {
+    const r = shape === 'rect' ? Math.max(1.2, width * 0.8) : Math.min(radius, 3.2);
+    const rune = mk(new THREE.RingGeometry(r * 0.55, r * 0.68, 6).rotateX(-Math.PI / 2), 0.75, 0xf0c0ff);
+    rune.position.y = 0.02;
+    group.add(rune);
+    group.userData.spin = rune;
+  } else if (kind === 'pierce') {
+    const chev = mk(new THREE.RingGeometry(0.45, 0.7, 3).rotateX(-Math.PI / 2), 0.9, 0xffffff);
+    chev.position.set(0, 0.02, shape === 'rect' ? Math.min(2.2, length * 0.3) : 0);
+    group.add(chev);
+    group.userData.pulse = chev;
+  }
   group.position.set(pos.x, 0.06, pos.z);
   group.rotation.y = facing;
   fill.scale.setScalar(0.01);
   scene.add(group);
-  const t = { group, fill, edge, shape, t: 0, duration, done: false };
+  const t = { group, fill, edge, shape, kind, t: 0, duration, done: false };
   telegraphs.push(t);
   return t;
 }
@@ -616,8 +631,10 @@ function updateTelegraphs(dt) {
     const k = Math.min(1, t.t / t.duration);
     if (t.shape === 'rect') t.fill.scale.set(1, 1, Math.max(0.01, k));
     else t.fill.scale.setScalar(Math.max(0.01, k));
+    if (t.group.userData.spin) t.group.userData.spin.rotation.y += dt * 4.5;
+    if (t.group.userData.pulse) t.group.userData.pulse.scale.setScalar(0.9 + Math.sin(t.t * 28) * 0.25);
     // Nhấp nháy mép khi sắp đánh
-    if (k > 0.7) t.edge.material.opacity = 0.6 + Math.sin(t.t * 40) * 0.4;
+    if (k > 0.65 || t.kind !== 'normal') t.edge.material.opacity = 0.55 + Math.sin(t.t * 42) * 0.45;
     if (k >= 1 || t.done) {
       t.group.parent?.remove(t.group);
       t.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
@@ -703,7 +720,9 @@ const liquidMats = [];
 const LIQUID = {
   lava: { a: [0.045, 0.014, 0.008], b: [0.85, 0.16, 0.02], c: [1.0, 0.55, 0.12], glow: 0.9, flow: 0.05 },
   ice: { a: [0.16, 0.34, 0.5], b: [0.36, 0.62, 0.82], c: [0.9, 1.0, 1.0], glow: 0.8, flow: 0 },
-  water: { a: [0.01, 0.04, 0.08], b: [0.04, 0.22, 0.38], c: [0.3, 0.7, 0.9], glow: 0.7, flow: 0.02 },
+  water: { a: [0.02, 0.08, 0.16], b: [0.08, 0.32, 0.56], c: [0.45, 0.85, 1.0], glow: 0.85, flow: 0.04 },
+  elec: { a: [0.04, 0.08, 0.18], b: [0.3, 0.55, 0.9], c: [1.0, 0.95, 0.45], glow: 1.5, flow: 0.12 },
+  obsidian: { a: [0.04, 0.03, 0.05], b: [0.14, 0.12, 0.18], c: [0.5, 0.32, 0.75], glow: 0.45, flow: 0 },
   void: { a: [0.0, 0.0, 0.0], b: [0.03, 0.025, 0.02], c: [0.12, 0.1, 0.08], glow: 0.4, flow: 0.01 },
   mist: { a: [0.0, 0.01, 0.005], b: [0.02, 0.09, 0.04], c: [0.15, 0.5, 0.25], glow: 0.6, flow: 0.015 },
 };

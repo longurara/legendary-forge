@@ -322,7 +322,7 @@ body.menu .hud { opacity: 0; }
 #boss-poise { height: 100%; width: 0; background: linear-gradient(90deg, #c08a20, #ffe060); transition: width .1s; }
 
 #slowmo { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity .2s; box-shadow: inset 0 0 200px 40px rgba(80, 160, 255, .45); }
-#toast { position: fixed; top: 120px; right: 14px; display: flex; align-items: center; gap: 10px; max-width: 340px; padding: 10px 14px; pointer-events: none;
+#toast { position: fixed; top: 120px; right: 14px; display: flex; align-items: center; gap: 10px; max-width: min(340px, calc(100vw - 28px)); padding: 10px 14px; pointer-events: none; overflow-wrap: break-word; z-index: 30;
   background: rgba(20, 12, 8, .94); border: 1px solid #c8a060; border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .5); transform: translateX(120%); transition: transform .35s; }
 #toast.show { transform: translateX(0); }
 #toast .ico { width: 34px; height: 34px; color: var(--gold); flex: none; }
@@ -448,7 +448,7 @@ h3.sec { font: 700 19px var(--f-label); color: var(--gold); margin: 10px 0 4px; 
 .depth-rules { flex: 1; margin: 0; padding-left: 4px; list-style: none; columns: 2; font-size: 12px; color: var(--ink); max-height: 92px; overflow: auto; }
 .depth-rules li b { color: #c79aff; margin-right: 4px; }
 
-#touch-controls, #rotate-phone, .touch-guide { display: none; }
+#touch-controls, #rotate-phone, .touch-guide, .touch-settings { display: none; }
 @media (pointer: coarse) and (orientation: portrait) {
   #rotate-phone { position: fixed; inset: 0; z-index: 100; display: grid; align-content: center; justify-items: center; gap: 6px; background: #19110d; color: var(--muted); }
   #rotate-phone strong { font: 700 32px var(--f-title); color: var(--gold-hi); }
@@ -457,49 +457,304 @@ h3.sec { font: 700 19px var(--f-label); color: var(--gold); margin: 10px 0 4px; 
   :root {
     --left-edge: max(10px, env(safe-area-inset-left));
     --right-edge: max(10px, env(safe-area-inset-right));
-    --top-edge: max(5px, env(safe-area-inset-top));
+    --top-edge: max(6px, env(safe-area-inset-top));
     --bottom-edge: max(8px, env(safe-area-inset-bottom));
   }
-  body.playing #touch-controls { display: block; position: fixed; inset: var(--top-edge) var(--right-edge) var(--bottom-edge) var(--left-edge); z-index: 2; pointer-events: none; }
-  #touch-controls button { pointer-events: auto; touch-action: none; -webkit-tap-highlight-color: transparent; color: var(--gold-hi); font: 600 14px var(--f-body); text-shadow: 0 1px 3px #000; border: 1px solid #c19a64aa; border-radius: 24px; min-height: 44px; min-width: 44px; background: radial-gradient(at top, #413021dc, #191310c9); box-shadow: inset 0 0 0 2px #100c0960; }
-  #touch-controls .held { background: #755428e8; border-color: var(--gold-hi); }
-  #touch-controls #move-stick { position: absolute; left: 8px; bottom: 5px; width: clamp(88px, 27vh, 120px); aspect-ratio: 1; border-radius: 50%; display: grid; place-items: center; background: #17120e73; }
-  #move-stick span { width: 39%; aspect-ratio: 1; border-radius: 50%; border: 1px solid #ebc98ba8; background: radial-gradient(at top, #ac8a5aaf, #4d3a29c9); }
-  #touch-pause { position: absolute; right: 0; top: 0; }
-  .touch-combat { position: absolute; right: 0; bottom: 0; display: grid; grid-template-columns: 54px 64px; gap: 6px; align-items: end; }
-  #touch-controls [data-action="attack"] { height: 60px; border-radius: 50%; background: radial-gradient(at top, #97623de6, #51291cd9); font-size: 18px; }
-  #touch-controls [data-action="attack"].held { border-color: #fff0cb; }
-  body:has(#rage.full) [data-action="KeyR"], body:has(#special-ring.ready) [data-action="special"] { border-color: #ffe2a0; }
-  #touch-swap { position: absolute; left: 0; bottom: clamp(100px, 30vh, 136px); }
-  .touch-context { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); display: flex; gap: 6px; }
-  .touch-context button, #touch-swap { padding-inline: 12px; }
-  #hint, #hud-left .keycap, .skill-row, .swap-hint, .slot:not(.active), .slot .num, .slot .meta, #prompt .keycap, #hud-right span:nth-child(2) { display: none; }
-  #hud-left, #hud-right, .wave-panel.panel { border-width: 6px; border-image-width: 6px; padding: 3px 5px; }
-  #hud-left { top: var(--top-edge); left: var(--left-edge); width: min(24vw, 185px); gap: 3px; }
+  .touch-settings { display: flex; flex-direction: column; gap: 6px; }
+  .touch-alpha-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font: 600 13px var(--f-label); color: var(--muted); padding: 2px 6px; }
+  .touch-alpha-row input { width: 110px; accent-color: var(--gold); }
+
+  body.playing #touch-controls {
+    display: block;
+    position: fixed;
+    inset: var(--top-edge) var(--right-edge) var(--bottom-edge) var(--left-edge);
+    z-index: 4;
+    pointer-events: none;
+  }
+  #touch-controls button {
+    pointer-events: auto;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    color: var(--gold-hi);
+    font: 700 11px var(--f-label);
+    text-shadow: 0 1px 3px #000;
+    border: 1.5px solid rgba(210, 170, 108, .65);
+    background: radial-gradient(circle at 35% 25%, rgba(62, 44, 30, .9), rgba(22, 15, 11, .86));
+    box-shadow: 0 3px 10px rgba(0, 0, 0, .55), inset 0 0 0 2px rgba(16, 10, 6, .45);
+    transition: transform .08s, border-color .12s, box-shadow .15s;
+  }
+  #touch-controls button.held {
+    transform: scale(.93);
+    background: radial-gradient(circle at 50% 40%, rgba(135, 94, 46, .95), rgba(62, 38, 18, .92));
+    border-color: #fff0c0;
+  }
+
+  /* ---- Nửa trái: Floating Joystick thông minh ---- */
+  #move-zone {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 42vw;
+    height: 58vh;
+    pointer-events: auto;
+    touch-action: none;
+  }
+  #move-stick {
+    position: absolute;
+    left: 14px;
+    bottom: 10px;
+    width: clamp(96px, 28vh, 124px);
+    aspect-ratio: 1;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: radial-gradient(circle, rgba(28, 20, 14, .45), rgba(14, 10, 7, .7));
+    border: 2px solid rgba(226, 184, 108, .42);
+    box-shadow: inset 0 0 18px rgba(0, 0, 0, .55);
+    opacity: calc(var(--touch-alpha, .9) * .55);
+    transition: opacity .14s, border-color .14s;
+    pointer-events: none;
+  }
+  #move-stick.active {
+    opacity: var(--touch-alpha, .92);
+    border-color: var(--gold-hi);
+    box-shadow: 0 0 18px rgba(255, 207, 107, .3), inset 0 0 18px rgba(0, 0, 0, .5);
+  }
+  #move-stick span {
+    width: 40%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    border: 1.5px solid rgba(240, 210, 150, .75);
+    background: radial-gradient(circle at 35% 30%, rgba(190, 150, 96, .85), rgba(78, 56, 36, .92));
+    box-shadow: 0 3px 8px rgba(0, 0, 0, .6);
+  }
+  .stick-arrow {
+    position: absolute;
+    inset: -5px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .1s;
+  }
+  .stick-arrow::before {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 7px solid transparent;
+    border-right: 7px solid transparent;
+    border-bottom: 10px solid var(--gold-hi);
+    filter: drop-shadow(0 0 5px rgba(255, 210, 100, .8));
+  }
+
+  /* ---- Thanh tiện ích trên-phải: Bản đồ tầng, Toàn màn hình, Tạm dừng ---- */
+  .touch-top-bar {
+    position: absolute;
+    top: 0;
+    right: 0;
+    display: flex;
+    gap: 6px;
+    pointer-events: none;
+  }
+  .touch-top-bar button {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    font-size: 16px;
+    padding: 0;
+  }
+  .touch-top-bar .ico { width: 20px; height: 20px; color: var(--gold-hi); }
+
+  /* ---- Nút ngữ cảnh thông minh nằm sát tầm với ngón cái phải ---- */
+  .touch-context {
+    position: absolute;
+    right: 174px;
+    bottom: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    pointer-events: none;
+    opacity: var(--touch-alpha, .92);
+  }
+  .touch-ctx-sub { display: flex; gap: 5px; }
+  .touch-ctx-sub button { padding: 4px 10px; border-radius: 14px; font-size: 11px; min-height: 32px; }
+  #touch-interact {
+    min-width: 64px;
+    height: 54px;
+    padding: 4px 10px;
+    border-radius: 27px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+  }
+  #touch-interact .ico { width: 20px; height: 20px; color: var(--gold-hi); }
+  #touch-interact small { font-size: 10px; line-height: 1; white-space: nowrap; }
+  #touch-interact.urgent {
+    background: radial-gradient(circle at 50% 30%, rgba(210, 56, 36, .95), rgba(110, 20, 14, .92));
+    border-color: #ffe280;
+    box-shadow: 0 0 18px rgba(255, 110, 50, .85), inset 0 0 0 2px rgba(255, 224, 130, .45);
+    animation: tcPulse .7s ease-in-out infinite alternate;
+  }
+
+  /* ---- Cụm Vòng Cung Ngón Cái (Thumb Arc) góc dưới-phải ---- */
+  .touch-combat {
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    width: 166px;
+    height: 186px;
+    pointer-events: none;
+    opacity: var(--touch-alpha, .92);
+  }
+  .touch-combat button {
+    position: absolute;
+    border-radius: 50%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    padding: 0;
+  }
+  .touch-combat button small { font: 700 9.5px var(--f-label); letter-spacing: .3px; line-height: 1; opacity: .92; }
+
+  /* Nút Đánh Chính (tâm vòng cung) */
+  #touch-attack {
+    right: 8px;
+    bottom: 8px;
+    width: 76px;
+    height: 76px;
+    border: 2px solid rgba(255, 198, 120, .82);
+    background: radial-gradient(circle at 38% 28%, rgba(176, 98, 52, .94), rgba(88, 36, 22, .92));
+    box-shadow: 0 4px 16px rgba(0, 0, 0, .65), inset 0 0 12px rgba(255, 180, 90, .2);
+  }
+  #touch-attack .ico { width: 30px; height: 30px; color: #fff0d0; }
+  #touch-attack small { font-size: 11px; color: #ffe6b8; }
+
+  /* Các nút vệ tinh trên vòng cung: khoảng hở >= 12px chống bấm nhầm */
+  .tc-sat { --p: 1; --ring-col: #ffcf6b; }
+  .tc-sat::before {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: 50%;
+    background: conic-gradient(var(--ring-col) calc(var(--p) * 360deg), rgba(15, 10, 8, .55) 0);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 3px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 3px));
+    pointer-events: none;
+  }
+  .tc-sat .ico { width: 22px; height: 22px; color: var(--gold-hi); }
+
+  /* Lướt (trái nút Đánh — gạt nhanh nhất để Né / Phản Xuyên) */
+  #touch-dash { right: 106px; bottom: 6px; width: 54px; height: 54px; --ring-col: #7fdcff; }
+  #touch-dash .ico { color: #9fe0ff; }
+  #touch-dash.no-stam { border-color: #ff5a4a; opacity: .7; }
+  #touch-dash-stock { position: absolute; top: -3px; right: -3px; min-width: 17px; padding: 0 3px; border-radius: 8px; background: #142638; border: 1px solid #7fdcff; color: #bfe8ff; font: 800 10px var(--f-body); line-height: 15px; }
+  #touch-dash-stock:empty { display: none; }
+
+  /* Kỹ năng (chéo trên-trái — hỗ trợ Kéo Ngắm & sáng cam khi Nóng Đỏ Phóng Nhiệt) */
+  #touch-special { right: 98px; bottom: 74px; width: 56px; height: 56px; --ring-col: #ffcf6b; }
+  #touch-special:not(.ready) { opacity: .68; }
+  #touch-special.hot { border-color: #ff9030; box-shadow: 0 0 14px rgba(255, 120, 30, .8); --ring-col: #ff7a2a; }
+
+  /* Tuyệt kỹ Nộ (trên-trái cao — hiện vòng % Nộ, sáng vàng nhịp đập khi 100%) */
+  #touch-ult { right: 60px; bottom: 132px; width: 52px; height: 52px; --ring-col: #ff8a3a; opacity: .72; }
+  #touch-ult.full {
+    opacity: 1;
+    --ring-col: #ffe060;
+    border-color: #ffe880;
+    background: radial-gradient(circle at 40% 30%, rgba(215, 130, 34, .96), rgba(112, 42, 12, .94));
+    box-shadow: 0 0 18px rgba(255, 190, 50, .85);
+    animation: tcPulse .8s ease-in-out infinite alternate;
+  }
+
+  /* Đổi / Tôi Vũ Khí (ngay trên nút Đánh — không phải buông tay di chuyển!) */
+  #touch-swap { right: 4px; bottom: 106px; width: 50px; height: 50px; --ring-col: #d8c090; }
+  #touch-swap.twin { --ring-col: #9fe8ff; border-color: #8fe0ff; }
+  #touch-swap.hot {
+    --ring-col: #ff8a2a;
+    border-color: #ffb040;
+    background: radial-gradient(circle at 40% 30%, rgba(200, 92, 26, .95), rgba(90, 28, 12, .92));
+    box-shadow: 0 0 14px rgba(255, 130, 40, .85);
+    animation: tcPulse .7s ease-in-out infinite alternate;
+  }
+
+  /* Tia chỉ hướng khi kéo ngắm trên nút Đánh / Kỹ năng */
+  .aim-ind {
+    position: absolute;
+    inset: -7px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .08s;
+  }
+  .aim-ind::before {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-bottom: 10px solid #ffe890;
+    filter: drop-shadow(0 0 6px #ff9a30);
+  }
+  @keyframes tcPulse { to { transform: scale(1.06); } }
+
+  /* ---- Tinh gọn HUD để không bao giờ đè nhau trên màn ngang điện thoại ---- */
+  #hint, #hud-left .keycap, .skill-row, .rage-row, .swap-hint, .slot:not(.active), .slot .num, .slot .meta, .slot .affixes, .slot .awaken-tag, #prompt .keycap, #hud-right span:nth-child(2) { display: none; }
+  #hud-left, #hud-right, .wave-panel.panel { border-width: 6px; border-image-width: 6px; padding: 3px 6px; }
+  #hud-left { top: var(--top-edge); left: var(--left-edge); width: min(26vw, 200px); gap: 3px; }
+  .hp-row .bar { height: 14px; }
+  #hp-text { font-size: 11px; }
+  .fc-row { gap: 5px; }
+  .fc-bar { height: 10px; }
+  .fc-bar span { font-size: 9px; }
   #hud-top { top: var(--top-edge); gap: 1px; }
-  .wave-label { font-size: 18px; }
-  .wave-panel .sub, #timer, .chip { font-size: 12px; }
-  #hud-right { top: var(--top-edge); right: calc(var(--right-edge) + 49px); display: grid; grid-template-columns: auto auto; gap: 2px 8px; font-size: 13px; }
-  #hud-right .ico, .hp-row .ico { width: 16px; height: 16px; }
-  #slots { left: var(--left-edge); top: calc(var(--top-edge) + 73px); bottom: auto; }
-  .slot.active { width: min(24vw, 185px); height: 28px; border-width: 4px; border-image-width: 4px; padding: 0 2px; gap: 4px; }
+  .wave-label { font-size: 16px; }
+  .wave-panel .sub, #timer, .chip { font-size: 11px; }
+  #hud-right { top: var(--top-edge); right: calc(var(--right-edge) + 128px); display: flex; gap: 8px; font-size: 12px; }
+  #hud-right .ico, .hp-row .ico { width: 15px; height: 15px; }
+
+  /* Radar Minimap đặt gọn dưới thanh nút trên-phải, tránh hẳn cụm nút ngón cái dưới */
+  #minimap-wrap {
+    top: calc(var(--top-edge) + 42px) !important;
+    right: var(--right-edge) !important;
+    bottom: auto !important;
+    padding: 3px;
+    opacity: .8;
+  }
+  #minimap { width: 72px !important; height: 72px !important; }
+
+  /* Ô vũ khí đang cầm + Thanh Nhiệt nằm ngay dưới HUD trái (không đè) */
+  #slots { left: var(--left-edge); top: calc(var(--top-edge) + 84px); bottom: auto; }
+  .slot.active { width: min(26vw, 200px); height: auto; border-width: 5px; border-image-width: 5px; padding: 2px 5px; gap: 5px; }
   .slot .icon { width: 22px; height: 22px; }
-  .slot .name { font-size: 12px; }
-  #relics { left: var(--left-edge); top: calc(var(--top-edge) + 103px); max-width: 22vw; max-height: 24px; overflow: auto; flex-wrap: nowrap; }
-  #relics .relic { flex: none; width: 24px; height: 24px; }
-  #boss-bar { top: calc(var(--top-edge) + 73px); width: 40vw; }
-  .boss-name, #banner-sub { font-size: 14px; }
-  #banner-wrap { top: 36%; }
-  #banner { font-size: clamp(24px, 5vw, 40px); }
-  .banner-line img { width: 32px; }
-  #prompt { bottom: calc(var(--bottom-edge) + 48px); width: min(50vw, 450px); justify-content: center; flex-wrap: wrap; white-space: normal; gap: 2px 5px; font-size: 13px; padding: 3px; border-width: 5px; border-image-width: 5px; }
+  .slot .name { font-size: 11.5px; line-height: 1.1; }
+  .heat-bar { height: 4px; margin-top: 2px; }
+  #relics { left: var(--left-edge); top: calc(var(--top-edge) + 122px); max-width: min(26vw, 200px); max-height: 24px; overflow: auto; flex-wrap: nowrap; }
+  #relics .relic { flex: none; width: 22px; height: 22px; }
+
+  #boss-bar { top: calc(var(--top-edge) + 56px); width: min(38vw, 340px); min-width: 0; }
+  .boss-name, #banner-sub { font-size: 13px; }
+  #banner-wrap { top: 34%; }
+  #banner { font-size: clamp(22px, 4.8vw, 38px); }
+  .banner-line img { width: 28px; }
+  #prompt { bottom: calc(var(--bottom-edge) + 8px); left: 44%; width: min(36vw, 300px); justify-content: center; flex-wrap: wrap; white-space: normal; gap: 2px 5px; font-size: 12px; padding: 3px 6px; border-width: 5px; border-image-width: 5px; }
+
   .overlay { padding: var(--top-edge) var(--right-edge) var(--bottom-edge) var(--left-edge); gap: 6px; overflow-y: auto; overscroll-behavior: contain; }
   .overlay .panel { max-height: 100%; overflow-y: auto; overscroll-behavior: contain; }
   .panel.big { padding: 7px 12px; width: min(100%, 880px); gap: 6px; }
-  .panel.big h2, .menu-panel h2 { font-size: 30px; }
+  .panel.big h2, .menu-panel h2 { font-size: 28px; }
   #start { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 38%); grid-template-rows: minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; }
   #start .menu-panel { min-width: 0; gap: 3px; padding: 4px; }
-  #start .btn, .menu-panel .btn { min-height: 40px; border-width: 6px; border-image-width: 6px; font-size: 16px; padding: 2px 6px; }
+  #start .btn, .menu-panel .btn { min-height: 40px; border-width: 6px; border-image-width: 6px; font-size: 15px; padding: 2px 6px; }
   #start-best { margin: 0; }
   .title-block h1 { font-size: clamp(44px, 9vw, 78px); }
   #start .loading-text { position: absolute; left: 12%; bottom: 12%; }
@@ -507,13 +762,18 @@ h3.sec { font: 700 19px var(--f-label); color: var(--gold); margin: 10px 0 4px; 
   .touch-guide { display: block; }
   .howto-col:first-child .ctrl { display: none; }
   #levelup { justify-content: safe center; gap: 4px; }
-  .lu-title { font-size: 30px; }
+  .lu-title { font-size: 28px; }
   .cards { width: 100%; flex-wrap: nowrap; gap: 6px; }
   .card { flex: 1; max-width: 210px; min-width: 0; min-height: 0; padding: 6px; border-width: 7px; border-image-width: 7px; gap: 3px; }
   .card .keycap { display: none; }
   .card-ico { width: 32px; height: 32px; }
-  .card h3 { font-size: 17px; }
-  .card p { font-size: 13px; }
+  .card h3 { font-size: 16px; }
+  .card p { font-size: 12.5px; }
+}
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 390px) {
+  .touch-combat { transform: scale(.88); transform-origin: bottom right; }
+  .touch-context { right: 156px; transform: scale(.9); transform-origin: bottom right; }
+  #minimap { width: 62px !important; height: 62px !important; }
 }
 
 .relic.cursed { background: rgba(50, 8, 8, .9); box-shadow: 0 0 0 1px #c83a3a, 0 0 10px rgba(255, 60, 60, .45); }
@@ -608,3 +868,245 @@ h3.sec { font: 700 19px var(--f-label); color: var(--gold); margin: 10px 0 4px; 
 #story { background: rgba(4, 2, 1, .86); z-index: 60; }
 #story .story-panel { width: min(640px, 92vw); background: var(--panel-solid, #1a120c); background-clip: padding-box; }
 .story-line { min-height: 60px; }
+
+
+/* ================= 8 Cơ Chế Phức Tạp: Nhiệt Lưỡi, Ánh Lửa/Tha Hóa, Xưởng Đe, Mạch Cổ Ngữ, Boss Parts ================= */
+
+/* Ánh Lửa & Sự Tha Hóa trong HUD trái */
+#relics { top: 218px; }
+.fc-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 2px; }
+.fc-item { display: flex; align-items: center; gap: 5px; pointer-events: auto; }
+.fc-item .ico { width: 16px; height: 16px; }
+.fc-bar { position: relative; flex: 1; height: 12px; background: #1a1110; border-radius: 3px; overflow: hidden; box-shadow: inset 0 1px 2px #000, 0 0 0 1px #4c3628; }
+.fc-bar span { position: absolute; inset: 0; display: grid; place-items: center; font: 700 10px var(--f-body); text-shadow: 0 1px 2px #000; color: #fff; }
+#flame-fill { height: 100%; width: 85%; background: linear-gradient(90deg, #b83a10, #ff9a3a, #ffe08a); transition: width .15s; }
+.fc-bar.flame.ember { box-shadow: 0 0 8px rgba(180, 120, 255, .7), 0 0 0 1px #b89aff; }
+.fc-bar.flame.ember #flame-fill { background: linear-gradient(90deg, #6a20b0, #b880ff); }
+#corr-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #5a1a90, #b850ff); transition: width .15s; }
+.dyn-curses { display: flex; flex-wrap: wrap; gap: 4px; pointer-events: auto; }
+.dyn-curse-ico { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 4px; background: rgba(65, 16, 95, .9); border: 1px solid #b860ff; }
+.dyn-curse-ico .ico { width: 14px; height: 14px; color: #e8b8ff; }
+
+/* Thanh Nhiệt Lưỡi & Cổ Ngữ ngay trên ô vũ khí */
+.heat-bar { position: relative; height: 6px; margin-top: 4px; background: #1a1210; border-radius: 3px; overflow: hidden; box-shadow: inset 0 1px 2px #000; }
+.heat-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #5880a0, #ff8a3a 55%, #fff0a0); transition: width .08s; }
+.heat-bar.hot { box-shadow: 0 0 8px rgba(255, 130, 40, .85), 0 0 0 1px #ff9a40; }
+.heat-bar.critical { box-shadow: 0 0 10px rgba(255, 240, 160, .95), 0 0 0 1px #fff0a0; }
+.heat-bar.overheat { box-shadow: 0 0 10px rgba(255, 60, 30, .95), 0 0 0 1px #ff4a3a; }
+.heat-bar.overheat .heat-fill { background: #ff3a2a; }
+.slot.tempered { box-shadow: 0 0 22px rgba(130, 230, 255, .55); }
+.rune-dots { display: inline-flex; gap: 3px; margin-left: 4px; vertical-align: middle; }
+.rune-dots i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; box-shadow: 0 0 5px currentColor; }
+.awaken-tag { font-size: 10px; padding: 1px 6px; border-radius: 3px; margin-top: 3px; display: inline-block; background: rgba(255, 215, 90, .18); color: #ffe690; border: 1px solid rgba(255, 215, 90, .4); }
+.awaken-tag.done { background: rgba(255, 215, 90, .35); color: #fff4c0; border-color: #ffdf70; box-shadow: 0 0 8px rgba(255, 215, 90, .5); }
+
+/* Thanh Bộ Phận Boss */
+.boss-parts { display: flex; justify-content: center; gap: 8px; margin-top: 5px; flex-wrap: wrap; }
+.bpart { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; font: 700 11px var(--f-label); background: rgba(28, 14, 12, .85); border: 1px solid rgba(255, 200, 100, .45); color: #ffe2a0; }
+.bpart .ico { width: 13px; height: 13px; color: #ffcf4a; }
+.bpart.broken { opacity: .45; text-decoration: line-through; border-color: #6a5a50; color: #9a8a80; }
+
+/* Nhãn Bóng Ma Thợ Rèn */
+.label.echo-lbl { color: #9fe8ff; border-color: rgba(112, 224, 255, .7); background: rgba(8, 24, 38, .88); }
+
+/* Bản đồ tầng: Mỏ Neo Boss & Lan Truyền */
+.floormap line.anchor-chain { stroke: #ff4080; stroke-width: 2.5; stroke-dasharray: 4 5; opacity: .75; }
+.floormap line.anchor-chain.broken { stroke: #5a5050; opacity: .25; }
+.floormap .node.boosted circle { filter: drop-shadow(0 0 8px rgba(255, 215, 80, .85)); }
+.floormap .node.cooled circle { opacity: .65; }
+.floormap .fm-badge { font: 800 16px var(--f-body); text-anchor: middle; }
+.floormap .fm-badge.up { fill: #ffe060; }
+.floormap .fm-badge.dn { fill: #7fdcff; }
+.floormap .fm-sub { font: 600 11px var(--f-body) !important; fill: #ffb0b0 !important; }
+.floormap .node.boss.empowered circle { stroke: #ff3070; stroke-width: 4; }
+
+/* Cửa hàng: nút Mua bằng Tha Hóa */
+.si-btns { display: flex; flex-direction: column; gap: 4px; flex: none; }
+.btn.dark-btn { color: #e8c0ff; background: rgba(58, 18, 86, .92); border-image-source: url('/ui/slot_r2.png'); font-size: 13px; padding: 2px 10px; }
+.btn.dark-btn:hover { color: #fff; filter: brightness(1.2); }
+
+/* ================= Xưởng Đe Rèn Tương Tác ================= */
+#anvil-modal { background: rgba(6, 3, 2, .9); z-index: 40; }
+.anvil-panel { background: var(--panel-solid); background-clip: padding-box; gap: 10px !important; }
+.anvil-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid rgba(226, 184, 108, .25); padding-bottom: 6px; }
+.anvil-head h2 { display: flex; align-items: center; gap: 10px; font-size: 32px !important; margin: 0; }
+.anvil-res { display: flex; gap: 14px; font: 700 15px var(--f-label); }
+.anvil-res span { display: inline-flex; align-items: center; gap: 5px; }
+.anvil-tabs { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.anvil-tab { font: 700 15px var(--f-label); color: var(--muted); background: rgba(0, 0, 0, .35); border: 1px solid rgba(226, 184, 108, .25); border-radius: 6px; padding: 6px 14px; cursor: pointer; transition: all .12s; }
+.anvil-tab:hover { color: #fff; border-color: rgba(226, 184, 108, .6); }
+.anvil-tab.on { color: #2a1608; background: linear-gradient(#f6d58c, #d9a44c); border-color: #ffe2a0; }
+.anvil-tab em { font-style: normal; background: #ff4a3a; color: #fff; border-radius: 8px; padding: 0 5px; font-size: 11px; margin-left: 4px; }
+.anvil-body { text-align: left; min-height: 250px; }
+.anvil-sec h4 { margin: 4px 0 8px; font: 700 17px var(--f-label); color: var(--gold-hi); display: flex; align-items: center; gap: 6px; }
+.dark-toggle { display: flex; align-items: center; gap: 8px; padding: 6px 10px; margin-bottom: 10px; background: rgba(60, 18, 86, .45); border: 1px solid rgba(190, 110, 255, .45); border-radius: 6px; font-size: 13px; cursor: pointer; }
+.mold-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.flame-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.mold-card { display: flex; flex-direction: column; justify-content: space-between; gap: 8px; padding: 12px; background: rgba(0, 0, 0, .38); border: 1px solid rgba(226, 184, 108, .28); border-radius: 8px; }
+.mold-card.legend, .mold-card.boss-core { border-color: #ffcf4a; box-shadow: 0 0 14px rgba(255, 207, 74, .22); }
+.mc-head { display: flex; align-items: center; gap: 10px; }
+.mc-head img { width: 50px; height: 50px; object-fit: contain; flex: none; background: rgba(255, 220, 160, .08); border-radius: 6px; }
+.mc-head h5 { margin: 2px 0 0; font: 700 15px var(--f-label); }
+.mc-tag { font: 700 11px var(--f-label); color: var(--gold); text-transform: uppercase; letter-spacing: 1px; }
+.mc-tag.graft { color: #7fdcff; }
+.mc-tag.twin { color: #ff9ad8; }
+.mold-card p { margin: 0; font-size: 13px; line-height: 1.4; color: var(--ink); }
+.small-btn { font-size: 15px !important; padding: 4px 12px !important; min-width: 0 !important; border-width: 10px !important; border-image-width: 10px !important; }
+
+/* Minigame Tôi Quá Tải */
+.temper-wrap { text-align: center; }
+.temper-bar-wrap { max-width: 520px; margin: 14px auto 8px; }
+.temper-bar { position: relative; height: 28px; border-radius: 6px; background: linear-gradient(90deg, #3a1210, #6a2216, #3a1210); border: 2px solid #8a643c; overflow: hidden; box-shadow: inset 0 2px 6px #000; }
+.temper-sweet { position: absolute; top: 0; bottom: 0; background: linear-gradient(180deg, #ffe880, #ffaa20); box-shadow: 0 0 16px rgba(255, 210, 60, .85); }
+.temper-cursor { position: absolute; top: -2px; bottom: -2px; width: 8px; margin-left: -4px; background: #fff; box-shadow: 0 0 12px #fff, 0 0 4px #000; border-radius: 2px; }
+.temper-msg { font: 700 14px var(--f-label); color: #ffe2a0; min-height: 20px; }
+.mw-list, .curse-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: 6px 0; }
+.mw-pill { font-size: 12px; padding: 3px 8px; border-radius: 4px; background: rgba(255, 210, 80, .18); color: #ffe690; border: 1px solid rgba(255, 210, 80, .45); }
+.corr-pill, .curse-chip { font-size: 12px; padding: 3px 8px; border-radius: 4px; background: rgba(110, 24, 140, .4); color: #eab8ff; border: 1px solid #c060ff; }
+
+/* Mạch Cổ Ngữ */
+.circuit-summary { padding: 7px 12px; border-radius: 6px; background: rgba(30, 18, 48, .75); border: 1px solid rgba(190, 130, 255, .4); font-size: 13px; color: #ead8ff; margin-bottom: 10px; }
+.rune-chain { display: flex; align-items: stretch; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+.rune-arrow { align-self: center; font: 800 20px var(--f-body); color: var(--gold); }
+.rune-slot { flex: 1; min-width: 150px; padding: 8px; border-radius: 8px; border: 2px dashed rgba(226, 184, 108, .3); background: rgba(0, 0, 0, .3); display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; }
+.rune-slot.filled { border-style: solid; background: rgba(24, 14, 34, .82); }
+.rune-slot .ico { width: 28px; height: 28px; }
+.rune-slot b { font: 700 13px var(--f-label); color: var(--gold-hi); }
+.rune-slot small { font-size: 11px; color: var(--muted); line-height: 1.3; }
+.rs-top { width: 100%; display: flex; justify-content: space-between; align-items: center; font-size: 10px; }
+.rs-kind { padding: 1px 5px; border-radius: 3px; background: rgba(255, 255, 255, .1); text-transform: uppercase; font-weight: 700; }
+.rs-ops { display: flex; gap: 3px; }
+.rs-ops button { background: rgba(0, 0, 0, .5); color: #fff; border: 1px solid rgba(255, 255, 255, .25); border-radius: 3px; width: 20px; height: 20px; padding: 0; font-size: 11px; line-height: 1; }
+.rs-ops button:hover { background: var(--gold); color: #1a0c04; }
+.rune-bag { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-height: 180px; overflow-y: auto; }
+.rune-bag-item { display: flex; align-items: center; gap: 8px; text-align: left; padding: 7px 9px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, .25); background: rgba(0, 0, 0, .4); color: var(--ink); font-family: var(--f-body); }
+.rune-bag-item:hover:not([disabled]) { background: rgba(60, 36, 80, .65); }
+.rune-bag-item:disabled { opacity: .4; }
+.rune-bag-item .ico { width: 24px; height: 24px; }
+.rune-bag-item b { font: 700 13px var(--f-label); color: var(--gold-hi); }
+.rune-bag-item small { display: block; font-size: 11px; color: var(--muted); }
+.rb-kind { font-size: 10px; padding: 1px 4px; border-radius: 3px; background: rgba(255, 255, 255, .1); color: #ddd; }
+
+@media (max-width: 760px) {
+  .mold-grid, .flame-grid, .rune-bag { grid-template-columns: 1fr; }
+}
+
+
+/* ================= Polish Modal & Scrollbar (Fix cắt nút ở Chuẩn bị xuống hầm & thanh cuộn đẹp) ================= */
+/* Thanh cuộn tối viền vàng đồng bộ giao diện thay cho thanh cuộn trắng mặc định */
+.panel.big, .anvil-body, .rune-bag, .depth-rules {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(226, 184, 108, .55) rgba(0, 0, 0, .35);
+}
+.panel.big::-webkit-scrollbar, .anvil-body::-webkit-scrollbar, .rune-bag::-webkit-scrollbar, .depth-rules::-webkit-scrollbar {
+  width: 7px; height: 7px;
+}
+.panel.big::-webkit-scrollbar-track, .anvil-body::-webkit-scrollbar-track, .rune-bag::-webkit-scrollbar-track, .depth-rules::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, .35); border-radius: 4px;
+}
+.panel.big::-webkit-scrollbar-thumb, .anvil-body::-webkit-scrollbar-thumb, .rune-bag::-webkit-scrollbar-thumb, .depth-rules::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #b88c4a, #7a5828); border-radius: 4px; border: 1px solid rgba(255, 226, 160, .3);
+}
+.panel.big::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #e2b86c, #a07638); }
+
+/* Màn "Chuẩn bị xuống hầm" gọn gàng, vừa khít 1 màn hình không bị che mất nút Quay lại / Vào hầm */
+#prep { padding: 12px 16px; }
+#prep .panel.big.wide {
+  padding: 12px 22px 14px;
+  gap: 6px;
+  max-height: 96vh;
+}
+#prep .panel.big h2 { font-size: clamp(28px, 4.2vh, 36px); line-height: 1.05; }
+#prep .divider { margin: -2px 0 0; }
+#prep h3.sec { margin: 4px 0 2px; font-size: 16px; }
+#prep .char-card { padding: 8px 8px; gap: 2px; }
+#prep .char-card .ico { width: 34px; height: 34px; }
+#prep .char-card h4 { font-size: 16px; }
+#prep .char-card p { font-size: 11.5px; line-height: 1.3; }
+#prep .depth-row { gap: 10px; align-items: center; }
+#prep .depth-btn { width: 36px; font-size: 20px; border-width: 10px; border-image-width: 10px; padding: 1px 0; }
+#prep .depth-val { width: 50px; }
+#prep .depth-val b { font-size: 28px; }
+.depth-rules {
+  columns: unset;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 0;
+  max-height: 76px;
+}
+.depth-rules li {
+  background: rgba(155, 110, 220, .12);
+  border: 1px solid rgba(199, 154, 255, .28);
+  border-radius: 5px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.depth-rules li.muted { background: none; border: none; padding: 0; }
+#prep .curse-list { gap: 6px; }
+#prep .curse { padding: 6px 9px; gap: 8px; }
+#prep .curse .ico { width: 24px; height: 24px; }
+#prep .curse h4 { font-size: 14px; }
+#prep .curse p { font-size: 11.5px; line-height: 1.25; }
+#prep .curse-bonus { margin: 2px 0; font-size: 14px; }
+#prep .btn-row.center { margin-top: 2px; position: sticky; bottom: -14px; padding: 6px 0 2px; background: linear-gradient(transparent, var(--panel-solid) 26%); z-index: 2; }
+#prep .btn-row.center .btn { font-size: 18px; padding: 5px 18px; border-width: 12px; border-image-width: 12px; }
+
+/* Nút đóng/hành động của Xưởng Đe luôn hiện rõ, chỉ cuộn phần nội dung bên trong */
+.anvil-panel { max-height: 94vh; display: flex; flex-direction: column; overflow: hidden !important; }
+.anvil-body { overflow-y: auto; flex: 1; padding-right: 4px; }
+
+/* ================= Polish HUD & Xưởng Đe từ kết quả Browser QA ================= */
+/* Boss bar không đè lên Nhiệm vụ (#quest-chip) và không chạm HUD trái */
+#boss-bar { top: 116px; width: min(500px, calc(100vw - 680px)); min-width: 320px; }
+/* Ô vũ khí rộng thoáng để tên và dòng meta không xuống 4 dòng */
+.slot { width: 274px; }
+.slot .info { flex: 1; min-width: 0; }
+.slot .meta { flex-wrap: wrap; row-gap: 2px; }
+.slot .meta > span { white-space: nowrap; }
+/* Toast không tràn mép phải */
+#toast > div { min-width: 0; flex: 1; }
+#toast span { display: block; word-break: break-word; }
+/* Lõi Boss dạng thanh ngang gọn trong Xưởng Đe + nút inline-flex không rớt icon */
+.core-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.boss-core-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: rgba(48, 34, 12, .55); border: 1px solid #ffcf4a; border-radius: 8px; }
+.boss-core-row img { width: 42px; height: 42px; object-fit: contain; flex: none; background: rgba(255, 220, 160, .1); border-radius: 6px; }
+.boss-core-row .bcr-info { flex: 1; min-width: 0; }
+.boss-core-row h5 { margin: 0; font: 700 15px var(--f-label); }
+.boss-core-row p { margin: 2px 0 0; font-size: 12px; color: var(--ink); }
+.small-btn { display: inline-flex !important; align-items: center; justify-content: center; gap: 4px; white-space: nowrap; }
+.small-btn .ico { width: 14px; height: 14px; }
+.flame-grid .btn-row { align-items: stretch; }
+.flame-grid .btn-row .btn { white-space: normal; line-height: 1.25; }
+
+/* ================= Arena Radar Minimap (góc dưới phải cho đấu trường 18x18) ================= */
+#minimap-wrap {
+  position: absolute;
+  right: 16px;
+  bottom: 46px;
+  padding: 5px;
+  background: rgba(16, 10, 7, .82);
+  border: 2px solid rgba(226, 184, 108, .55);
+  border-radius: 8px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, .65), inset 0 0 12px rgba(255, 190, 100, .08);
+  pointer-events: none;
+}
+#minimap { display: block; width: 136px; height: 136px; border-radius: 4px; }
+@media (max-width: 900px) {
+  #minimap-wrap { right: 12px; bottom: 138px; padding: 3px; }
+  #minimap { width: 96px; height: 96px; }
+}
+
+/* Đảm bảo ưu tiên cuối cùng trong cascade cho màn ngang điện thoại (không bị rule desktop ghi đè) */
+@media (pointer: coarse) and (orientation: landscape) {
+  #boss-bar { top: calc(var(--top-edge) + 56px); width: min(38vw, 340px); min-width: 0; }
+  .slot.active { width: min(26vw, 200px); }
+  #slots { left: var(--left-edge); top: calc(var(--top-edge) + 90px); bottom: auto; }
+  #relics { left: var(--left-edge); top: calc(var(--top-edge) + 128px); max-width: min(26vw, 200px); }
+  #minimap-wrap { top: calc(var(--top-edge) + 42px); right: var(--right-edge); bottom: auto; padding: 3px; opacity: .8; }
+  #minimap { width: 72px; height: 72px; }
+}
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 390px) {
+  #minimap { width: 62px; height: 62px; }
+}

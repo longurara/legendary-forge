@@ -8,7 +8,8 @@ export const EVENTS_ROOM = [
     text: 'Một bức tượng đẫm máu thì thầm: "Hiến dâng sinh lực, ta ban cho sức mạnh."',
     choices: [
       { text: 'Hiến 25% máu tối đa', sub: 'Nhận một di vật', can: (g) => g.player.hp > g.player.maxHp * 0.3, run: (g) => { g.player.hp -= Math.round(g.player.maxHp * 0.25); g.grantRelic(); } },
-      { text: 'Cầu nguyện', sub: 'Hồi 30% máu', run: (g) => { g.heal(0.3); g.banner('Được ban phước', 'Hồi 30% máu'); } },
+      { text: 'Thề Với Bóng Đêm', sub: '+35 Tha Hóa · nhận di vật + 1 Cổ Ngữ', run: (g) => { g.addCorruption?.(35); g.grantRelic(); g.grantRune?.(); } },
+      { text: 'Cầu nguyện', sub: 'Hồi 30% máu · +25 Ánh Lửa', run: (g) => { g.heal(0.3); g.addFlame?.(25); g.banner('Được ban phước', 'Hồi 30% máu · +25 Ánh Lửa'); } },
       { text: 'Bỏ đi', sub: '', run: () => {} },
     ],
   },
@@ -53,8 +54,18 @@ export const EVENTS_ROOM = [
     text: 'Lò vẫn còn hơi ấm. Trên đe là một khuôn đúc nứt vỡ.',
     choices: [
       { text: 'Rèn lại vũ khí', sub: 'Thêm 1 phụ tố ngẫu nhiên, mất 15% máu', can: (g) => (g.player.weapon.affixes?.length || 0) < 3, run: (g) => { g.addAffix(); g.player.hp = Math.max(1, g.player.hp - Math.round(g.player.maxHp * 0.15)); } },
-      { text: 'Nung chảy đồ thừa', sub: '+20 Mảnh Thép', run: (g) => g.addScrap(20) },
+      { text: 'Nung Bằng Hắc Hỏa', sub: '+30 Tha Hóa · vũ khí +1 & nhận 1 Cổ Ngữ', can: (g) => (g.player.weapon.plus || 0) < 5, run: (g) => { g.addCorruption?.(30); g.player.weapon.plus = (g.player.weapon.plus || 0) + 1; g.player.recalc(); g.refresh(); g.grantRune?.(); g.banner('Hắc Hỏa Tôi Luyện', 'Vũ khí +1 · +1 Cổ Ngữ'); } },
+      { text: 'Nung chảy đồ thừa', sub: '+20 Mảnh Thép · +20 Ánh Lửa', run: (g) => { g.addScrap(20); g.addFlame?.(20); } },
       { text: 'Bỏ đi', sub: '', run: () => {} },
+    ],
+  },
+  {
+    id: 'flame_altar', title: 'Đài Lửa Cổ', icon: 'x_fire-bowl',
+    text: 'Ngọn lửa xanh leo lét giữa màn sương đen. Có thể dùng để thanh tẩy bóng tối hoặc hấp thu sức mạnh cấm.',
+    choices: [
+      { text: 'Thanh Tẩy Bóng Đêm', sub: 'Trả 30 vàng · xóa 1 Lời Nguyền & hồi đầy Ánh Lửa', can: (g) => g.gold() >= 30, run: (g) => { g.addGold(-30); g.purgeCurse?.(); g.addFlame?.(60); } },
+      { text: 'Dập Tắt Ngọn Lửa', sub: '-45 Ánh Lửa · nhận 2 Cổ Ngữ & +60 vàng', run: (g) => { g.addFlame?.(-45); g.addGold(60); g.grantRune?.(); g.grantRune?.(); g.banner('Bóng Tối Ùa Về', '+60 vàng · +2 Cổ Ngữ'); } },
+      { text: 'Sưởi Ấm', sub: '+35 Ánh Lửa · hồi 20% máu', run: (g) => { g.addFlame?.(35); g.heal(0.2); } },
     ],
   },
 ];

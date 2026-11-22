@@ -1,8 +1,8 @@
-// Bẫy và vật thể trong phòng: thùng thuốc nổ, bẫy gai, mưa lửa
+// Bẫy, vật thể trong phòng và Ma Trận Hóa Học Bề Mặt (Cơ chế #4)
 import * as THREE from 'three';
 import { models } from './models.js';
-import { ctx, aoe, scheduleBomb, spawnFirePatch } from './combat.js';
-import { spawnRing, burst, addShake, spawnTelegraph, damageNumber, explosion, flame } from './fx.js';
+import { ctx, aoe, scheduleBomb, spawnFirePatch, getFirePatches, getToxics, removeFirePatch, removeToxic, dealDamage } from './combat.js';
+import { spawnRing, burst, addShake, spawnTelegraph, damageNumber, explosion, flame, flash, spawnBolt } from './fx.js';
 import { play } from './audio.js';
 import { isBlocked, ROOM_HALF, DS, pillars, currentBiome } from './world.js';
 import { emit, F, smoke as fxSmoke, liquidMaterial, blobGeometry } from './fx.js';
@@ -12,8 +12,14 @@ const spikes = [];
 const icePatches = [];
 const lavaPools = [];
 const graves = [];
+const waterPatches = [];
+const elecPatches = [];
+const steamClouds = [];
+const cyclones = [];
+const fallingPillars = [];
 export let waveActive = { on: false };
 let rainT = 0;
+let surfaceDepth = 0;
 
 class Barrel {
   constructor(scene, x, z) {
@@ -118,12 +124,13 @@ export function buildHazards(scene, floor, rand = Math.random) {
     }
     return null;
   };
-  const nBarrels = 4 + Math.min(3, floor);
-  for (let i = 0; i < nBarrels; i++) { const p = free(1.5); if (p) ctx.barrels.push(new Barrel(scene, p[0], p[1])); }
+  const nBarrels = 7 + Math.min(5, floor);
+  for (let i = 0; i < nBarrels; i++) { const p = free(1.6); if (p) ctx.barrels.push(new Barrel(scene, p[0], p[1])); }
   icePatches.length = 0; lavaPools.length = 0; graves.length = 0;
+  waterPatches.length = 0; elecPatches.length = 0; steamClouds.length = 0; cyclones.length = 0; fallingPillars.length = 0;
   const biome = currentBiome.id;
-  const nSpikes = biome === 'stone' || biome === 'crypt' ? 2 + Math.min(3, floor) : 1;
-  for (let i = 0; i < nSpikes; i++) { const p = free(2.2); if (p) spikes.push(new Spike(p[0], p[1], rand() * 3.2)); }
+  const nSpikes = biome === 'stone' || biome === 'crypt' ? 4 + Math.min(4, floor) : 2;
+  for (let i = 0; i < nSpikes; i++) { const p = free(2.4); if (p) spikes.push(new Spike(p[0], p[1], rand() * 3.2)); }
   // Đặt vũng không chồng lên nhau và không đè vật cản
   const pools = [];
   const freePool = (r) => {
@@ -143,19 +150,19 @@ export function buildHazards(scene, floor, rand = Math.random) {
   };
   if (biome === 'ice') {
     // Mặt băng trơn (hình méo tự nhiên, có vết nứt): đi vào sẽ bị trượt
-    for (let i = 0; i < 5; i++) {
-      const r = 2.2 + rand() * 1.6;
+    for (let i = 0; i < 8; i++) {
+      const r = 2.6 + rand() * 1.9;
       const p = freePool(r); if (!p) continue;
       const geo = blobGeometry(r, rand);
       const m = new THREE.Mesh(geo, liquidMaterial('ice'));
       m.position.set(p[0], 0.035, p[1]);
       m.renderOrder = 1;
       group.add(m);
-      icePatches.push({ x: p[0], z: p[1], r: r * 0.9 });
+      icePatches.push({ x: p[0], z: p[1], r: r * 0.9, mesh: m, melted: false });
     }
     // Cụm pha lê băng (vật cản), mặt phẳng góc cạnh
     const crystal = new THREE.MeshStandardMaterial({ color: 0xa8e4ff, emissive: 0x2a7acf, emissiveIntensity: 0.55, roughness: 0.1, metalness: 0.1, flatShading: true, transparent: true, opacity: 0.9 });
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 10; i++) {
       const p = free(1.4); if (!p) continue;
       const g = new THREE.Group();
       const n = 3 + Math.floor(rand() * 4);
@@ -173,8 +180,8 @@ export function buildHazards(scene, floor, rand = Math.random) {
     }
   } else if (biome === 'lava') {
     // Vũng nham thạch chảy (shader), viền đá nguội, đứng lên bị bỏng
-    for (let i = 0; i < 4; i++) {
-      const r = 1.6 + rand() * 1.3;
+    for (let i = 0; i < 7; i++) {
+      const r = 2.0 + rand() * 1.6;
       const p = freePool(r); if (!p) continue;
       const geo = blobGeometry(r, rand);
       const m = new THREE.Mesh(geo, liquidMaterial('lava'));
@@ -185,7 +192,7 @@ export function buildHazards(scene, floor, rand = Math.random) {
       // vài tảng đá quanh mép
       const R = geo.userData.radiusAt;
       for (let k = 0; k < 3; k++) { const th = rand() * Math.PI * 2; rock(p[0] + Math.cos(th) * R(th) * 1.05, p[1] + Math.sin(th) * R(th) * 1.05, 0.14 + rand() * 0.12); }
-      lavaPools.push({ x: p[0], z: p[1], r: r * 0.85, light: L, tick: 0, seed: rand() * 10 });
+      lavaPools.push({ x: p[0], z: p[1], r: r * 0.85, light: L, tick: 0, seed: rand() * 10, mesh: m, lavaMat: m.material, obsidianT: 0 });
     }
     // Vết nứt nóng trên sàn (texture tia điện Kenney tô màu cam)
     for (let i = 0; i < 10; i++) {
@@ -195,7 +202,7 @@ export function buildHazards(scene, floor, rand = Math.random) {
   } else if (biome === 'crypt') {
     // Mộ thật (KayKit Halloween): khi đang có quái, thỉnh thoảng sống dậy một bộ xương
     const graveModels = ['crypt/grave_A', 'crypt/grave_B', 'crypt/gravestone', 'crypt/grave_A_destroyed'];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 8; i++) {
       const p = free(2); if (!p) continue;
       const g = new THREE.Group();
       const rot = Math.floor(rand() * 4) * Math.PI / 2 + (rand() - 0.5) * 0.3;
@@ -288,15 +295,361 @@ export function placeSecretWall(rand, onBreak) {
   return w;
 }
 
-// Người chơi đang đứng trên băng không (player.js dùng để trượt)
-export function onIce(x, z) { return icePatches.some((p) => Math.hypot(x - p.x, z - p.z) < p.r); }
+// Người chơi đang đứng trên băng / nước / sương mù không
+export function onIce(x, z) { return icePatches.some((p) => !p.melted && Math.hypot(x - p.x, z - p.z) < p.r); }
+export function onWater(x, z) { return waterPatches.some((p) => Math.hypot(x - p.x, z - p.z) < p.r); }
+export function inSteam(x, z) { return steamClouds.some((s) => Math.hypot(x - s.x, z - s.z) < s.r); }
+
+// Tạo màn sương hơi nước (từ Tôi Địa Hình hoặc Lửa + Băng): làm mù quái đánh xa
+export function spawnSteamCloud(pos, radius = 3.2, dur = 4.5) {
+  if (!group) return;
+  steamClouds.push({ x: pos.x, z: pos.z, r: radius, t: dur, dur });
+  fxSmoke(pos.clone().setY(0.6), { count: 10, color: 0xd8ecf4, size: radius * 0.6, life: 1.5, speed: 2.2, rise: 0.9, alpha: 0.45 });
+  play('freeze', { at: pos, rate: 0.6, vol: 0.5 });
+}
+
+// Tạo vũng nước (khi băng tan hoặc kỹ năng)
+export function spawnWaterPatch(x, z, r = 2.2, dur = 12, sourceIce = null) {
+  if (!group) return null;
+  const geo = blobGeometry(r, Math.random);
+  const mesh = new THREE.Mesh(geo, liquidMaterial('water'));
+  mesh.position.set(x, 0.042, z);
+  mesh.renderOrder = 2;
+  group.add(mesh);
+  const w = { x, z, r: r * 0.9, t: dur, dur, mesh, sourceIce };
+  waterPatches.push(w);
+  return w;
+}
+
+// Tạo lốc nguyên tố di động (Gió cuốn qua Lửa / Độc / Sương)
+function spawnCyclone(pos, dir, kind, dmg) {
+  if (!group || cyclones.length >= 4) return;
+  const d = dir && dir.lengthSq() > 0.01 ? dir.clone().setY(0).normalize() : new THREE.Vector3(0, 0, -1);
+  const color = kind === 'fire' ? 0xff7a2a : kind === 'poison' ? 0x8fe83a : 0xd0f0ff;
+  const mesh = new THREE.Mesh(
+    new THREE.ConeGeometry(1.1, 2.8, 12, 1, true),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }),
+  );
+  mesh.rotation.x = Math.PI;
+  mesh.position.set(pos.x, 1.4, pos.z);
+  group.add(mesh);
+  cyclones.push({ pos: pos.clone().setY(0), vel: d.multiplyScalar(5.5), kind, dmg: Math.max(8, Math.round(dmg)), t: 3.4, tick: 0, mesh, color });
+  play('dash', { at: pos, rate: 0.55, vol: 0.7 });
+  damageNumber(pos, kind === 'fire' ? 'Lốc Lửa!' : kind === 'poison' ? 'Bão Độc!' : 'Lốc Sương!', 'react melt');
+}
+
+// ---------- Ma Trận Hóa Học Bề Mặt (gọi từ combat.js / player.js khi đòn nguyên tố chạm đất/quái) ----------
+export function reactSurface(pos, radius, element, dir = null, baseDmg = 18) {
+  if (!group || !element || element === 'none' || surfaceDepth >= 2) return false;
+  surfaceDepth++;
+  let reacted = false;
+  try {
+    // 1. LỬA lên BĂNG -> Tan thành Vũng Nước + Màn Sương
+    if (element === 'fire') {
+      for (const ice of icePatches) {
+        if (ice.melted) continue;
+        if (Math.hypot(ice.x - pos.x, ice.z - pos.z) < ice.r + radius) {
+          ice.melted = true;
+          if (ice.mesh) ice.mesh.visible = false;
+          spawnWaterPatch(ice.x, ice.z, ice.r * 1.1, 12, ice);
+          spawnSteamCloud(new THREE.Vector3(ice.x, 0, ice.z), ice.r * 0.9, 3.5);
+          damageNumber(new THREE.Vector3(ice.x, 0.4, ice.z), 'Tan Băng!', 'react shatter');
+          reacted = true;
+        }
+      }
+      // 2. LỬA lên VŨNG ĐỘC -> Kích nổ khí độc dây chuyền!
+      const toxics = getToxics();
+      const hitIdx = [];
+      for (let i = 0; i < toxics.length; i++) {
+        if (Math.hypot(toxics[i].pos.x - pos.x, toxics[i].pos.z - pos.z) < toxics[i].radius + radius) hitIdx.push(i);
+      }
+      if (hitIdx.length) {
+        // Lan dây chuyền sang mọi vũng độc chạm nhau
+        const chain = new Set(hitIdx);
+        let grew = true;
+        while (grew) {
+          grew = false;
+          for (let i = 0; i < toxics.length; i++) {
+            if (chain.has(i)) continue;
+            for (const j of chain) {
+              if (Math.hypot(toxics[i].pos.x - toxics[j].pos.x, toxics[i].pos.z - toxics[j].pos.z) < toxics[i].radius + toxics[j].radius + 1.8) {
+                chain.add(i); grew = true; break;
+              }
+            }
+          }
+        }
+        const sorted = [...chain].sort((a, b) => b - a);
+        for (const i of sorted) {
+          const tPos = toxics[i].pos.clone();
+          const tR = Math.max(2.6, toxics[i].radius * 1.9);
+          removeToxic(i);
+          explosion(tPos, tR, 0x9fff5a, { smoke: true, scorch: true, core: 0xe8ffb0 });
+          damageNumber(tPos, 'Khí Độc Nổ!', 'react overload');
+          play('explode', { at: tPos, vol: 0.75 });
+          aoe(tPos, tR, Math.round(baseDmg * 1.1 + 18), { element: 'fire', element2: null }, 12, { surface: false });
+          spawnFirePatch(tPos, tR * 0.7, 3.2, 12);
+        }
+        reacted = true;
+      }
+    }
+
+    // 3. SÉT lên VŨNG NƯỚC -> Điện Trường diện rộng (4s)
+    if (element === 'lightning') {
+      for (const w of waterPatches) {
+        if (w.electrified) continue;
+        if (Math.hypot(w.x - pos.x, w.z - pos.z) < w.r + radius) {
+          w.electrified = true;
+          const mesh = new THREE.Mesh(blobGeometry(w.r * 1.05, Math.random), liquidMaterial('elec'));
+          mesh.position.set(w.x, 0.055, w.z);
+          mesh.renderOrder = 3;
+          group.add(mesh);
+          elecPatches.push({ x: w.x, z: w.z, r: w.r * 1.1, t: 4.2, tick: 0, dmg: Math.max(10, Math.round(baseDmg * 0.55)), mesh, water: w });
+          spawnRing(ctx.scene, new THREE.Vector3(w.x, 0, w.z), w.r * 1.15, 0xffe14a, 0.45);
+          damageNumber(new THREE.Vector3(w.x, 0.4, w.z), 'Điện Trường!', 'react overload');
+          play('zap', { at: { x: w.x, z: w.z }, vol: 0.75 });
+          reacted = true;
+        }
+      }
+    }
+
+    // 4. BĂNG lên VŨNG NHAM THẠCH -> Đông cứng thành vỏ Đá Obsidian đi qua được (8s)
+    if (element === 'ice') {
+      for (const L of lavaPools) {
+        if (L.obsidianT > 0) continue;
+        if (Math.hypot(L.x - pos.x, L.z - pos.z) < L.r + radius) {
+          L.obsidianT = 8.5;
+          if (!L.obsMat) L.obsMat = liquidMaterial('obsidian');
+          if (L.mesh) L.mesh.material = L.obsMat;
+          L.light.intensity = 1.2;
+          spawnRing(ctx.scene, new THREE.Vector3(L.x, 0, L.z), L.r, 0xa080ff, 0.45);
+          spawnSteamCloud(new THREE.Vector3(L.x, 0, L.z), L.r * 0.85, 2.5);
+          damageNumber(new THREE.Vector3(L.x, 0.4, L.z), 'Đá Obsidian!', 'react shatter');
+          play('freeze', { at: { x: L.x, z: L.z }, rate: 0.7 });
+          reacted = true;
+        }
+      }
+      // Băng lên Vũng Nước -> Đóng băng trở lại
+      for (let i = waterPatches.length - 1; i >= 0; i--) {
+        const w = waterPatches[i];
+        if (Math.hypot(w.x - pos.x, w.z - pos.z) < w.r + radius && w.sourceIce) {
+          w.sourceIce.melted = false;
+          if (w.sourceIce.mesh) w.sourceIce.mesh.visible = true;
+          group.remove(w.mesh); w.mesh.geometry.dispose(); w.mesh.material.dispose();
+          waterPatches.splice(i, 1);
+          damageNumber(new THREE.Vector3(w.x, 0.4, w.z), 'Đóng Băng Lại!', 'react shatter');
+          play('freeze', { at: { x: w.x, z: w.z } });
+          reacted = true;
+        }
+      }
+    }
+
+    // 5. GIÓ lên VÙNG LỬA / VŨNG ĐỘC / SƯƠNG -> Cuốn thành Lốc Nguyên Tố Di Động!
+    if (element === 'wind') {
+      const fires = getFirePatches();
+      for (let i = fires.length - 1; i >= 0; i--) {
+        const f = fires[i];
+        if (Math.hypot(f.pos.x - pos.x, f.pos.z - pos.z) < f.radius + radius) {
+          const p0 = f.pos.clone();
+          removeFirePatch(i);
+          spawnCyclone(p0, dir, 'fire', baseDmg * 0.65);
+          reacted = true;
+          break;
+        }
+      }
+      if (!reacted) {
+        const tox = getToxics();
+        for (let i = tox.length - 1; i >= 0; i--) {
+          const f = tox[i];
+          if (Math.hypot(f.pos.x - pos.x, f.pos.z - pos.z) < f.radius + radius) {
+            const p0 = f.pos.clone();
+            removeToxic(i);
+            spawnCyclone(p0, dir, 'poison', baseDmg * 0.6);
+            reacted = true;
+            break;
+          }
+        }
+      }
+    }
+  } finally {
+    surfaceDepth--;
+  }
+  return reacted;
+}
+
+// ---------- Đập vỡ Đá Obsidian & Phá Đổ Cột Đá bằng Đòn Nặng / Tích Lực ----------
+export function damagePillars(pos, radius, dir, heavy = false) {
+  if (!heavy) return false;
+  let hit = false;
+  const d = dir && dir.lengthSq() > 0.01 ? dir.clone().setY(0).normalize() : new THREE.Vector3(0, 0, -1);
+
+  // Vỡ vỏ Đá Obsidian -> nổ mảnh đá sắc
+  for (const L of lavaPools) {
+    if (L.obsidianT > 0 && Math.hypot(L.x - pos.x, L.z - pos.z) < L.r + radius) {
+      L.obsidianT = 0;
+      if (L.mesh && L.lavaMat) L.mesh.material = L.lavaMat;
+      const p0 = new THREE.Vector3(L.x, 0.2, L.z);
+      burst(p0, 0x9a70ff, 28, { speed: 12, size: 0.22 });
+      spawnRing(ctx.scene, p0, L.r * 1.9, 0xb090ff, 0.45);
+      damageNumber(p0, 'Vỡ Obsidian!', 'react stun');
+      addShake(0.45);
+      play('explode', { at: p0, rate: 1.25 });
+      aoe(p0, L.r * 1.9, 45, { element: 'none', element2: null }, 14, { surface: false });
+      hit = true;
+    }
+  }
+
+  // Phá đổ Cột Đá trong phòng (pillars[].destructible)
+  for (let i = pillars.length - 1; i >= 0; i--) {
+    const p = pillars[i];
+    if (!p.destructible) continue;
+    if (Math.hypot(p.x - pos.x, p.z - pos.z) < p.r + radius + 0.5) {
+      p.hp = (p.hp ?? 2) - 1;
+      const p0 = new THREE.Vector3(p.x, 1, p.z);
+      burst(p0, 0x8a7a6a, 14, { speed: 6, size: 0.22 });
+      play('hitHeavy', { at: p0, rate: 0.9 });
+      if (p.hp <= 0) {
+        pillars.splice(i, 1);
+        damageNumber(p0, 'Sập Cột Đá!', 'react stun');
+        addShake(0.65);
+        play('explode', { at: p0, rate: 0.75 });
+        fxSmoke(p0, { count: 10, color: 0x5a5048, size: 1.5, life: 1.3, alpha: 0.65 });
+        // Animation đổ cột theo hướng đánh
+        if (p.mesh) {
+          fallingPillars.push({ mesh: p.mesh, dir: d.clone(), t: 0, dur: 0.55 });
+        }
+        // Đè bẹp toàn bộ quái dọc theo đường cột đổ (4.8m)
+        for (const e of ctx.enemies) {
+          if (!e.alive || e.spawning) continue;
+          const rx = e.pos.x - p.x, rz = e.pos.z - p.z;
+          const proj = rx * d.x + rz * d.z;
+          const perp = Math.abs(rx * -d.z + rz * d.x);
+          if (proj > -0.5 && proj < 5.0 && perp < 1.6 + e.radius) {
+            const crushDmg = Math.round((e.maxHpEff || e.maxHp || e.hp) * (e.isBoss ? 0.08 : 0.65) + 35);
+            dealDamage(e, crushDmg, { element: 'none', element2: null }, d, 14, true, false);
+            e.stunT = Math.max(e.stunT, e.isBoss ? 2.5 : 3.0);
+            if (e.poiseMax) e.poise += e.poiseMax * 0.5;
+            damageNumber(e.pos, 'Đè Bẹp!', 'react stun');
+          }
+        }
+        hit = true;
+      } else {
+        damageNumber(p0, 'Nứt Cột!', 'burn');
+      }
+    }
+  }
+  return hit;
+}
 
 export function updateHazards(dt, rain) {
   for (const b of ctx.barrels) b.update(dt);
   for (const s of spikes) s.update(dt);
   const pl = ctx.player;
-  // Vũng nham thạch
+
+  // Cột đang đổ
+  for (let i = fallingPillars.length - 1; i >= 0; i--) {
+    const fp = fallingPillars[i];
+    fp.t += dt;
+    const k = Math.min(1, fp.t / fp.dur);
+    const ang = k * k * (Math.PI / 2);
+    fp.mesh.rotation.x = fp.dir.z * ang;
+    fp.mesh.rotation.z = -fp.dir.x * ang;
+    fp.mesh.position.y = -k * 0.35;
+    if (fp.t > fp.dur + 1.8) {
+      fp.mesh.parent?.remove(fp.mesh);
+      fallingPillars.splice(i, 1);
+    }
+  }
+
+  // Vũng nước: gắn trạng thái Ướt (wetT) lên quái đứng trong vũng
+  for (let i = waterPatches.length - 1; i >= 0; i--) {
+    const w = waterPatches[i];
+    w.t -= dt;
+    for (const e of ctx.enemies) {
+      if (e.alive && !e.spawning && (e.height || 0) < 0.5 && Math.hypot(e.pos.x - w.x, e.pos.z - w.z) < w.r + e.radius) {
+        e.wetT = Math.max(e.wetT || 0, 2.5);
+      }
+    }
+    if (w.t <= 0) {
+      if (w.sourceIce) { w.sourceIce.melted = false; if (w.sourceIce.mesh) w.sourceIce.mesh.visible = true; }
+      group.remove(w.mesh); w.mesh.geometry.dispose(); w.mesh.material.dispose();
+      waterPatches.splice(i, 1);
+    }
+  }
+
+  // Vùng Điện Trường (Sét + Vũng Nước)
+  for (let i = elecPatches.length - 1; i >= 0; i--) {
+    const ep = elecPatches[i];
+    ep.t -= dt; ep.tick -= dt;
+    if (Math.random() < dt * 10) emit(new THREE.Vector3(ep.x + (Math.random() - 0.5) * ep.r * 1.4, 0.25, ep.z + (Math.random() - 0.5) * ep.r * 1.4), { frame: F.elec, color: 0xffe14a, color2: 0x7fdcff, size: 0.9, size2: 0.2, life: 0.16, hdr: 2 });
+    if (ep.tick <= 0) {
+      ep.tick = 0.45;
+      for (const e of ctx.enemies) {
+        if (e.alive && !e.spawning && Math.hypot(e.pos.x - ep.x, e.pos.z - ep.z) < ep.r + e.radius) {
+          dealDamage(e, ep.dmg, { element: 'lightning', element2: null }, null, 2, false, false);
+          if (e.poiseMax) e.poise += ep.dmg * 0.9;
+          spawnBolt(ctx.scene, new THREE.Vector3(ep.x, 0.2, ep.z), e.pos.clone().setY(0.8), 0xffe14a);
+        }
+      }
+    }
+    if (ep.t <= 0) {
+      if (ep.water) ep.water.electrified = false;
+      group.remove(ep.mesh); ep.mesh.geometry.dispose(); ep.mesh.material.dispose();
+      elecPatches.splice(i, 1);
+    }
+  }
+
+  // Màn Sương Hơi Nước: làm mù quái đánh xa
+  for (let i = steamClouds.length - 1; i >= 0; i--) {
+    const sc = steamClouds[i];
+    sc.t -= dt;
+    if (Math.random() < dt * 6) fxSmoke(new THREE.Vector3(sc.x + (Math.random() - 0.5) * sc.r, 0.5, sc.z + (Math.random() - 0.5) * sc.r), { count: 1, color: 0xd8eef8, size: 1.5, life: 0.9, speed: 0.5, rise: 0.7, alpha: 0.28 });
+    for (const e of ctx.enemies) {
+      if (e.alive && Math.hypot(e.pos.x - sc.x, e.pos.z - sc.z) < sc.r + e.radius) e.blindT = Math.max(e.blindT || 0, 0.8);
+    }
+    if (sc.t <= 0) steamClouds.splice(i, 1);
+  }
+
+  // Lốc Nguyên Tố Di Động (Gió + Lửa/Độc)
+  for (let i = cyclones.length - 1; i >= 0; i--) {
+    const c = cyclones[i];
+    c.t -= dt; c.tick -= dt;
+    c.pos.addScaledVector(c.vel, dt);
+    if (isBlocked(c.pos.x, c.pos.z, 0.6)) c.vel.negate();
+    c.mesh.position.set(c.pos.x, 1.4, c.pos.z);
+    c.mesh.rotation.y += dt * 11;
+    if (Math.random() < dt * 18) {
+      const a = Math.random() * Math.PI * 2;
+      emit(new THREE.Vector3(c.pos.x + Math.cos(a) * 1.1, 0.4 + Math.random() * 1.6, c.pos.z + Math.sin(a) * 1.1), {
+        frame: c.kind === 'fire' ? F.flame : F.glow, color: c.color, size: 0.7, size2: 0.1, life: 0.4, vel: new THREE.Vector3(-Math.sin(a) * 5, 2.5, Math.cos(a) * 5),
+      });
+    }
+    if (c.tick <= 0) {
+      c.tick = 0.35;
+      for (const e of ctx.enemies) {
+        if (!e.alive || e.spawning) continue;
+        const d = Math.hypot(e.pos.x - c.pos.x, e.pos.z - c.pos.z);
+        if (d < 2.5 + e.radius) {
+          if (!e.isBoss) e.knock.set(c.pos.x - e.pos.x, 0, c.pos.z - e.pos.z).normalize().multiplyScalar(5.5);
+          dealDamage(e, c.dmg, { element: c.kind === 'fire' ? 'fire' : 'poison', element2: null }, null, 0, false, false);
+        }
+      }
+    }
+    if (c.t <= 0) {
+      group.remove(c.mesh); c.mesh.geometry.dispose(); c.mesh.material.dispose();
+      cyclones.splice(i, 1);
+    }
+  }
+
+  // Vũng nham thạch (và vỏ Đá Obsidian tạm thời)
   for (const L of lavaPools) {
+    if (L.obsidianT > 0) {
+      L.obsidianT -= dt;
+      if (L.obsidianT <= 0) {
+        if (L.mesh && L.lavaMat) L.mesh.material = L.lavaMat;
+        L.light.intensity = 6;
+      }
+      continue;
+    }
     L.light.intensity = 6 + Math.sin(performance.now() / 260 + L.seed) * 1.5;
     if (Math.random() < dt * 3) emit(new THREE.Vector3(L.x + (Math.random() - 0.5) * L.r, 0.1, L.z + (Math.random() - 0.5) * L.r), { frame: F.glow, color: 0xffc060, color2: 0xff3a00, size: 0.3, size2: 0, life: 0.8, vel: new THREE.Vector3(0, 2, 0), hdr: 2 });
     L.tick -= dt;
@@ -331,7 +684,7 @@ export function updateHazards(dt, rain) {
     if (rainT <= 0) {
       rainT = 1.3;
       const p = ctx.player.pos;
-      const at = new THREE.Vector3(p.x + (Math.random() - 0.5) * 14, 0, p.z + (Math.random() - 0.5) * 14);
+      const at = new THREE.Vector3(p.x + (Math.random() - 0.5) * 22, 0, p.z + (Math.random() - 0.5) * 22);
       scheduleBomb(at, 1.1, 1.9, 22, 12, 0xff6a1a);
     }
   }

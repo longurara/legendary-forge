@@ -2,24 +2,27 @@ import * as THREE from 'three';
 import { models } from './models.js';
 import { emit, F, rectLiquid, disposeLiquids } from './fx.js';
 
-// ================== Kích thước phòng ==================
+// ================== Kích thước phòng (mở rộng 18x18: diện tích gấp 2.25 lần!) ==================
 export const DS = 0.8;                       // tỉ lệ thu nhỏ bộ hầm ngục KayKit cho khớp nhân vật
 const TILE = 4 * DS;                         // mỗi mảnh sàn/tường KayKit rộng 4m -> 3.2m
-const N = 12;                                // phòng 12 x 12 mảnh
-export let ROOM_HALF = (TILE * N) / 2;       // = 19.2
+const N = 18;                                // phòng 18 x 18 mảnh (57.6m x 57.6m)
+export let ROOM_HALF = (TILE * N) / 2;       // = 28.8
 export let WALK_LIMIT = ROOM_HALF - 0.9;
 
 // Vật cản: hình tròn (cột, thùng) và hình chữ nhật (tường thấp)
 export const pillars = [];
 export const boxes = [];
 
-// Mỗi tầng một kiểu bố cục + màu đuốc
+// Mỗi tầng một kiểu bố cục + màu đuốc (8 bố cục rộng rãi, nhiều góc chiến thuật)
 const THEMES = [
   { name: 'Đại Sảnh Cột', torch: 0xff9a4a, layout: 'hall' },
   { name: 'Tường Đổ', torch: 0x7fb0ff, layout: 'ruins' },
-  { name: 'Kho Hàng Bỏ Hoang', torch: 0x8fe08a, layout: 'storage' },
-  { name: 'Hầm Ngầm', torch: 0xc08aff, layout: 'cross' },
-  { name: 'Thánh Đường Xương', torch: 0xff5a4a, layout: 'ring' },
+  { name: 'Kho Hàng Cổ', torch: 0x8fe08a, layout: 'storage' },
+  { name: 'Hầm Ngầm Chữ Thập', torch: 0xc08aff, layout: 'cross' },
+  { name: 'Thánh Đường Vòng', torch: 0xff5a4a, layout: 'ring' },
+  { name: 'Thánh Điện Đôi', torch: 0xffe070, layout: 'sanctuary' },
+  { name: 'Mê Cung Tường Thấp', torch: 0x7fe8c8, layout: 'labyrinth' },
+  { name: 'Lò Đúc Cổ Đại', torch: 0xff7030, layout: 'foundry' },
 ];
 // Vùng chủ đề theo tầng: màu sàn/tường, ánh sáng, sương, hạt bay, đáy hố, bẫy riêng
 export const BIOMES = [
@@ -28,15 +31,18 @@ export const BIOMES = [
   { id: 'lava', name: 'Lò Nham Thạch', tint: 0xa89088, fog: 0x140504, sky: 0xc8a090, ground: 0x2a0c06, moon: 0xffd0b0, torch: 0xff6a2a, pit: 0xff4a10, pitGlow: 2.2 },
   { id: 'crypt', name: 'Hầm Mộ', tint: 0xaab4a6, fog: 0x060a07, sky: 0xa8bcb0, ground: 0x1a201a, moon: 0xb0e0c0, torch: 0x6fe08a, pit: 0x0a1a0e, pitGlow: 0.3 },
 ];
-// Hình dạng phòng: các ô sàn [i0, i1, j0, j1] bị khoét thành hố/vực
+// Hình dạng phòng cho lưới 18x18: các ô sàn [i0, i1, j0, j1] bị khoét thành hố/vực
 const SHAPES = {
   square: [],
-  L: [[7, 11, 0, 3]],
-  bridge: [[0, 3, 4, 7], [8, 11, 4, 7]],
-  twin: [[2, 3, 1, 3], [8, 9, 1, 3], [2, 3, 8, 9], [8, 9, 8, 9]],
-  cross: [[0, 2, 0, 2], [9, 11, 0, 2], [0, 2, 9, 9], [9, 11, 9, 9]],
+  L: [[12, 17, 0, 4]],
+  bridge: [[0, 4, 6, 11], [13, 17, 6, 11]],
+  twin: [[3, 5, 2, 4], [12, 14, 2, 4], [3, 5, 13, 15], [12, 14, 13, 15]],
+  cross: [[0, 2, 0, 2], [15, 17, 0, 2], [0, 2, 15, 17], [15, 17, 15, 17]],
+  island: [[3, 6, 3, 6], [11, 14, 3, 6], [3, 6, 11, 14], [11, 14, 11, 14]],
+  chasm: [[5, 12, 5, 6], [5, 12, 11, 12]],
+  arena8: [[0, 1, 0, 3], [0, 3, 0, 1], [16, 17, 0, 3], [14, 17, 0, 1], [0, 1, 14, 17], [16, 17, 14, 17]],
 };
-const SHAPE_NAMES = { square: '', L: 'Vực Gãy', bridge: 'Cầu Đá', twin: 'Bốn Hố', cross: 'Góc Sụp' };
+const SHAPE_NAMES = { square: '', L: 'Vực Gãy', bridge: 'Cầu Đá', twin: 'Bốn Hố', cross: 'Góc Sụp', island: 'Tứ Hải Đảo', chasm: 'Hẻm Vực Đôi', arena8: 'Đấu Trường Bát Giác' };
 export function floorTheme(floor) {
   const t = THEMES[(floor - 1) % THEMES.length];
   const biome = BIOMES[(floor - 1) % BIOMES.length];
@@ -115,62 +121,75 @@ function lowWall(cx, cz, len, vertical) {
 
 function bigPillar(x, z) {
   if (inPit(x, z, 1.2)) return;
-  piece('pillar_decorated', x, z, 0);
-  pillars.push({ x, z, r: 1.0 });
+  const mesh = piece('pillar_decorated', x, z, 0);
+  pillars.push({ x, z, r: 1.0, destructible: true, hp: 2, mesh });
 }
 
-// ================== Bố cục bên trong phòng ==================
+// ================== Bố cục bên trong phòng (tối ưu cho bản đồ rộng 57.6m x 57.6m) ==================
 function buildLayout(layout) {
-  const S = TILE;
   if (layout === 'hall') {
-    for (const x of [-8, 8]) for (const z of [-12, -4, 4, 12]) bigPillar(x, z);
-    lowWall(0, -15, 2, false);
-    prop('barrel_large', -15, -15, 0.75); prop('barrel_small_stack', -13.2, -16, 0.5);
-    prop('crates_stacked', 15, -15, 0.9); prop('box_stacked', 13, -16, 0.6);
-    prop('keg_decorated', -16.5, 6, 0.6, Math.PI / 2); prop('trunk_large_A', 16.5, 4, 0.6, -Math.PI / 2);
+    for (const x of [-12, 12]) for (const z of [-19, -7, 7, 19]) bigPillar(x, z);
+    lowWall(0, -22, 3, false); lowWall(0, 22, 2, false);
+    prop('barrel_large', -23, -23, 0.75); prop('barrel_small_stack', -21, -24, 0.5);
+    prop('crates_stacked', 23, -23, 0.9); prop('box_stacked', 21, -24, 0.6);
+    prop('keg_decorated', -24, 8, 0.6, Math.PI / 2); prop('trunk_large_A', 24, 6, 0.6, -Math.PI / 2);
   } else if (layout === 'ruins') {
-    lowWall(-9, -8, 3, false); lowWall(9, 8, 3, false);
-    lowWall(-8, 9, 2, true); lowWall(8, -9, 2, true);
-    for (const [x, z] of [[0, -13], [0, 13], [-14, 0], [14, 0]]) bigPillar(x, z);
-    prop('rubble_large', -3, 4, 1.3); prop('rubble_large', 4, -3, 1.3);
-    prop('barrel_large', -15.5, 15, 0.75); prop('crates_stacked', 15, -15.5, 0.9);
+    lowWall(-14, -12, 3, false); lowWall(14, 12, 3, false);
+    lowWall(-13, 13, 3, true); lowWall(13, -13, 3, true);
+    for (const [x, z] of [[0, -20], [0, 20], [-21, 0], [21, 0], [-6, -6], [6, 6]]) bigPillar(x, z);
+    prop('rubble_large', -5, 7, 1.3); prop('rubble_large', 7, -5, 1.3);
+    prop('barrel_large', -23, 22, 0.75); prop('crates_stacked', 23, -22, 0.9);
   } else if (layout === 'storage') {
-    // các dãy thùng hàng tạo lối đi
-    for (const [x, z] of [[-10, -10], [10, -10], [-10, 10], [10, 10]]) {
-      prop('crates_stacked', x, z, 0.9); prop('box_large', x + 1.8, z + 0.4, 0.7); prop('barrel_small', x - 0.6, z + 1.8, 0.45);
+    for (const [x, z] of [[-16, -16], [16, -16], [-16, 16], [16, 16], [0, -17], [0, 17]]) {
+      prop('crates_stacked', x, z, 0.9); prop('box_large', x + 2.0, z + 0.5, 0.7); prop('barrel_small', x - 0.8, z + 2.0, 0.45);
     }
-    for (const [x, z] of [[0, -6], [0, 6], [-6, 0], [6, 0]]) prop('box_stacked', x, z, 0.65);
-    lowWall(-15, 0, 2, true); lowWall(15, 0, 2, true);
-    prop('keg_decorated', -4, -15, 0.6); prop('keg_decorated', 4, 15, 0.6);
+    for (const [x, z] of [[-9, 0], [9, 0], [0, -9], [0, 9]]) bigPillar(x, z);
+    lowWall(-22, 0, 3, true); lowWall(22, 0, 3, true);
   } else if (layout === 'cross') {
-    lowWall(0, -10, 2, true); lowWall(0, 10, 2, true);
-    lowWall(-10, 0, 2, false); lowWall(10, 0, 2, false);
-    for (const [x, z] of [[-6, -6], [6, -6], [-6, 6], [6, 6]]) bigPillar(x, z);
-    prop('rubble_large', -15, -14, 0.9); prop('barrel_large', 15, 14, 0.75);
+    lowWall(0, -15, 3, true); lowWall(0, 15, 3, true);
+    lowWall(-15, 0, 3, false); lowWall(15, 0, 3, false);
+    for (const [x, z] of [[-10, -10], [10, -10], [-10, 10], [10, 10], [-20, -18], [20, 18]]) bigPillar(x, z);
+    prop('rubble_large', -22, -21, 1.0); prop('barrel_large', 22, 21, 0.75);
+  } else if (layout === 'sanctuary') {
+    // Thánh Điện Đôi: hai hành lang cột dài + bệ trung tâm thoáng để đánh boss rộng
+    for (const x of [-17, -9, 9, 17]) for (const z of [-15, 0, 15]) bigPillar(x, z);
+    lowWall(0, -23, 4, false);
+    prop('candle_triple', -4, -3, 0); prop('candle_triple', 4, -3, 0);
+    prop('candle_triple', -4, 3, 0); prop('candle_triple', 4, 3, 0);
+  } else if (layout === 'labyrinth') {
+    // Mê Cung Tường Thấp: nhiều góc khuất để né đạn & đập quái vào tường
+    lowWall(-14, -14, 3, false); lowWall(14, -14, 3, true);
+    lowWall(-14, 14, 3, true); lowWall(14, 14, 3, false);
+    lowWall(-6, -4, 2, true); lowWall(6, 4, 2, true);
+    for (const [x, z] of [[0, -19], [0, 19], [-20, 0], [20, 0]]) bigPillar(x, z);
+  } else if (layout === 'foundry') {
+    // Lò Đúc Cổ Đại: vòng cột vuông rộng + nhiều vật cản phá được ở rìa
+    for (const [x, z] of [[-14, -14], [0, -14], [14, -14], [-14, 0], [14, 0], [-14, 14], [0, 14], [14, 14]]) bigPillar(x, z);
+    prop('crates_stacked', -23, -10, 0.9); prop('crates_stacked', 23, 10, 0.9);
+    prop('keg_decorated', -23, 12, 0.6); prop('keg_decorated', 23, -12, 0.6);
   } else {
-    // 'ring': vòng cột quanh tâm
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
-      bigPillar(Math.cos(a) * 10, Math.sin(a) * 10);
+    // 'ring': vòng cột lớn quanh đấu trường rộng
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2 + Math.PI / 10;
+      bigPillar(Math.cos(a) * 15.5, Math.sin(a) * 15.5);
     }
-    prop('candle_triple', 0, -2, 0); prop('candle_triple', 0, 2, 0);
-    prop('rubble_large', -15, 15, 0.9); prop('crates_stacked', 15, -15, 0.9);
+    prop('candle_triple', 0, -4, 0); prop('candle_triple', 0, 4, 0);
+    prop('rubble_large', -22, 22, 1.0); prop('crates_stacked', 22, -22, 0.9);
   }
-  void S;
 }
 
 // ================== Dựng tầng ==================
 export function buildWorld(scene, floor = 1) {
   if (!moon) {
     scene.background = new THREE.Color(0x0b0908);
-    scene.fog = new THREE.Fog(0x0b0908, 26, 50);
+    scene.fog = new THREE.Fog(0x0b0908, 34, 72);
     hemi = new THREE.HemisphereLight(0xa8b8e0, 0x3a2a20, 1.1);
     scene.add(hemi);
     moon = new THREE.DirectionalLight(0xc8d4ff, 1.3);
     moon.castShadow = true;
     moon.shadow.mapSize.set(2048, 2048);
     const sc = moon.shadow.camera;
-    sc.left = sc.bottom = -20; sc.right = sc.top = 20; sc.near = 1; sc.far = 60;
+    sc.left = sc.bottom = -26; sc.right = sc.top = 26; sc.near = 1; sc.far = 70;
     moon.shadow.bias = -0.0005;
     scene.add(moon, moon.target);
   }
@@ -258,26 +277,39 @@ export function buildWorld(scene, floor = 1) {
   }
   for (let i = 0; i <= N; i += 2) piece('column', -H + i * TILE, H + 0.4, 0);
 
-  // Đuốc (có đèn) và cờ
-  for (const x of [-13, -4.5, 4.5, 13]) wallTorch(x, -H, 0, theme.torch);
-  for (const z of [-9, 3, 13]) { wallTorch(-H, z, Math.PI / 2, theme.torch); wallTorch(H, z, -Math.PI / 2, theme.torch); }
-  for (const x of [-8.5, 0, 8.5]) piece('banner_patternA_red', x, -W, 0);
-  for (const x of [-17, 17]) piece('banner_shield_red', x, -W, 0);
-  piece('banner_patternA_red', -W, -3, Math.PI / 2);
-  piece('banner_patternA_red', W, 8, -Math.PI / 2);
+  // Đuốc (có đèn) và cờ trải đều theo tường phòng 18x18
+  for (const x of [-21, -11, 0, 11, 21]) wallTorch(x, -H, 0, theme.torch);
+  for (const z of [-18, -5, 8, 20]) { wallTorch(-H, z, Math.PI / 2, theme.torch); wallTorch(H, z, -Math.PI / 2, theme.torch); }
+  for (const x of [-16, -6, 6, 16]) piece('banner_patternA_red', x, -W, 0);
+  for (const x of [-25, 25]) piece('banner_shield_red', x, -W, 0);
+  piece('banner_patternA_red', -W, -11, Math.PI / 2);
+  piece('banner_patternA_red', -W, 14, Math.PI / 2);
+  piece('banner_patternA_red', W, -11, -Math.PI / 2);
+  piece('banner_patternA_red', W, 14, -Math.PI / 2);
 
   buildLayout(theme.layout);
   return theme;
 }
 
-// Biến cố "Bóng Tối": tắt gần hết ánh sáng chung, chỉ còn đuốc và đèn quanh nhân vật
+// Biến cố "Bóng Tối" và Ánh Lửa liên tục (cơ chế #6): khi Ánh Lửa tụt dưới 45, phòng tối dần
+let flameDarkness = 0; // 0 = sáng rõ, 1 = tối như biến cố Bóng Tối
+function syncLighting() {
+  const k = isDark ? 1 : flameDarkness;
+  if (hemi) hemi.intensity = 1.1 - k * 0.94;
+  if (moon) moon.intensity = 1.3 - k * 1.16;
+  if (darkHook) darkHook(k > 0.05 ? k : 0);
+}
 export function setDarkHook(fn) { darkHook = fn; }
 export function setDark(on) {
   if (isDark === on) return;
   isDark = on;
-  if (hemi) hemi.intensity = on ? 0.12 : 1.1;
-  if (moon) moon.intensity = on ? 0.08 : 1.3;
-  if (darkHook) darkHook(on);
+  syncLighting();
+}
+export function setFlameLevel(flame) {
+  const target = flame >= 45 ? 0 : Math.min(0.88, (45 - flame) / 45);
+  if (Math.abs(target - flameDarkness) < 0.01) return;
+  flameDarkness = target;
+  syncLighting();
 }
 
 // Nắp hầm dẫn xuống tầng sau

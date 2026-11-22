@@ -85,50 +85,139 @@ export function endFrame() {
   mouse.rreleased = false;
 }
 
-// Each thumb owns its pointer until release, even when dragged outside its button.
+// ---------- Cảm ứng di động: Floating Joystick + Kéo Ngắm (Attack & Special) + Haptic ----------
 export const touch = { active: false, move: { x: 0, z: 0 }, aim: null, attack: false, special: false };
+const TOUCH_KEY = 'lorenh_touch_cfg';
+const touchCfg = (() => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TOUCH_KEY) || '{}');
+    return { floating: raw.floating !== false, haptic: raw.haptic !== false, alpha: Number(raw.alpha) || 0.9 };
+  } catch { return { floating: true, haptic: true, alpha: 0.9 }; }
+})();
+export const getTouchCfg = () => ({ ...touchCfg });
+export function setTouchCfg(patch = {}) {
+  Object.assign(touchCfg, patch);
+  try { localStorage.setItem(TOUCH_KEY, JSON.stringify(touchCfg)); } catch {}
+  if (controls?.style?.setProperty) controls.style.setProperty('--touch-alpha', String(touchCfg.alpha));
+}
+export function haptic(ms = 12) {
+  if (!touch.active || !touchCfg.haptic || typeof navigator === 'undefined' || !navigator.vibrate) return;
+  try { navigator.vibrate(ms); } catch {}
+}
+
 const controls = document.getElementById('touch-controls');
+const moveZone = document.getElementById('move-zone');
+const moveStick = document.getElementById('move-stick');
+const stickKnob = moveStick?.querySelector?.('span') || null;
+const stickArrow = moveStick?.querySelector?.('.stick-arrow') || null;
+const fsBtn = document.getElementById('touch-fs');
+if (controls?.style?.setProperty) controls.style.setProperty('--touch-alpha', String(touchCfg.alpha));
+
+// Nút Toàn màn hình (Fullscreen) trên điện thoại Android / trình duyệt hỗ trợ
+if (fsBtn && fsBtn.addEventListener) {
+  const canFs = !!(document.documentElement?.requestFullscreen || document.documentElement?.webkitRequestFullscreen);
+  if (!canFs) fsBtn.hidden = true;
+  else {
+    fsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      try {
+        const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+        if (!fsEl) (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen).call(document.documentElement);
+        else (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      } catch {}
+    });
+  }
+}
+
 const pointers = new Map();
+
+function updateAimVisual(button, dx, dy, length) {
+  const ind = button?.querySelector?.('.aim-ind');
+  if (!ind) return;
+  if (length > 10) {
+    const deg = Math.atan2(dy, dx) * (180 / Math.PI) + 90;
+    ind.style.opacity = '1';
+    ind.style.transform = `rotate(${deg}deg)`;
+  } else {
+    ind.style.opacity = '0';
+  }
+}
 
 function updateStick(pointer, event) {
   const dx = event.clientX - pointer.x, dy = event.clientY - pointer.y;
   const length = Math.hypot(dx, dy);
   if (pointer.action === 'move') {
-    const radius = pointer.button.clientWidth * 0.34;
-    const scale = length < 4 ? 0 : 1 / Math.max(radius, length);
+    const radius = ((moveStick?.clientWidth || 104) * 0.36);
+    const scale = length < 5 ? 0 : 1 / Math.max(radius, length);
     touch.move.x = dx * scale;
     touch.move.z = dy * scale;
-    pointer.button.firstElementChild.style.transform = `translate(${touch.move.x * radius}px,${touch.move.z * radius}px)`;
-  } else if (pointer.action === 'attack') {
-    touch.aim = length > 9 ? { x: dx / length, z: dy / length } : null;
+    if (stickKnob) stickKnob.style.transform = `translate(${touch.move.x * radius}px,${touch.move.z * radius}px)`;
+    if (stickArrow) {
+      if (length > 8) {
+        const deg = Math.atan2(dy, dx) * (180 / Math.PI) + 90;
+        stickArrow.style.opacity = '1';
+        stickArrow.style.transform = `rotate(${deg}deg)`;
+      } else stickArrow.style.opacity = '0';
+    }
+  } else if (pointer.action === 'attack' || pointer.action === 'special') {
+    touch.aim = length > 10 ? { x: dx / length, z: dy / length } : null;
+    updateAimVisual(pointer.button, dx, dy, length);
   }
 }
 
-controls.addEventListener('pointerdown', event => {
-  const button = event.target.closest('[data-action]');
-  if (!button || button.classList.contains('held')) return;
-  event.preventDefault();
-  const action = button.dataset.action;
-  const rect = button.getBoundingClientRect();
-  const pointer = { button, action, x: event.clientX, y: event.clientY };
-  if (action === 'move') {
-    pointer.x = rect.left + rect.width / 2;
-    pointer.y = rect.top + rect.height / 2;
-  }
-  touch.active = true;
-  pad.active = false;
-  button.setPointerCapture(event.pointerId);
-  button.classList.add('held');
-  pointers.set(event.pointerId, pointer);
-  if (action === 'attack') touch.attack = mouse.clicked = true;
-  else if (action === 'special') touch.special = mouse.rclicked = true;
-  else if (action !== 'move') pressed.add(action);
-  updateStick(pointer, event);
-});
-controls.addEventListener('pointermove', event => {
-  const pointer = pointers.get(event.pointerId);
-  if (pointer) updateStick(pointer, event);
-});
+if (controls && controls.addEventListener) {
+  controls.addEventListener('pointerdown', (event) => {
+    const target = event.target?.closest?.('[data-action]');
+    if (!target || target.classList.contains('held')) return;
+    event.preventDefault();
+    const action = target.dataset.action;
+    const pointer = { button: target, action, x: event.clientX, y: event.clientY };
+
+    if (action === 'move' && moveStick && moveZone) {
+      const zRect = moveZone.getBoundingClientRect();
+      const sW = moveStick.clientWidth || 104;
+      const half = sW / 2;
+      if (touchCfg.floating) {
+        // Đặt tâm Floating Joystick ngay tại vị trí chạm ngón cái (kẹp an toàn trong vùng chạm)
+        const relX = Math.max(half + 6, Math.min(zRect.width - half - 6, event.clientX - zRect.left));
+        const relY = Math.max(half + 6, Math.min(zRect.height - half - 6, event.clientY - zRect.top));
+        moveStick.style.left = `${relX - half}px`;
+        moveStick.style.top = `${relY - half}px`;
+        moveStick.style.bottom = 'auto';
+        pointer.x = zRect.left + relX;
+        pointer.y = zRect.top + relY;
+      } else {
+        const sRect = moveStick.getBoundingClientRect();
+        pointer.x = sRect.left + sRect.width / 2;
+        pointer.y = sRect.top + sRect.height / 2;
+      }
+      moveStick.classList.add('active');
+    }
+
+    touch.active = true;
+    pad.active = false;
+    try { target.setPointerCapture(event.pointerId); } catch {}
+    target.classList.add('held');
+    pointers.set(event.pointerId, pointer);
+
+    if (action === 'attack') {
+      touch.attack = mouse.clicked = true;
+    } else if (action === 'special') {
+      touch.special = mouse.rclicked = mouse.rdown = true;
+      haptic(10);
+    } else if (action !== 'move') {
+      pressed.add(action);
+      if (action === 'Space' || action === 'KeyQ' || action === 'KeyE' || action === 'KeyR') haptic(action === 'KeyR' ? 20 : 10);
+    }
+    updateStick(pointer, event);
+  });
+
+  controls.addEventListener('pointermove', (event) => {
+    const pointer = pointers.get(event.pointerId);
+    if (pointer) updateStick(pointer, event);
+  });
+}
+
 function releaseTouch(id) {
   const pointer = pointers.get(id);
   if (!pointer) return;
@@ -136,21 +225,35 @@ function releaseTouch(id) {
   pointer.button.classList.remove('held');
   if (pointer.action === 'move') {
     touch.move.x = touch.move.z = 0;
-    pointer.button.firstElementChild.style.transform = '';
+    if (stickKnob) stickKnob.style.transform = '';
+    if (stickArrow) stickArrow.style.opacity = '0';
+    if (moveStick) {
+      moveStick.classList.remove('active');
+      moveStick.style.left = '';
+      moveStick.style.top = '';
+      moveStick.style.bottom = '';
+    }
   } else if (pointer.action === 'attack') {
     touch.attack = false;
-    touch.aim = null;
+    updateAimVisual(pointer.button, 0, 0, 0);
+    if (!touch.special) touch.aim = null;
   } else if (pointer.action === 'special') {
     touch.special = false;
+    mouse.rdown = false;
     mouse.rreleased = true;
+    updateAimVisual(pointer.button, 0, 0, 0);
+    if (!touch.attack) touch.aim = null;
   }
-  if (pointer.button.hasPointerCapture(id)) pointer.button.releasePointerCapture(id);
+  try { if (pointer.button.hasPointerCapture?.(id)) pointer.button.releasePointerCapture(id); } catch {}
 }
-for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) {
-  controls.addEventListener(name, event => releaseTouch(event.pointerId));
+
+if (controls && controls.addEventListener) {
+  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+    controls.addEventListener(name, (event) => releaseTouch(event.pointerId));
+  }
 }
 export function resetTouch() {
-  for (const id of pointers.keys()) releaseTouch(id);
+  for (const id of [...pointers.keys()]) releaseTouch(id);
   touch.active = false;
 }
 addEventListener('blur', resetTouch);

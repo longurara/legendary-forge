@@ -61,6 +61,16 @@ export class Loot {
       const m = new THREE.Mesh(new THREE.OctahedronGeometry(0.22, 0), new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.8, metalness: 0.4, roughness: 0.15, flatShading: true }));
       m.scale.y = 1.4;
       group.add(m);
+    } else if (kind === 'rune') {
+      const col = value?.color ? new THREE.Color(value.color).getHex() : 0xd8a8ff;
+      const m = new THREE.Mesh(new THREE.DodecahedronGeometry(0.24, 0), new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 1.1, metalness: 0.35, roughness: 0.2, flatShading: true }));
+      group.add(m);
+    } else if (kind === 'core') {
+      const col = value?.color ? new THREE.Color(value.color).getHex() : 0xffcf4a;
+      const m = new THREE.Mesh(new THREE.OctahedronGeometry(0.34, 1), new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 1.5, metalness: 0.7, roughness: 0.15 }));
+      const halo = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.04, 6, 20), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.75 }));
+      halo.rotation.x = Math.PI / 2;
+      group.add(m, halo);
     } else if (kind === 'scrap') {
       for (let k = 0; k < Math.min(3, 1 + Math.floor(value / 4)); k++) {
         const m = new THREE.Mesh(SCRAP_GEO, SCRAP_MAT);

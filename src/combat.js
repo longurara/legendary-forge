@@ -8,9 +8,9 @@ import { play } from './audio.js';
 export const ctx = { scene: null, player: null, enemies: [], barrels: [], onHit: null, onReaction: null };
 const NONE = { element: 'none', element2: null };
 
-function react(enemy, text, color) {
+function react(enemy, text, color, dmg = 16) {
   damageNumber(enemy.pos, text, 'react ' + color);
-  if (ctx.onReaction) ctx.onReaction(text);
+  if (ctx.onReaction) ctx.onReaction(text, enemy, dmg);
 }
 
 // ---------- Gây sát thương + hiệu ứng / phản ứng nguyên tố ----------
@@ -19,30 +19,47 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
   if (!enemy.alive) return 0;
   const els = [weapon.element, weapon.element2].filter((e) => e && e !== 'none');
   let mult = 1;
+  // Tương tác với trạng thái Ướt (từ Vũng Nước / Băng tan trong Hóa Học Bề Mặt)
+  if (enemy.wetT > 0) {
+    for (const el of els) {
+      if (el === 'lightning') {
+        mult *= 1.8;
+        enemy.wetT = Math.max(0, enemy.wetT - 1.5);
+        react(enemy, 'Điện Dẫn!', 'overload', dmg);
+        play('zap', { at: enemy.pos, rate: 1.25 });
+      } else if (el === 'ice') {
+        enemy.wetT = 0;
+        enemy.frozenT = Math.max(enemy.frozenT, 1.8);
+        enemy.slowT = Math.max(enemy.slowT, 3.2);
+        react(enemy, 'Đóng Băng!', 'shatter', dmg);
+        play('freeze', { at: enemy.pos });
+      }
+    }
+  }
   // Phản ứng giữa nguyên tố mới và trạng thái đang có trên quái
   for (const el of els) {
     if (el === 'fire' && (enemy.frozenT > 0 || enemy.slowT > 0)) {
       mult *= 2; enemy.frozenT = 0; enemy.slowT = 0; enemy.iceStacks = 0;
-      react(enemy, 'Tan Chảy!', 'melt'); play('freeze', { at: enemy.pos, rate: 0.7 });
+      react(enemy, 'Tan Chảy!', 'melt', dmg); play('freeze', { at: enemy.pos, rate: 0.7 });
     } else if (el === 'ice' && enemy.burnT > 0) {
       mult *= 2; enemy.burnT = 0;
-      react(enemy, 'Tan Chảy!', 'melt'); play('freeze', { at: enemy.pos, rate: 0.7 });
+      react(enemy, 'Tan Chảy!', 'melt', dmg); play('freeze', { at: enemy.pos, rate: 0.7 });
     } else if (el === 'lightning' && enemy.frozenT > 0 && allowChain) {
       enemy.frozenT = 0;
-      react(enemy, 'Vỡ Băng!', 'shatter');
+      react(enemy, 'Vỡ Băng!', 'shatter', dmg);
       burst(enemy.pos.clone().setY(0.8), 0xaeeaff, 26, { speed: 9, size: 0.18 });
       play('freeze', { at: enemy.pos, rate: 1.3 });
       aoe(enemy.pos, 2.8, Math.round(dmg * 1.2 + 10), NONE, 6, { exclude: enemy });
     } else if (((el === 'fire' && enemy.shockT > 0) || (el === 'lightning' && enemy.burnT > 0)) && allowChain) {
       enemy.shockT = 0;
-      react(enemy, 'Quá Tải!', 'overload');
+      react(enemy, 'Quá Tải!', 'overload', dmg);
       spawnRing(ctx.scene, enemy.pos, 2.6, 0xffb040, 0.35);
       burst(enemy.pos.clone().setY(0.6), 0xffd060, 24, { speed: 9, size: 0.16 });
       play('explode', { at: enemy.pos, vol: 0.6, rate: 1.2 });
       aoe(enemy.pos, 2.6, Math.round(dmg * 0.8 + 8), NONE, 12, { exclude: enemy });
     } else if (el === 'blood' && (enemy.burnT > 0 || enemy.frozenT > 0 || enemy.shockT > 0)) {
       mult *= 1.3;
-      react(enemy, 'Huyết Tế!', 'blood');
+      react(enemy, 'Huyết Tế!', 'blood', dmg);
       ctx.player.heal(Math.max(2, Math.round(dmg * 0.3)));
     }
   }
@@ -51,28 +68,29 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
     if (allowChain && ((el === 'fire' && enemy.poisonStacks > 0) || (el === 'poison' && enemy.burnT > 0))) {
       const st = Math.max(1, enemy.poisonStacks || 1);
       enemy.poisonStacks = 0; enemy.poisonT = 0;
-      react(enemy, 'Khí Nổ!', 'overload');
+      react(enemy, 'Khí Nổ!', 'overload', dmg);
       explosion(enemy.pos, 2.8, 0x9fff5a, { smoke: true, scorch: false, core: 0xe0ffb0 });
       play('explode', { at: enemy.pos, vol: 0.7 });
       aoe(enemy.pos, 2.8, Math.round(dmg * 0.6 + st * 7), NONE, 10, { exclude: enemy });
     } else if (allowChain && ((el === 'wind' && enemy.burnT > 0) || (el === 'fire' && enemy.gustT > 0))) {
       enemy.gustT = 0;
-      react(enemy, 'Lốc Lửa!', 'melt');
+      react(enemy, 'Lốc Lửa!', 'melt', dmg);
       spawnFirePatch(enemy.pos, 2.6, 3.5, Math.round(dmg * 0.25 + 6));
       play('ignite', { at: enemy.pos });
     } else if (allowChain && el === 'wind' && (enemy.slowT > 0 || enemy.frozenT > 0)) {
-      react(enemy, 'Bão Tuyết!', 'shatter');
+      react(enemy, 'Bão Tuyết!', 'shatter', dmg);
       spawnRing(ctx.scene, enemy.pos, 3.4, 0xbff0ff, 0.45);
       play('freeze', { at: enemy.pos, rate: 0.8 });
       for (const o of ctx.enemies) if (o.alive && o.pos.distanceTo(enemy.pos) < 3.4) { o.frozenT = 1.6; o.slowT = 3; }
     } else if (allowChain && el === 'holy' && enemy.shockT > 0) {
       enemy.shockT = 0;
-      react(enemy, 'Phán Xét!', 'ult');
+      react(enemy, 'Phán Xét!', 'ult', dmg);
       spawnBolt(ctx.scene, enemy.pos.clone().setY(9), enemy.pos.clone().setY(0.5), 0xfff6d0);
       play('zap', { at: enemy.pos, rate: 0.7 });
       aoe(enemy.pos, 2.4, Math.round(dmg + 12), NONE, 6, {});
     }
     if (el === 'holy' && !enemy.slimy) mult *= 1.5;              // Thánh khắc chế quái xương
+    if (allowChain && ctx.reactSurface) ctx.reactSurface(enemy.pos, 2.2, el, dir, dmg);
   }
   if (enemy.isBoss && ctx.bossBane) mult *= 1 + ctx.bossBane;
   // Kháng / yếu theo vùng
@@ -82,6 +100,16 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
   }
   dmg = Math.max(1, Math.round(dmg * mult));
   const dealt = enemy.takeHit(dmg, dir, kb * (els.includes('wind') ? 1.9 : 1), crit || mult > 1) ?? dmg;
+  // Phá bộ phận Boss (hỗ trợ cả cận chiến, tầm xa, kỹ năng và phản ứng)
+  if (enemy.isBoss && enemy.onPartHit && dealt > 0 && ctx.player) {
+    let back = false;
+    if (enemy.facing != null) {
+      const fx = Math.sin(enemy.facing), fz = Math.cos(enemy.facing);
+      const tx = ctx.player.pos.x - enemy.pos.x, tz = ctx.player.pos.z - enemy.pos.z, tl = Math.hypot(tx, tz) || 1;
+      back = (fx * tx + fz * tz) / tl < -0.2;
+    }
+    enemy.onPartHit(dealt, { dir, crit: !!crit, big: !!crit || kb >= 10 || dealt >= 26, back, player: ctx.player });
+  }
 
   for (const el of els) {
     if (el === 'poison') {
@@ -144,6 +172,9 @@ export function aoe(pos, radius, dmg, weapon = NONE, kb = 6, opts = {}) {
   }
   if (opts.barrels !== false) {
     for (const b of ctx.barrels) if (b.alive && Math.hypot(b.pos.x - pos.x, b.pos.z - pos.z) < radius + 0.6) b.hit(dmg);
+  }
+  if (opts.surface !== false && ctx.reactSurface && weapon) {
+    for (const el of [weapon.element, weapon.element2]) if (el && el !== 'none') ctx.reactSurface(pos, radius, el, null, dmg);
   }
   const p = ctx.player;
   if (opts.player && !p.dead && Math.hypot(p.pos.x - pos.x, p.pos.z - pos.z) < radius + p.radius) {
@@ -449,11 +480,30 @@ export function fireBurst(pos, dmg) {
   aoe(pos, 2.4, dmg, { element: 'fire', element2: null }, 4);
 }
 
+export const getFirePatches = () => patches;
+export const getToxics = () => toxics;
+export function removeFirePatch(i) {
+  const f = patches[i];
+  if (!f) return;
+  ctx.scene?.remove(f.mesh);
+  f.mesh.material?.dispose();
+  patches.splice(i, 1);
+}
+export function removeToxic(i) {
+  const f = toxics[i];
+  if (!f) return;
+  ctx.scene?.remove(f.mesh);
+  f.mesh.material?.dispose();
+  toxics.splice(i, 1);
+}
+
 export const debugProjectiles = () => projectiles.length;
 
 export function clearProjectiles() {
   for (let i = projectiles.length - 1; i >= 0; i--) removeProjectile(i);
   bombs.length = 0;
-  for (const f of patches) ctx.scene.remove(f.mesh);
+  for (const f of patches) { ctx.scene.remove(f.mesh); f.mesh.material?.dispose(); }
   patches.length = 0;
+  for (const f of toxics) { ctx.scene.remove(f.mesh); f.mesh.material?.dispose(); }
+  toxics.length = 0;
 }

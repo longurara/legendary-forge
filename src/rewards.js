@@ -14,7 +14,9 @@ export const REWARDS = {
   event: { name: 'Sự kiện', icon: 'x_scroll', desc: 'Gặp một sự kiện bí ẩn, tự chọn cách xử lý', color: 0x9fd0ff },
   treasure: { name: 'Kho báu', icon: 'x_gold', desc: 'Phòng kho báu: 2 rương di vật + vàng, không có quái', color: 0xffd060 },
   shop: { name: 'Thương nhân', icon: 'x_shop', desc: 'Đợt sau là cửa hàng, không phải đánh', color: 0xffa040 },
-  challenge: { name: 'Thử thách', icon: 'x_skull-signet', desc: 'Đợt sau toàn tinh anh, thưởng di vật', color: 0xff5a4a },
+  challenge: { name: 'Thử thách', icon: 'x_skull-signet', desc: 'Đợt sau toàn tinh anh, thưởng di vật · nâng cấp phòng kế', color: 0xff5a4a },
+  anchor: { name: 'Mỏ Neo Boss', icon: 'x_cursed', desc: 'Phá Mỏ Neo để tước sức mạnh Boss cuối tầng · rơi Cổ Ngữ', color: 0xff4080 },
+  trial: { name: 'Song Tượng Thần', icon: 'x_sunbeams', desc: 'Chọn 1 thần, chịu cơn giận thần kia · nhận cả 2 thẻ!', color: 0xffe060 },
 };
 
 const labelLayer = () => document.getElementById('dmg-layer');
@@ -231,6 +233,8 @@ function makeItem(kind, color) {
   else if (kind === 'event') { o = fit('crypt/skull_candle', 0.8); }
   else if (kind === 'shop') o = fit('dungeon/trunk_large_A', 0.85);
   else if (kind === 'challenge') { o = fit('prop_skel_shield', 1.1); if (o) o.rotation.x = 0.6; }
+  else if (kind === 'anchor') { o = fit('crypt/post_skull', 1.15); }
+  else if (kind === 'trial') { o = fit('prop_spellbook', 1.1); if (o) o.rotation.x = 0.4; }
   if (!o) {
     // Hồn Thép (hoặc thiếu model): quả cầu năng lượng
     o = new THREE.Group();

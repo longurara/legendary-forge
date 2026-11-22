@@ -7,13 +7,14 @@ import { ctx, enemyShot, aoe } from './combat.js';
 import { play } from './audio.js';
 import { Enemy } from './enemies.js';
 
-function attachProp(fitted, propName, bone = 'handslotr') {
+export function attachProp(fitted, propName, bone = 'handslotr', scale = 1) {
   const hand = fitted.getObjectByName(bone);
   const entry = models[propName];
   if (!hand || !entry) return null;
   const m = entry.scene.clone(true);
   m.position.set(0, 0.0333, 0);
   m.rotation.set(0, bone === 'handslotr' ? Math.PI : 0, 0);
+  if (scale !== 1) m.scale.setScalar(scale);
   m.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   hand.add(m);
   return m;
@@ -42,10 +43,11 @@ export class Walker extends Enemy {
     this.body = new THREE.Group();
     this.anim = null;
     this.facing = 0;
+    this.propMeshes = {};
     if (models[modelName]) {
       const fitted = fitModel(models[modelName], size, 'ground');
       this.body.add(fitted);
-      for (const [p, bone] of props) attachProp(fitted, p, bone);
+      for (const [p, bone, sc] of props) this.propMeshes[bone || 'handslotr'] = attachProp(fitted, p, bone, sc ?? 1);
       this.anim = new Animator(fitted);
       this.anim.play('Spawn_Ground_Skeletons', { once: true, fade: 0 });
     }
@@ -104,14 +106,16 @@ export class Healer extends Walker {
     this.healT -= bdt;
     const hurt = ctx.enemies.some((e) => e !== this && e.alive && !e.spawning && e.hp < (e.maxHpEff || e.maxHp || e.hp) * 0.9 && e.pos.distanceTo(this.pos) < 7.5);
     if (this.healT <= 0 && hurt) {
-      this.casting = 0.8; this.healT = 4.5;
-      spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 7.5, duration: 0.8, color: 0x3ad36a });
+      this.casting = 0.85; this.healT = 4.5;
+      this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 7.5, duration: 0.85, kind: 'interrupt' });
       play('mageCast', { at: this.pos, rate: 1.4 });
       if (this.anim) this.anim.play('Spellcast_Raise', { once: true, fade: 0.1 });
     }
     return { name: 'Walking_D_Skeletons', opts: { speed: 1.2 } };
   }
   castHeal() {
+    this.teleKind = null;
     spawnRing(this.scene, this.pos, 7.5, 0x3ad36a, 0.6);
     play('heal', { at: this.pos });
     for (const e of ctx.enemies) {
@@ -160,7 +164,8 @@ export class ShieldBearer extends Walker {
       this.facing += Math.sign(diff) * Math.min(Math.abs(diff), 2.2 * bdt);
       if (d < 2.6 && this.cd <= 0 && !player.dead) {
         this.state = 'wind'; this.timer = 0.6;
-        this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2, length: 3, facing: this.facing, duration: 0.6 });
+        this.teleKind = 'pierce';
+        this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2, length: 3, facing: this.facing, duration: 0.6, kind: 'pierce' });
         if (this.anim) this.anim.play('Block_Attack', { once: true, fade: 0.1, speed: 0.8 });
         return null;
       }
@@ -171,6 +176,7 @@ export class ShieldBearer extends Walker {
       this.timer -= bdt;
       if (this.timer <= 0) {
         this.state = 'bash'; this.timer = 0.4;
+        this.teleKind = null;
         this.move(Math.sin(this.facing), Math.cos(this.facing), 6, 0.15);
         play('hitHeavy', { at: this.pos });
         const fx = Math.sin(this.facing), fz = Math.cos(this.facing);
@@ -344,6 +350,9 @@ export class ShadowLord extends Walker {
     this.build('enemy_rogue', 3.4, [['prop_skel_blade', 'handslotr'], ['prop_skel_blade', 'handslotl']]);
     tintMats(this, 0x3a2a5a, 0.6, 0x5a2aff, 0.35);
     this.spawning = true; this.spawnT = -0.4;
+    this.initBossParts([
+      { id: 'bladeL', name: 'Song Ảnh Lưỡi', icon: 'x_daggers', pct: 0.24, mesh: this.propMeshes?.handslotl, core: 'core_shadow', cond: (i) => i.back || i.crit || i.clash },
+    ]);
   }
   get radius() { return 1.0; }
   get grounded() { return !this.spawning && this.state !== 'intro' && this.state !== 'vanish'; }
@@ -387,7 +396,9 @@ export class ShadowLord extends Walker {
       case 'fanWind':
         this.timer -= bdt;
         if (this.timer <= 0) {
-          const n = this.phase >= 1 ? 11 : 7;
+          this.teleKind = null;
+          const baseN = this.phase >= 1 ? 11 : 7;
+          const n = this.isPartBroken('bladeL') ? Math.max(3, Math.floor(baseN * 0.55)) : baseN;
           for (let i = 0; i < n; i++) {
             const a = this.facing + (i - (n - 1) / 2) * 0.16;
             const dir = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
@@ -407,7 +418,7 @@ export class ShadowLord extends Walker {
         return null;
       case 'dashAim':
         this.timer -= bdt;
-        if (this.timer <= 0) { this.state = 'dash'; this.left = 13; this.hit = false; play('dash', { at: this.pos, rate: 0.7 }); }
+        if (this.timer <= 0) { this.state = 'dash'; this.left = 13; this.hit = false; this.teleKind = 'pierce'; play('dash', { at: this.pos, rate: 0.7 }); }
         return null;
       case 'dash': {
         const step = 26 * bdt;
@@ -418,23 +429,32 @@ export class ShadowLord extends Walker {
         const before = this.pos.clone(); collide(this.pos, this.radius);
         if (this.left <= 0 || before.distanceTo(this.pos) > 0.01) {
           this.dashes = (this.dashes || 0) + 1;
-          if (this.dashes < (this.phase >= 1 ? 3 : 2)) { this.state = 'dashAim'; this.timer = 0.45; this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z); spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.2, length: 13, facing: this.facing, duration: 0.45, color: 0xa040ff }); }
-          else { this.dashes = 0; this.state = 'recover'; this.timer = 1.0; }
+          const maxDashes = this.isPartBroken('bladeL') ? 1 : (this.phase >= 1 ? 3 : 2);
+          if (this.dashes < maxDashes) {
+            this.state = 'dashAim'; this.timer = 0.45; this.teleKind = 'pierce';
+            this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
+            this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.2, length: 13, facing: this.facing, duration: 0.45, kind: 'pierce' });
+          } else { this.dashes = 0; this.teleKind = null; this.state = 'recover'; this.timer = 1.0; }
         }
         return { name: 'Running_C', opts: { speed: 2 } };
       }
       case 'summon':
         this.timer -= bdt;
         if (this.timer <= 0) {
-          for (const side of [-1, 1]) {
-            const w = new Wraith(this.scene, this.pos.x + side * 3, this.pos.z);
-            w.spawnT = 0.3;
-            ctx.spawnEnemy?.(w);
+          this.teleKind = null;
+          const cnt = this.anchorHorde ? 2 : 1;
+          for (let k = 0; k < cnt; k++) {
+            for (const side of [-1, 1]) {
+              const w = new Wraith(this.scene, this.pos.x + side * (3 + k), this.pos.z);
+              w.spawnT = 0.3;
+              ctx.spawnEnemy?.(w);
+            }
           }
           this.state = 'recover'; this.timer = 0.6;
         }
         return null;
       case 'recover':
+        this.teleKind = null;
         this.timer -= bdt;
         if (this.timer <= 0) { this.state = 'chase'; this.timer = this.phase >= 1 ? 0.6 : 1.2; }
         return 'Idle_Combat';
@@ -442,9 +462,10 @@ export class ShadowLord extends Walker {
     return null;
   }
   fanStart() {
-    this.state = 'fanWind'; this.timer = 0.5;
-    const n = this.phase >= 1 ? 11 : 7;
-    for (let i = 0; i < n; i += 2) spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 0.3, length: 14, facing: this.facing + (i - (n - 1) / 2) * 0.16, duration: 0.5, color: 0xa040ff });
+    this.state = 'fanWind'; this.timer = 0.55; this.teleKind = 'interrupt';
+    const baseN = this.phase >= 1 ? 11 : 7;
+    const n = this.isPartBroken('bladeL') ? Math.max(3, Math.floor(baseN * 0.55)) : baseN;
+    for (let i = 0; i < n; i += 2) this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 0.3, length: 14, facing: this.facing + (i - (n - 1) / 2) * 0.16, duration: 0.55, kind: 'interrupt' });
   }
   choose(player, d) {
     const wraiths = ctx.enemies.filter((e) => e instanceof Wraith && !e.dead).length;
@@ -459,10 +480,11 @@ export class ShadowLord extends Walker {
       play('dash', { at: this.pos, rate: 0.5 });
     } else if (pick === 'fan') { this.fanStart(); if (this.anim) this.anim.play('Taunt', { once: true, fade: 0.1, speed: 1.5 }); }
     else if (pick === 'dash') {
-      this.state = 'dashAim'; this.timer = 0.7;
-      spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.2, length: 13, facing: this.facing, duration: 0.7, color: 0xa040ff });
+      this.state = 'dashAim'; this.timer = 0.7; this.teleKind = 'pierce';
+      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.2, length: 13, facing: this.facing, duration: 0.7, kind: 'pierce' });
     } else {
-      this.state = 'summon'; this.timer = 1.0;
+      this.state = 'summon'; this.timer = 1.0; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.0, duration: 1.0, kind: 'interrupt' });
       if (this.anim) this.anim.play('Spellcast_Summon', { once: true, fade: 0.1 });
       play('mageCast', { at: this.pos, rate: 0.6 });
     }

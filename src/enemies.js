@@ -30,6 +30,9 @@ export class Enemy {
     this.burnT = 0; this.burnDps = 0; this.burnTick = 0;
     this.slowT = 0; this.frozenT = 0; this.iceStacks = 0;
     this.shockT = 0;
+    this.wetT = 0; this.blindT = 0;
+    this.teleKind = null;
+    this.parts = null;
     // Tinh anh (elites.js gán): tốc độ, khiên, gai, hồi máu
     this.elite = null;
     this.eliteSpeed = 1;
@@ -136,6 +139,59 @@ export class Enemy {
   onStagger() {}
   kill() { this.die(); }
 
+  // Hủy chiêu hiện tại (khi bị Cắt Chiêu hoặc Phản Xuyên — cơ chế #5)
+  interruptAttack(doStun = true) {
+    if (this.tele) { this.tele.done = true; this.tele = null; }
+    this.teleKind = null;
+    if (this.casting > 0) this.casting = 0;
+    if (this.state && this.state !== 'intro') {
+      if (this.isBoss) { this.state = this.state === 'wait' || this.state === 'jump' ? 'wait' : this.state === 'idle' ? 'idle' : 'recover'; this.timer = 1.2; }
+      else { this.state = 'recover'; this.timer = 1.0; }
+    }
+    if (doStun) {
+      this.stunT = Math.max(this.stunT, this.isBoss ? 2.6 : 2.2);
+      this.stunId = (this.stunId || 0) + 1;
+    }
+  }
+
+  // Phá bộ phận Boss (cơ chế #5)
+  initBossParts(defs) {
+    const baseMax = this.maxHp || this.hp || 400;
+    this.parts = defs.map((d) => ({
+      ...d,
+      hp: Math.round(baseMax * (d.pct || 0.24)),
+      maxHp: Math.round(baseMax * (d.pct || 0.24)),
+      broken: false,
+    }));
+  }
+
+  onPartHit(dmg, info = {}) {
+    if (!this.parts || !this.parts.length || this.dead) return;
+    for (const pt of this.parts) {
+      if (pt.broken) continue;
+      if (pt.cond && !pt.cond(info)) continue;
+      pt.hp -= dmg;
+      if (pt.hp <= 0) {
+        pt.broken = true;
+        if (pt.mesh) pt.mesh.visible = false;
+        burst(this.pos.clone().setY(1.8), 0xffcf4a, 34, { speed: 11, size: 0.22, life: 0.8 });
+        spawnRing(this.scene, this.pos, 4.5, 0xffcf4a, 0.5);
+        addShake(0.6);
+        play('explode', { at: this.pos, rate: 1.15 });
+        damageNumber(this.pos, `Phá ${pt.name}!`, 'react ult');
+        this.stunT = Math.max(this.stunT, 1.8);
+        this.stunId = (this.stunId || 0) + 1;
+        pt.onBreak?.(this);
+        ctx.onPartBreak?.(this, pt);
+      }
+      break;
+    }
+  }
+
+  isPartBroken(id) {
+    return !!this.parts?.some((p) => p.id === id && p.broken);
+  }
+
   die() {
     if (!this.dead) play(this.dieSound, { at: this.pos });
     this.dead = true;
@@ -178,6 +234,14 @@ export class Enemy {
     if (this.frozenT > 0) this.frozenT -= dt;
     if (this.shockT > 0) {
       this.shockT -= dt;
+    }
+    if (this.wetT > 0) {
+      this.wetT -= dt;
+      if (Math.random() < dt * 5) emit(this.pos.clone().setY(0.5 + Math.random() * 0.8), { frame: F.glow, color: 0x7fdcff, color2: 0x2080d0, size: 0.28, size2: 0.04, life: 0.45, vel: new THREE.Vector3(0, -0.7, 0) });
+    }
+    if (this.blindT > 0) {
+      this.blindT -= dt;
+      if (Math.random() < dt * 4) emit(this.pos.clone().setY(1.4), { smoke: true, frame: F.puff, color: 0xd8eef8, size: 0.55, size2: 0.9, life: 0.5, alpha: 0.35, vel: new THREE.Vector3(0, 0.3, 0) });
     }
     if (this.stunT > 0) {
       this.stunT -= dt;
@@ -526,10 +590,11 @@ export class Mage extends Enemy {
       this.strafeT -= bdt;
       if (this.strafeT <= 0) { this.strafe *= -1; this.strafeT = 1.5 + Math.random() * 2; }
 
-      // Niệm phép 0.6s rồi bắn
+      // Niệm phép 0.6s rồi bắn (nếu bị Mù bởi Màn Sương thì bắn lệch hoặc tạm dừng)
       this.shootT -= bdt;
       if (this.shootT < 0.6 && !this.casting) {
         this.casting = true;
+        this.teleKind = 'interrupt';
         play('mageCast', { at: this.pos });
         if (this.anim) { this.anim.play('Spellcast_Shoot', { once: true, fade: 0.1, speed: 1.2 }); this.animBusy = 0.9; }
       }
@@ -540,13 +605,19 @@ export class Mage extends Enemy {
       }
       if (this.shootT <= 0 && !player.dead) {
         const origin = this.pos.clone().setY(1.1).addScaledVector(to, 0.7);
-        // Bắn đón đầu: nhắm vào chỗ người chơi sắp tới
+        // Bắn đón đầu: nhắm vào chỗ người chơi sắp tới (bị Mù trong Sương sẽ bắn lệch mạnh)
         const tLead = Math.min(1.6, d / 7) * ((ctx.floor || 1) >= 2 ? 0.85 : 0.5);
         const aimAt = player.pos.clone().addScaledVector(player.vel || new THREE.Vector3(), tLead);
         const lead = new THREE.Vector3(aimAt.x - this.pos.x, 0, aimAt.z - this.pos.z).normalize();
+        if (this.blindT > 0) {
+          const miss = (Math.random() - 0.5) * 1.4;
+          const a = Math.atan2(lead.x, lead.z) + miss;
+          lead.set(Math.sin(a), 0, Math.cos(a));
+        }
         enemyShot(origin, lead, 8);
         this.shootT = 2.3 + Math.random() * 0.9;
         this.casting = false;
+        this.teleKind = null;
         this.core.scale.setScalar(this.walker ? 0.001 : 1);
       }
     }
