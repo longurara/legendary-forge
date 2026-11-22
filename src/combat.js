@@ -11,6 +11,7 @@ const NONE = { element: 'none', element2: null };
 function react(enemy, text, color, dmg = 16) {
   damageNumber(enemy.pos, text, 'react ' + color);
   if (ctx.onReaction) ctx.onReaction(text, enemy, dmg);
+  ctx.recordDmg?.('react', Math.round(dmg * 0.5));
 }
 
 // ---------- Gây sát thương + hiệu ứng / phản ứng nguyên tố ----------
@@ -37,29 +38,37 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
     }
   }
   // Phản ứng giữa nguyên tố mới và trạng thái đang có trên quái
+  const stP = ctx.player?.stats || {};
+  const reactBoost = stP.stormSet3 ? 1.45 : 1;
   for (const el of els) {
     if (el === 'fire' && (enemy.frozenT > 0 || enemy.slowT > 0)) {
-      mult *= 2; enemy.frozenT = 0; enemy.slowT = 0; enemy.iceStacks = 0;
-      react(enemy, 'Tan Chảy!', 'melt', dmg); play('freeze', { at: enemy.pos, rate: 0.7 });
+      mult *= (stP.thermalShock ? 2.6 : 2) * (stP.stormSet3 ? 1.25 : 1);
+      enemy.frozenT = 0; enemy.slowT = 0; enemy.iceStacks = 0;
+      react(enemy, 'Tan Chảy!', 'melt', dmg * reactBoost); play('freeze', { at: enemy.pos, rate: 0.7 });
+      if (stP.thermalShock && allowChain) {
+        spawnRing(ctx.scene, enemy.pos, 3.2, 0xd8f4ff, 0.4);
+        aoe(enemy.pos, 3.2, Math.round(dmg * 0.75 * reactBoost), NONE, 8, { exclude: enemy });
+      }
     } else if (el === 'ice' && enemy.burnT > 0) {
-      mult *= 2; enemy.burnT = 0;
-      react(enemy, 'Tan Chảy!', 'melt', dmg); play('freeze', { at: enemy.pos, rate: 0.7 });
-    } else if (el === 'lightning' && enemy.frozenT > 0 && allowChain) {
-      enemy.frozenT = 0;
-      react(enemy, 'Vỡ Băng!', 'shatter', dmg);
+      mult *= (stP.thermalShock ? 2.6 : 2) * (stP.stormSet3 ? 1.25 : 1);
+      enemy.burnT = 0;
+      react(enemy, 'Tan Chảy!', 'melt', dmg * reactBoost); play('freeze', { at: enemy.pos, rate: 0.7 });
+    } else if (el === 'lightning' && (enemy.frozenT > 0 || (stP.magStorm && enemy.slowT > 0)) && allowChain) {
+      enemy.frozenT = stP.magStorm ? Math.max(enemy.frozenT, 1.2) : 0;
+      react(enemy, 'Vỡ Băng!', 'shatter', dmg * reactBoost);
       burst(enemy.pos.clone().setY(0.8), 0xaeeaff, 26, { speed: 9, size: 0.18 });
       play('freeze', { at: enemy.pos, rate: 1.3 });
-      aoe(enemy.pos, 2.8, Math.round(dmg * 1.2 + 10), NONE, 6, { exclude: enemy });
+      aoe(enemy.pos, 2.8, Math.round((dmg * 1.2 + 10) * reactBoost), NONE, 6, { exclude: enemy });
     } else if (((el === 'fire' && enemy.shockT > 0) || (el === 'lightning' && enemy.burnT > 0)) && allowChain) {
       enemy.shockT = 0;
-      react(enemy, 'Quá Tải!', 'overload', dmg);
+      react(enemy, 'Quá Tải!', 'overload', dmg * reactBoost);
       spawnRing(ctx.scene, enemy.pos, 2.6, 0xffb040, 0.35);
       burst(enemy.pos.clone().setY(0.6), 0xffd060, 24, { speed: 9, size: 0.16 });
       play('explode', { at: enemy.pos, vol: 0.6, rate: 1.2 });
-      aoe(enemy.pos, 2.6, Math.round(dmg * 0.8 + 8), NONE, 12, { exclude: enemy });
+      aoe(enemy.pos, 2.6, Math.round((dmg * 0.8 + 8) * reactBoost), NONE, 12, { exclude: enemy });
     } else if (el === 'blood' && (enemy.burnT > 0 || enemy.frozenT > 0 || enemy.shockT > 0)) {
       mult *= 1.3;
-      react(enemy, 'Huyết Tế!', 'blood', dmg);
+      react(enemy, 'Huyết Tế!', 'blood', dmg * reactBoost);
       ctx.player.heal(Math.max(2, Math.round(dmg * 0.3)));
     }
   }
@@ -100,6 +109,7 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
   }
   dmg = Math.max(1, Math.round(dmg * mult));
   const dealt = enemy.takeHit(dmg, dir, kb * (els.includes('wind') ? 1.9 : 1), crit || mult > 1) ?? dmg;
+  if (dealt > 0) ctx.recordDmg?.(ctx.dmgTag || 'basic', dealt);
   // Phá bộ phận Boss (hỗ trợ cả cận chiến, tầm xa, kỹ năng và phản ứng)
   if (enemy.isBoss && enemy.onPartHit && dealt > 0 && ctx.player) {
     let back = false;
@@ -108,7 +118,8 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
       const tx = ctx.player.pos.x - enemy.pos.x, tz = ctx.player.pos.z - enemy.pos.z, tl = Math.hypot(tx, tz) || 1;
       back = (fx * tx + fz * tz) / tl < -0.2;
     }
-    enemy.onPartHit(dealt, { dir, crit: !!crit, big: !!crit || kb >= 10 || dealt >= 26, back, player: ctx.player });
+    const partDmg = ctx.player.hasRelic?.('tongs') ? Math.round(dealt * 1.55) : dealt;
+    enemy.onPartHit(partDmg, { dir, crit: !!crit, big: !!crit || kb >= 10 || dealt >= 26, back, player: ctx.player });
   }
 
   for (const el of els) {
@@ -130,9 +141,10 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
     } else if (el === 'ice') {
       enemy.slowT = 2.2;
       enemy.iceStacks++;
-      if (enemy.iceStacks >= 3) {
+      const needIce = ctx.player?.hasRelic?.('icecore') ? 2 : 3;
+      if (enemy.iceStacks >= needIce) {
         enemy.iceStacks = 0;
-        enemy.frozenT = 1.4;
+        enemy.frozenT = stP.permaFrost && enemy.poisonStacks > 0 ? 2.4 : 1.4;
         play('freeze', { at: enemy.pos });
         burst(enemy.pos.clone().setY(0.6), 0xaeeaff, 12, { speed: 4, size: 0.16 });
       }
@@ -148,6 +160,7 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
         for (const t of targets) {
           const to = t.pos.clone().setY(0.7);
           spawnBolt(ctx.scene, from, to, ELEMENTS.lightning.glow);
+          if (stP.voltVenom) { t.poisonStacks = Math.min(8, (t.poisonStacks || 0) + 2); t.poisonT = 4.5; t.poisonDps = Math.max(t.poisonDps || 0, dmg * 0.14); }
           dealDamage(t, Math.max(1, Math.round(dmg * 0.5)), weapon, null, 0, false, false);
           from = to;
         }

@@ -9,7 +9,7 @@ export const DUNGEON_PIECES = [
   'floor_tile_large', 'floor_tile_large_rocks', 'floor_tile_small_decorated', 'wall', 'wall_corner', 'wall_arched',
   'wall_cracked', 'pillar_decorated', 'torch_mounted', 'barrel_large', 'barrel_small_stack', 'box_stacked',
   'crates_stacked', 'banner_patternA_red', 'banner_shield_red', 'rubble_large', 'sword_shield', 'candle_triple',
-  'keg_decorated', 'trunk_large_A', 'column', 'floor_tile_big_grate_open', 'box_large', 'barrel_small',
+  'keg_decorated', 'trunk_large_A', 'column', 'floor_tile_big_grate', 'floor_tile_big_grate_open', 'box_large', 'barrel_small',
   'floor_tile_big_spikes', 'chest', 'shop_table', 'barrel_explosive', 'coin_stack',
 ];
 // KayKit Halloween Bits (CC0) – dạng .gltf

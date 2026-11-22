@@ -16,7 +16,7 @@ export const ULTIMATES = {
 };
 
 const timers = [];
-const later = (t, fn) => timers.push({ t, fn });
+const later = (t, fn) => timers.push({ t, fn: () => { const prev = ctx.dmgTag; ctx.dmgTag = 'ult'; try { fn(); } finally { ctx.dmgTag = prev; } } });
 export function updateAbilities(dt) {
   for (let i = timers.length - 1; i >= 0; i--) {
     timers[i].t -= dt;
@@ -28,6 +28,16 @@ export function clearAbilities() { timers.length = 0; }
 const nearby = (pos, r) => ctx.enemies.filter((e) => e.alive && !e.spawning && Math.hypot(e.pos.x - pos.x, e.pos.z - pos.z) < r);
 
 export function castUltimate(player) {
+  const prevTag = ctx.dmgTag;
+  ctx.dmgTag = 'ult';
+  try {
+    _castUltimate(player);
+  } finally {
+    ctx.dmgTag = prevTag;
+  }
+}
+
+function _castUltimate(player) {
   const w = player.weapon;
   const el = w.element && w.element !== 'none' ? w.element : 'none';
   const pw = player.stats.dmg * player.stats.ultPower;

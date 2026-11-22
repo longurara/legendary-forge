@@ -3,6 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#120b08" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Lò Rèn" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/svg+xml" href="/ui/app-icon.svg" />
+    <link rel="apple-touch-icon" href="/ui/app-icon.svg" />
     <title>Lò Rèn Huyền Thoại</title>
     <link rel="stylesheet" href="/src/fonts.css" />
     <link rel="stylesheet" href="/src/style.css" />
@@ -40,16 +47,46 @@
         </div>
         <div id="dyn-curses" class="dyn-curses"></div>
       </div>
-      <div id="relics"></div>
+      <div id="relic-dock">
+        <div id="relics"></div>
+        <div id="relic-sets"></div>
+      </div>
 
       <div id="hud-top">
         <div class="panel slim wave-panel">
           <i class="ico ico-wave"></i><span class="wave-label">Tầng <b id="floor">1</b> · Đợt <b id="wave">1</b></span>
           <span id="enemies-left" class="sub"></span>
         </div>
+        <div id="defense-hud" class="panel slim hidden">
+          <i class="ico el-fire"></i><span>Lò Lửa</span>
+          <div class="def-bar"><div id="def-fill"></div><span id="def-hp">1000 / 1000</span></div>
+          <span id="def-wave" class="sub">Đợt 1 / 10</span>
+        </div>
+        <div id="sandbox-bar" class="panel slim hidden">
+          <div class="sb-dps-row">
+            <span>DPS: <b id="sb-dps">0</b></span>
+            <span>Đỉnh: <b id="sb-peak">0</b></span>
+            <span>Tổng: <b id="sb-total">0</b></span>
+            <button id="sb-reset" class="sb-btn" title="Đặt lại đồng hồ DPS">Đặt lại</button>
+          </div>
+          <div class="sb-ctrl-row">
+            <select id="sb-wtype" title="Chọn vũ khí"></select>
+            <select id="sb-welem" title="Chọn nguyên tố"></select>
+            <button id="sb-equip" class="sb-btn gold">Trang bị</button>
+            <button id="sb-spawn-lancer" class="sb-btn">+Kỵ Binh</button>
+            <button id="sb-spawn-pyro" class="sb-btn">+Hỏa Sư</button>
+            <button id="sb-rage" class="sb-btn">+Đầy Nộ</button>
+          </div>
+        </div>
         <div id="timer"></div>
         <div class="chips"><div id="event-chip" class="chip" style="display:none"></div><div id="next-reward" class="chip" style="display:none"></div></div>
         <div id="quest-chip" class="chip quest" style="display:none"></div>
+        <div id="boss-bar" class="hidden">
+          <div class="boss-name"><i class="ico ico-boss"></i><span id="boss-name"></span></div>
+          <div class="bar boss"><div id="boss-fill"></div></div>
+          <div class="poise"><div id="boss-poise"></div></div>
+          <div id="boss-parts" class="boss-parts"></div>
+        </div>
       </div>
 
       <div id="hud-right" class="panel slim">
@@ -58,13 +95,6 @@
         <span title="Hồn Thép"><i class="ico ico-soul"></i><b id="souls">0</b></span>
         <span title="Vàng"><i class="ico ico-gold"></i><b id="gold">0</b></span>
         <span title="Mảnh Thép: phân rã vũ khí (X), cường hóa ở đe (F)"><i class="ico ico-scrap"></i><b id="scrap">0</b></span>
-      </div>
-
-      <div id="boss-bar" class="hidden">
-        <div class="boss-name"><i class="ico ico-boss"></i><span id="boss-name"></span></div>
-        <div class="bar boss"><div id="boss-fill"></div></div>
-        <div class="poise"><div id="boss-poise"></div></div>
-        <div id="boss-parts" class="boss-parts"></div>
       </div>
 
       <div id="slots">
@@ -155,11 +185,18 @@
       <div class="menu-panel panel">
         <button id="btn-play" class="btn primary">Bắt đầu</button>
         <button id="btn-daily" class="btn">Thử thách hằng ngày <small id="daily-best" class="muted"></small></button>
-        <button id="btn-bossrush" class="btn">Boss Rush <small class="muted">chỉ có boss</small></button>
-        <button id="btn-coop" class="btn">Chơi 2 người <small class="muted">P2 dùng tay cầm</small></button>
+        <div class="btn-row">
+          <button id="btn-bossrush" class="btn">Boss Rush</button>
+          <button id="btn-defense" class="btn">Thủ Thành</button>
+        </div>
+        <div class="btn-row">
+          <button id="btn-sandbox" class="btn">Phòng Tập</button>
+          <button id="btn-coop" class="btn">2 Người <small class="muted">P2</small></button>
+        </div>
         <button id="btn-forge" class="btn">Lò Rèn <span id="menu-souls" class="soul-count"></span></button>
         <div class="btn-row"><button id="btn-village" class="btn">Làng Thợ Rèn</button><button id="btn-board" class="btn">Bảng Xếp Hạng</button></div>
-        <div class="btn-row"><button id="btn-ach" class="btn">Thành tựu</button><button id="btn-codex" class="btn">Sổ Rèn</button></div>
+        <div class="btn-row"><button id="btn-codex" class="btn">Sổ Rèn</button><button id="btn-bestiary" class="btn">Sổ Quái Vật</button></div>
+        <div class="btn-row"><button id="btn-ach" class="btn">Thành tựu</button><button id="btn-save" class="btn">Chuyển Save</button></div>
         <button id="btn-howto" class="btn">Hướng dẫn</button>
         <div class="sound-row"><button class="mute-btn" title="Tắt tiếng (M)"><i class="ico ico-speaker"></i><i class="ico ico-speaker-off"></i></button><input class="vol-slider" type="range" min="0" max="100" /></div>
         <p id="start-best" class="muted"></p>
@@ -212,7 +249,7 @@
             <h3>Cơ Chế Nâng Cao</h3>
             <p class="muted small"><b>Nhiệt Lưỡi &amp; Tôi Vũ Khí:</b> Đánh liên tục làm nóng lưỡi (50°–85° tăng +25% sát thương &amp; phá choáng; chạm 100° sẽ Quá Nhiệt). Nhấn <span class="keycap">Q</span> để <b>Tôi Đổi Vũ Khí / Đòn Biến Hình</b>, dùng Chuột Phải để <b>Phóng Nhiệt</b>, hoặc lướt qua Băng/Nước để <b>Tôi Địa Hình</b> tạo sương mù che đạn.</p>
             <p class="muted small"><b>Tam Giác Phản Phá &amp; Phá Bộ Phận:</b> Đòn cảnh báo <b>Đỏ-Trắng</b>: lướt thẳng VÀO để <b>Phản Xuyên</b>! Đòn <b>Tím</b>: dùng Kỹ năng / Đòn nặng để <b>Cắt Chiêu</b>! Phá bộ phận Boss rơi <b>Lõi Boss</b> để rèn vũ khí độc quyền; hoàn thành thử thách trên vũ khí Huyền Thoại để <b>Thức Tỉnh</b> tuyệt kỹ riêng.</p>
-            <p class="muted small"><b>Hóa Học Bề Mặt · Ánh Lửa &amp; Tha Hóa · Bóng Ma:</b> Lửa làm tan băng thành Nước (Sét vào Nước tạo Điện Trường); Băng đông cứng Nham thành Obsidian; Gió cuốn Lửa/Độc thành Lốc; đòn nặng làm sập Cột Đá. Đấu trường rộng <b>18×18</b> tích hợp <b>Radar góc phải</b> với <b>24 chủng quái</b> (Orc, Goblin, Nhện, Ong, Mãng Xà, Ấu Long...) và <b>10 Boss độc quyền</b> (Rồng Băng, Hỏa Long, Chúa Quỷ Lò Rèn, Vua Nấm, Song Tử Tử Thần...).</p>
+            <p class="muted small"><b>Hóa Học Bề Mặt · Ánh Lửa &amp; Tha Hóa · Bóng Ma:</b> Lửa làm tan băng thành Nước (Sét vào Nước tạo Điện Trường); Băng đông cứng Nham thành Obsidian; Gió cuốn Lửa/Độc thành Lốc; đòn nặng làm sập Cột Đá. Đấu trường rộng <b>18×18</b> tích hợp <b>Radar góc phải</b> với <b>6 Vùng Đất</b> (thêm Đầm Lầy Độc &amp; Thánh Điện Lôi), <b>9 loại vũ khí</b> (+Thương, Lưỡi Hái, Chiến Chùy), <b>7 Nhân vật</b>, <b>4 Bạn đồng hành</b>, <b>6 Thần Hộ Mệnh</b> (15 thẻ Song Thần), <b>30 Di Vật &amp; 4 Bộ Di Vật</b>, <b>25 chủng quái</b> và <b>11 Boss</b> (gồm <b>TRÙM CUỐI Tầng 5 · Thợ Rèn Sa Ngã</b> mở Chế Độ Vô Tận Tầng 6+!). Ngoài ra còn có <b>Phòng Tập Lò Rèn</b> đo DPS và <b>Thủ Thành Lò Lửa</b> (10 đợt xây Trụ Pháo)!</p>
             <div class="rarities"><span class="r0">Thường</span><span class="r1">Hiếm</span><span class="r2">Sử thi</span><span class="r3">Huyền thoại</span></div>
           </div>
         </div>
@@ -242,20 +279,24 @@
 
     <!-- ===== Chuẩn bị lượt chơi ===== -->
     <div id="prep" class="overlay hidden">
-      <div class="panel big wide">
+      <div class="panel big wide prep-panel">
         <h2>Chuẩn bị xuống hầm</h2>
         <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
-        <h3 class="sec">Chọn nhân vật</h3>
-        <div id="char-list" class="char-list"></div>
-        <h3 class="sec">Bậc Hầm Sâu <span id="depth-max" class="muted small"></span></h3>
-        <div class="depth-row">
-          <button id="depth-minus" class="btn depth-btn">−</button><div class="depth-val"><b id="depth-val">0</b><small>Bậc</small></div><button id="depth-plus" class="btn depth-btn">+</button>
-          <ul id="depth-rules" class="depth-rules"></ul>
+        <div class="prep-scroll">
+          <h3 class="sec">Chọn nhân vật</h3>
+          <div id="char-list" class="char-list"></div>
+          <h3 class="sec">Bạn đồng hành (Pet) <span class="muted small">(hỗ trợ chiến đấu &amp; tự nhặt vật phẩm)</span></h3>
+          <div id="pet-list" class="pet-list"></div>
+          <h3 class="sec">Bậc Hầm Sâu <span id="depth-max" class="muted small"></span></h3>
+          <div class="depth-row">
+            <button id="depth-minus" class="btn depth-btn">−</button><div class="depth-val"><b id="depth-val">0</b><small>Bậc</small></div><button id="depth-plus" class="btn depth-btn">+</button>
+            <ul id="depth-rules" class="depth-rules"></ul>
+          </div>
+          <h3 class="sec">Lời nguyền <span class="muted small">(tùy chọn: khó hơn nhưng nhận nhiều Hồn Thép hơn)</span></h3>
+          <div id="curse-list" class="curse-list"></div>
+          <p id="curse-bonus" class="curse-bonus"></p>
         </div>
-        <h3 class="sec">Lời nguyền <span class="muted small">(tùy chọn: khó hơn nhưng nhận nhiều Hồn Thép hơn)</span></h3>
-        <div id="curse-list" class="curse-list"></div>
-        <p id="curse-bonus" class="curse-bonus"></p>
-        <div class="btn-row center"><button class="btn" data-close="prep">Quay lại</button><button id="btn-go" class="btn primary">Vào hầm</button></div>
+        <div class="btn-row center prep-foot"><button class="btn" data-close="prep">Quay lại</button><button id="btn-go" class="btn primary">Vào hầm</button></div>
       </div>
     </div>
 
@@ -383,7 +424,7 @@
 
     <!-- ===== Thua ===== -->
     <div id="gameover" class="overlay hidden">
-      <div class="panel menu-panel">
+      <div class="panel big gameover-panel">
         <h2 class="red">Bạn đã gục ngã</h2>
         <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
         <div id="new-record" class="badge hidden">Kỷ lục mới!</div>
@@ -394,8 +435,60 @@
         </div>
         <div id="go-souls" class="small"></div>
         <div id="go-weapon" class="muted small"></div>
-        <button id="btn-again" class="btn primary">Chơi lại <span class="keycap">R</span></button>
-        <button id="btn-menu" class="btn">Về màn hình chính</button>
+        <div id="go-summary"></div>
+        <div class="btn-row center">
+          <button id="btn-again" class="btn primary">Chơi lại <span class="keycap">R</span></button>
+          <button id="btn-menu" class="btn">Về màn hình chính</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Chiến Thắng (Trùm Cuối Tầng 5 / Thủ Thành) ===== -->
+    <div id="victory" class="overlay hidden">
+      <div class="panel big victory-panel">
+        <h2 class="vic-title">✦ Chiến Thắng Huyền Thoại! ✦</h2>
+        <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
+        <p id="vic-sub" class="vic-sub">Bạn đã đánh bại Thợ Rèn Sa Ngã · Hắc Hỏa Tôn và thanh tẩy Lò Rèn Cổ Đại!</p>
+        <div class="stats">
+          <div><i class="ico ico-wave"></i><span>Tầng / Đợt</span><b id="vic-wave">5 / 25</b></div>
+          <div><i class="ico ico-kills"></i><span>Hạ gục</span><b id="vic-kills">0</b></div>
+          <div><i class="ico ico-soul"></i><span>Hồn Thép</span><b id="vic-souls">0</b></div>
+        </div>
+        <div id="vic-summary"></div>
+        <div class="btn-row center">
+          <button id="btn-endless" class="btn primary">Tiếp tục Vô Tận (Tầng 6+)</button>
+          <button id="btn-vic-menu" class="btn">Về màn hình chính</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Sổ Quái Vật (Bestiary) ===== -->
+    <div id="bestiary" class="overlay hidden">
+      <div class="panel big wide">
+        <h2>Sổ Quái Vật <span id="best-count" class="muted small"></span></h2>
+        <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
+        <div class="best-tabs">
+          <button id="best-tab-mobs" class="btn active">Quái Vật (25)</button>
+          <button id="best-tab-bosses" class="btn">Boss &amp; Trùm Cuối (11)</button>
+        </div>
+        <div id="best-grid" class="best-grid"></div>
+        <button class="btn primary" data-close="bestiary">Xong</button>
+      </div>
+    </div>
+
+    <!-- ===== Xuất / Nhập Mã Lưu Trữ (Chuyển Save PC ↔ Điện Thoại) ===== -->
+    <div id="save-modal" class="overlay hidden">
+      <div class="panel big save-panel">
+        <h2>Lưu &amp; Chuyển Dữ Liệu</h2>
+        <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
+        <p class="muted small">Sao chép mã lưu bên dưới để mang toàn bộ Hồn Thép, Làng, Sổ Rèn, Thành Tựu &amp; Bảng Xếp Hạng sang thiết bị khác (PC ↔ Điện thoại).</p>
+        <textarea id="save-code" rows="5" spellcheck="false" placeholder="Mã lưu bắt đầu bằng LRHT2:..."></textarea>
+        <div id="save-msg" class="save-msg"></div>
+        <div class="btn-row center">
+          <button id="btn-save-copy" class="btn primary">Sao chép Mã</button>
+          <button id="btn-save-import" class="btn">Nạp Mã Này</button>
+          <button class="btn" data-close="save-modal">Đóng</button>
+        </div>
       </div>
     </div>
 

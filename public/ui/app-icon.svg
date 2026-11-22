@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="65%">
+      <stop offset="0%" stop-color="#3c1e12"/>
+      <stop offset="100%" stop-color="#120b08"/>
+    </radialGradient>
+    <linearGradient id="flame" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#ff4a10"/>
+      <stop offset="55%" stop-color="#ff9a24"/>
+      <stop offset="100%" stop-color="#ffe880"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffe89c"/>
+      <stop offset="50%" stop-color="#e2b86c"/>
+      <stop offset="100%" stop-color="#9e6d28"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <rect x="20" y="20" width="472" height="472" rx="80" fill="none" stroke="url(#gold)" stroke-width="10" opacity="0.85"/>
+  <!-- Ngọn lửa Lò Rèn -->
+  <path d="M256 76 C295 148 345 182 332 252 C324 295 294 316 256 320 C218 316 188 295 180 252 C167 182 217 148 256 76 Z" fill="url(#flame)"/>
+  <path d="M256 146 C278 190 302 214 294 256 C288 282 273 294 256 296 C239 294 224 282 218 256 C210 214 234 190 256 146 Z" fill="#fff2b0" opacity="0.9"/>
+  <!-- Đe Rèn Huyền Thoại -->
+  <path d="M112 310 L368 310 L422 282 C422 316 392 346 350 352 L340 388 L382 414 L130 414 L172 388 L162 352 C128 346 112 332 112 310 Z" fill="url(#gold)" stroke="#24130a" stroke-width="8" stroke-linejoin="round"/>
+  <rect x="172" y="324" width="168" height="12" rx="6" fill="#fff0c0" opacity="0.55"/>
+</svg>

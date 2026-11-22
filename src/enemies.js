@@ -10,6 +10,7 @@ const ICE = new THREE.Color(0x7fdcff);
 const FIRE = new THREE.Color(0xff5a1a);
 const SHOCK = new THREE.Color(0xfff07a);
 const STUN = new THREE.Color(0xffd040);
+const INVULN = new THREE.Color(0xb070ff);
 const shadowGeo = new THREE.CircleGeometry(0.6, 20);
 const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false });
 const eyeGeo = new THREE.SphereGeometry(0.085, 8, 6);
@@ -92,7 +93,7 @@ export class Enemy {
       if (dmg <= 0) { damageNumber(this.pos, 'Chặn', 'burn'); return 0; }
     }
     this.hp -= dmg;
-    this.flash = 0.1;
+    if (dir && (this.flashCd || 0) <= 0) { this.flash = 0.06; this.flashCd = 0.18; }
     if (dir) {
       this.knock.copy(dir).multiplyScalar(kb / this.mass);
       if (this.stunT <= 0) this.onStagger();
@@ -208,16 +209,17 @@ export class Enemy {
 
   updateStatus(dt) {
     statusFx(this, dt);
+    this.flashCd = Math.max(0, (this.flashCd || 0) - dt);
     if (this.invulnT > 0) {
       this.invulnT -= dt;
-      this.flash = Math.sin(this.invulnT * 30) > 0 ? 0.05 : 0;
     }
     if (this.poisonT > 0) {
       this.poisonT -= dt;
       this.poisonTick = (this.poisonTick || 0) - dt;
       if (this.poisonTick <= 0) {
         this.poisonTick = 0.5;
-        this.takeHit(Math.max(1, Math.round((this.poisonDps || 2) * this.poisonStacks * 0.5)), null, 0, false, 'poison');
+        const pMul = ctx.player?.stats?.permaFrost && (this.frozenT > 0 || this.slowT > 0) ? 2 : 1;
+        this.takeHit(Math.max(1, Math.round((this.poisonDps || 2) * this.poisonStacks * 0.5 * pMul)), null, 0, false, 'poison');
       }
       if (this.poisonT <= 0) this.poisonStacks = 0;
     }
@@ -259,7 +261,8 @@ export class Enemy {
   applyTint(time) {
     this.flash = Math.max(0, this.flash - 1 / 60);
     let col = null, ei = 0;
-    if (this.flash > 0) { col = WHITE; ei = 1.2; }
+    if (this.flash > 0) { col = WHITE; ei = 0.48; }
+    else if (this.invulnT > 0) { col = INVULN; ei = 0.35 + Math.sin(time * 12) * 0.15; }
     else if (this.stunT > 0) { col = STUN; ei = 0.5 + Math.sin(time * 16) * 0.2; }
     else if (this.frozenT > 0) { col = ICE; ei = 0.9; }
     else if (this.slowT > 0) { col = ICE; ei = 0.3; }

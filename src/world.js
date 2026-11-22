@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { models } from './models.js';
 import { emit, F, rectLiquid, disposeLiquids } from './fx.js';
+import { buildDungeonFloor } from './floor_art.js';
 
 // ================== Kích thước phòng (mở rộng 18x18: diện tích gấp 2.25 lần!) ==================
 export const DS = 0.8;                       // tỉ lệ thu nhỏ bộ hầm ngục KayKit cho khớp nhân vật
@@ -30,6 +31,8 @@ export const BIOMES = [
   { id: 'ice', name: 'Hang Băng', tint: 0xb4d4ff, fog: 0x081420, sky: 0xc8ecff, ground: 0x203850, moon: 0xd8f0ff, torch: 0x7fd0ff, pit: 0x0a3050, pitGlow: 0.5 },
   { id: 'lava', name: 'Lò Nham Thạch', tint: 0xa89088, fog: 0x140504, sky: 0xc8a090, ground: 0x2a0c06, moon: 0xffd0b0, torch: 0xff6a2a, pit: 0xff4a10, pitGlow: 2.2 },
   { id: 'crypt', name: 'Hầm Mộ', tint: 0xaab4a6, fog: 0x060a07, sky: 0xa8bcb0, ground: 0x1a201a, moon: 0xb0e0c0, torch: 0x6fe08a, pit: 0x0a1a0e, pitGlow: 0.3 },
+  { id: 'swamp', name: 'Đầm Lầy Độc', tint: 0x8ec492, fog: 0x07120a, sky: 0x96d4a0, ground: 0x162414, moon: 0xaef0b0, torch: 0x8fe83a, pit: 0x1a3812, pitGlow: 0.7 },
+  { id: 'sanctum', name: 'Thánh Điện Lôi', tint: 0xdcd4b8, fog: 0x0c0e18, sky: 0xd8e4ff, ground: 0x2a2838, moon: 0xffe8a0, torch: 0xffe14a, pit: 0x181c38, pitGlow: 0.9 },
 ];
 // Hình dạng phòng cho lưới 18x18: các ô sàn [i0, i1, j0, j1] bị khoét thành hố/vực
 const SHAPES = {
@@ -217,7 +220,7 @@ export function buildWorld(scene, floor = 1) {
     boxes.push(b); pits.push(b);
     // Đáy hố: nham thạch phát sáng / nước băng / bóng tối
     // Đáy hố: dòng nham chảy / nước băng tối / sương mộ / vực sâu (shader)
-    const bottom = rectLiquid(r.x1 - r.x0, r.z1 - r.z0, { lava: 'lava', ice: 'water', crypt: 'mist', stone: 'void' }[B.id]);
+    const bottom = rectLiquid(r.x1 - r.x0, r.z1 - r.z0, { lava: 'lava', ice: 'water', crypt: 'mist', swamp: 'mist', sanctum: 'elec', stone: 'void' }[B.id] || 'void');
     bottom.material.transparent = false;
     bottom.position.set(b.x, -1.1, b.z);
     worldGroup.add(bottom);
@@ -244,24 +247,17 @@ export function buildWorld(scene, floor = 1) {
     }
   }
 
-  if (!models['dungeon/floor_tile_large'] || !models['dungeon/wall']) {
-    // Không có model: sàn phẳng đơn giản
-    const floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_HALF * 2, ROOM_HALF * 2), new THREE.MeshStandardMaterial({ color: 0x5a5048 }));
-    floorMesh.rotation.x = -Math.PI / 2;
-    floorMesh.receiveShadow = true;
-    worldGroup.add(floorMesh);
-    return theme;
-  }
-
   const H = ROOM_HALF;
   const at = (i) => -H + TILE / 2 + i * TILE;
   const W = H + 0.4;
 
-  // Sàn
-  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
-    if (inPit(at(i), at(j))) continue;
-    piece(rand() < 0.07 ? 'floor_tile_large_rocks' : 'floor_tile_large', at(i), at(j), Math.floor(rand() * 4) * Math.PI / 2);
+  // Mặt sàn Hầm Ngục PBR (Phiến đá 18x18 InstancedMesh + Ấn Trung Tâm + Thảm 4 hướng + Song Sắt + AO)
+  buildDungeonFloor(worldGroup, { N, TILE, ROOM_HALF, DS, biome: B, inPit, rand, models, tintObject });
+
+  if (!models['dungeon/wall']) {
+    return theme;
   }
+
   // Tường bắc, tây, đông (phía nam để trống cho camera)
   for (let i = 0; i < N; i++) {
     const v = () => (rand() < 0.25 ? 'wall_cracked' : 'wall');
@@ -294,9 +290,9 @@ export function buildWorld(scene, floor = 1) {
 // Biến cố "Bóng Tối" và Ánh Lửa liên tục (cơ chế #6): khi Ánh Lửa tụt dưới 45, phòng tối dần
 let flameDarkness = 0; // 0 = sáng rõ, 1 = tối như biến cố Bóng Tối
 function syncLighting() {
-  const k = isDark ? 1 : flameDarkness;
-  if (hemi) hemi.intensity = 1.1 - k * 0.94;
-  if (moon) moon.intensity = 1.3 - k * 1.16;
+  const k = isDark ? 0.82 : flameDarkness;
+  if (hemi) hemi.intensity = 1.1 - k * 0.82;
+  if (moon) moon.intensity = 1.3 - k * 0.98;
   if (darkHook) darkHook(k > 0.05 ? k : 0);
 }
 export function setDarkHook(fn) { darkHook = fn; }
@@ -306,7 +302,7 @@ export function setDark(on) {
   syncLighting();
 }
 export function setFlameLevel(flame) {
-  const target = flame >= 45 ? 0 : Math.min(0.88, (45 - flame) / 45);
+  const target = flame >= 40 ? 0 : Math.min(0.42, ((40 - flame) / 40) * 0.42);
   if (Math.abs(target - flameDarkness) < 0.01) return;
   flameDarkness = target;
   syncLighting();
@@ -346,6 +342,8 @@ function ambientFx(focus) {
   if (B.id === 'lava' && Math.random() < 0.45) emit(amb.set(rx(), 0.2, rz()), { frame: F.glow, color: 0xffb060, color2: 0xff3a00, size: 0.18, size2: 0.02, life: 2.5, vel: flameVel.set((Math.random() - 0.5) * 0.8, 1.2 + Math.random(), (Math.random() - 0.5) * 0.8), hdr: 2.2 });
   if (B.id === 'crypt' && Math.random() < 0.12) emit(amb.set(rx(), 0.4, rz()), { frame: F.glow, color: 0x9fffbf, color2: 0x2a8a4a, size: 0.5, size2: 0.1, life: 4, vel: flameVel.set((Math.random() - 0.5) * 0.4, 0.3, (Math.random() - 0.5) * 0.4), alpha: 0.7, fadeIn: 0.3 });
   if (B.id === 'crypt' && Math.random() < 0.08) emit(amb.set(rx(), 0.2, rz()), { smoke: true, frame: F.smoke, color: 0x3a5a40, size: 3, size2: 5, life: 5, vel: flameVel.set(0.2, 0.05, 0), alpha: 0.18, fadeIn: 0.3 });
+  if (B.id === 'swamp' && Math.random() < 0.28) emit(amb.set(rx(), 0.4, rz()), { frame: F.glow, color: 0xbfff60, color2: 0x3a9020, size: 0.38, size2: 0.08, life: 3.5, vel: flameVel.set((Math.random() - 0.5) * 0.5, 0.5, (Math.random() - 0.5) * 0.5), alpha: 0.75 });
+  if (B.id === 'sanctum' && Math.random() < 0.22) emit(amb.set(rx(), 1 + Math.random() * 4, rz()), { frame: F.elec, color: 0xffe880, color2: 0x7fdcff, size: 0.35, size2: 0.05, life: 0.3, vel: flameVel.set(0, -0.5, 0), hdr: 2 });
   if (B.id === 'stone' && Math.random() < 0.15) emit(amb.set(rx(), 1 + Math.random() * 3, rz()), { frame: F.glow, color: 0xffe0b0, size: 0.06, size2: 0.06, life: 4, vel: flameVel.set((Math.random() - 0.5) * 0.3, 0.1, (Math.random() - 0.5) * 0.3), alpha: 0.6, hdr: 1, fadeIn: 0.3 });
   for (const p of pitFx) {
     if (B.id === 'lava' && Math.random() < 0.35) emit(amb.set(p.x0 + Math.random() * (p.x1 - p.x0), -0.6, p.z0 + Math.random() * (p.z1 - p.z0)), { frame: F.flame, color: 0xffa040, color2: 0xa01a00, size: 1.2, size2: 0.3, life: 0.9, vel: flameVel.set(0, 1.8, 0), alpha: 0.6, hdr: 1.4, fadeIn: 0.2, rotV: 1 });

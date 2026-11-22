@@ -69,9 +69,38 @@ export const TYPES = {
     name: 'Nỏ', rest: 0.5, idle: '2H_Ranged_Aiming', ranged: true, anim: '2H_Ranged_Shoot', bolt: true,
     shot: { dmg: 17, cooldown: 0.55, speed: 30, splash: 0, pierce: 2 },
   },
+  // Thương Chiến: đâm tầm siêu xa, tốc độ gọn, xuyên hàng quái
+  spear: {
+    name: 'Thương', rest: 0.55, idle: '2H_Melee_Idle',
+    combo: [
+      { anim: '2H_Melee_Attack_Stab', arc: 0.85, range: 4.3, dmg: 11, kb: 7, dur: 0.25, lunge: 4.5, thrust: true, shake: 0.16, stop: 0.04 },
+      { anim: '1H_Melee_Attack_Stab', arc: 0.85, range: 4.5, dmg: 13, kb: 8, dur: 0.25, lunge: 5, thrust: true, shake: 0.18, stop: 0.04 },
+      { anim: '2H_Melee_Attack_Slice', arc: 2.0, range: 4.8, dmg: 22, kb: 15, dur: 0.36, lunge: 7, from: 1.0, to: -1.0, shake: 0.38, stop: 0.09, big: true },
+    ],
+  },
+  // Lưỡi Hái: cung quét rộng nhất game, đòn cuối hút quái vào tầm & Gặt Hồn
+  scythe: {
+    name: 'Lưỡi Hái', rest: 1.2, idle: '2H_Melee_Idle',
+    combo: [
+      { anim: '2H_Melee_Attack_Slice', arc: 2.8, range: 3.4, dmg: 13, kb: 5, dur: 0.34, lunge: 2.5, from: 1.4, to: -1.4, shake: 0.2, stop: 0.05 },
+      { anim: '1H_Melee_Attack_Slice_Horizontal', arc: 2.9, range: 3.5, dmg: 15, kb: 5, dur: 0.34, lunge: 2.5, from: -1.4, to: 1.4, shake: 0.22, stop: 0.05 },
+      { anim: '2H_Melee_Attack_Spin', arc: TAU, range: 3.9, dmg: 24, kb: -10, dur: 0.42, lunge: 3, from: 1.2, to: 1.2 - TAU, shake: 0.42, stop: 0.1, big: true, pull: true },
+    ],
+  },
+  // Chiến Chùy: phá thanh Choáng ×2, đập sập cột đá bằng đòn thường
+  hammer: {
+    name: 'Chiến Chùy', rest: 0.8, idle: '2H_Melee_Idle', heavy: true,
+    combo: [
+      { anim: '2H_Melee_Attack_Chop', arc: 2.1, range: 3.2, dmg: 19, kb: 16, dur: 0.44, lunge: 3.5, from: 1.1, to: -1.1, shake: 0.34, stop: 0.08, poiseMul: 2.0 },
+      { anim: '2H_Melee_Attack_Spin', arc: TAU, range: 3.6, dmg: 30, kb: 22, dur: 0.5, lunge: 4.5, from: 1.2, to: 1.2 - TAU, shake: 0.52, stop: 0.12, big: true, poiseMul: 2.2 },
+    ],
+  },
 };
 // Model dùng cho từng loại vũ khí
-export const modelFor = (type) => ({ daggers: 'weapon_dagger', crossbow: 'prop_skel_crossbow' }[type] || 'weapon_' + type);
+export const modelFor = (type) => ({
+  daggers: 'weapon_dagger', crossbow: 'prop_skel_crossbow',
+  spear: 'prop_spear', scythe: 'prop_scythe', hammer: 'prop_hammer_gold',
+}[type] || 'weapon_' + type);
 const TYPE_KEYS = Object.keys(TYPES);
 
 // ---------- Phụ tố vũ khí ----------
@@ -294,7 +323,7 @@ export function buildWeaponMesh(w) {
 
   const custom = models[modelFor(w.type)];
   if (custom) {
-    const len = { sword: 1.75, axe: 1.9, greatsword: 2.3, staff: 1.9, daggers: 1.0, crossbow: 1.3 }[w.type];
+    const len = { sword: 1.75, axe: 1.9, greatsword: 2.3, staff: 1.9, daggers: 1.0, crossbow: 1.3, spear: 2.45, scythe: 2.2, hammer: 2.0 }[w.type] || 1.8;
     const m = fitModel(custom, len, 'weapon');
     tintWeapon(m, w);
     g.add(m);
@@ -339,6 +368,16 @@ export function buildWeaponMesh(w) {
     add(new THREE.TorusGeometry(0.16, 0.03, 6, 16), gold, 0, 0, 1.55);
     add(new THREE.SphereGeometry(0.15, 14, 10), new THREE.MeshBasicMaterial({ color: w.element === 'none' ? 0xc9b6ff : el.glow }), 0, 0, 1.6);
     if (w.element2) add(new THREE.SphereGeometry(0.07, 8, 6), accent, 0, 0.18, 1.6);
+  } else if (w.type === 'spear') {
+    add(new THREE.CylinderGeometry(0.032, 0.035, 2.1, 6), wood, 0, 0, 0.95, Math.PI / 2);
+    add(new THREE.ConeGeometry(0.1, 0.52, 4), metal, 0, 0, 2.2, Math.PI / 2);
+  } else if (w.type === 'scythe') {
+    add(new THREE.CylinderGeometry(0.038, 0.04, 2.0, 6), wood, 0, 0, 0.9, Math.PI / 2);
+    add(new THREE.TorusGeometry(0.55, 0.05, 4, 14, 1.8), metal, 0.45, 0, 1.85, Math.PI / 2, 0, 0.2);
+  } else if (w.type === 'hammer') {
+    add(new THREE.CylinderGeometry(0.045, 0.05, 1.85, 6), wood, 0, 0, 0.85, Math.PI / 2);
+    add(new THREE.BoxGeometry(0.72, 0.34, 0.38), gold, 0, 0, 1.72);
+    add(new THREE.BoxGeometry(0.78, 0.24, 0.26), metal, 0, 0, 1.72);
   }
   g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   return g;
@@ -398,6 +437,8 @@ export function buildHeldWeapon(w) {
   if (!custom) return null;
   const m = custom.scene.clone(true);
   tintWeapon(m, w);
+  const scale = { spear: 0.25, scythe: 0.34, hammer: 0.62 }[w.type] || 1;
+  if (scale !== 1) m.scale.setScalar(scale);
   m.position.set(0, 0.0333, 0);
   m.rotation.set(0, Math.PI, 0);
   m.traverse((o) => { if (o.isMesh) o.castShadow = true; });

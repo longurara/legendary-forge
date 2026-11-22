@@ -1,0 +1,19 @@
+{
+  "name": "Lò Rèn Huyền Thoại",
+  "short_name": "Lò Rèn",
+  "description": "Game hành động Roguelite 3D rèn vũ khí nguyên tố, chinh phục 11 Boss và 6 Thần Hộ Mệnh.",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#120b08",
+  "theme_color": "#120b08",
+  "lang": "vi",
+  "icons": [
+    {
+      "src": "/ui/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -96,7 +96,8 @@ function executePayload(payloadId, player, pos, dir, baseDmg, weapon, mods) {
   const pull = mods.includes('m_pull');
   const trap = mods.includes('m_trap');
 
-  const dmgScale = (split ? 0.65 : 1) * (delay ? 1.85 : 1);
+  const stormBoost = player?.stats?.stormSet3 ? 1.45 : 1;
+  const dmgScale = (split ? 0.65 : 1) * (delay ? 1.85 : 1) * stormBoost;
   const radScale = wide ? 1.65 : 1;
   const dmg = Math.max(4, Math.round(baseDmg * dmgScale));
   const at = pos.clone();
@@ -104,6 +105,9 @@ function executePayload(payloadId, player, pos, dir, baseDmg, weapon, mods) {
 
   const runOnce = (origin, isTrapEcho = false) => {
     if (!ctx.scene || player.dead) return;
+    const prevTag = ctx.dmgTag;
+    ctx.dmgTag = 'rune';
+    try {
     if (pull) {
       const pr = 4.6 * radScale;
       spawnRing(ctx.scene, origin, pr, 0xc77dff, 0.35);
@@ -191,6 +195,7 @@ function executePayload(payloadId, player, pos, dir, baseDmg, weapon, mods) {
       flash(origin.clone().setY(0.3), 0x9fff5a, 1.6, 0.2, false);
       after(1.35, () => runOnce(origin, true));
     }
+    } finally { ctx.dmgTag = prevTag; }
   };
 
   if (delay) {
@@ -248,7 +253,8 @@ export function fireRunes(player, eventType, pos, dir, baseDmg, weapon = player.
         triggerHadPayload = false;
         if (r.event === eventType && (player.runeCd[r.id] || 0) <= now) {
           pendingTriggerFired = true;
-          player.runeCd[r.id] = now + r.cd;
+          const cdMul = player?.hasRelic?.('capacitor') ? 0.65 : 1;
+          player.runeCd[r.id] = now + r.cd * cdMul;
         } else {
           pendingTriggerFired = false;
         }
@@ -335,6 +341,12 @@ export const BOSS_CORES = {
     title: 'Song Ảnh Lưỡi Hái', legend: 'boss_twins',
     text: 'Vũ khí Song Dạng (Rìu Hỏa ⇄ Song Dao Lôi): bấm Q biến hình gọi sét Quá Tải quanh thân',
   },
+  core_smith: {
+    id: 'core_smith', boss: 'Thợ Rèn Sa Ngã', name: 'Lõi Hắc Hỏa Tôn', icon: 'anvil', color: '#ffe070',
+    weaponType: 'hammer', element: 'fire', element2: 'holy',
+    title: 'Thần Chùy Khởi Nguyên', legend: 'boss_smith',
+    text: 'Mọi đòn đánh giải phóng sóng Lò Rèn vàng, đập choáng ×2.5 và tự hồi +4 Ánh Lửa',
+  },
 };
 
 // ---------- Thức Tỉnh Vũ Khí (Awakening Trials cho Huyền Thoại / Công Thức / Vũ Khí Boss) ----------
@@ -353,6 +365,7 @@ const AWAKEN_DEFS = {
   boss_plague: { event: 'react', goal: 8, text: 'Gây 8 phản ứng nguyên tố', ultId: 'aw_plague', ultName: 'Bào Tử Tận Thế' },
   boss_frost: { event: 'crit', goal: 15, text: 'Gây 15 đòn chí mạng', ultId: 'aw_blizzard', ultName: 'Phong Ấn Băng Vương' },
   boss_twins: { event: 'quench', goal: 5, text: 'Đòn Biến Hình / Tôi Vũ Khí 5 lần', ultId: 'aw_shadow', ultName: 'Liên Kết Tử Thần' },
+  boss_smith: { event: 'stun', goal: 5, text: 'Làm choáng hoặc Phản Phá 5 lần', ultId: 'aw_forge', ultName: 'Khởi Nguyên Lò Rèn' },
   default: { event: 'quench', goal: 5, text: 'Tôi Vũ Khí hoặc Phóng Nhiệt 5 lần', ultId: 'aw_forge', ultName: 'Ngọn Lửa Đầu Tiên' },
 };
 

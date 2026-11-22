@@ -1,7 +1,7 @@
 // Bẫy, vật thể trong phòng và Ma Trận Hóa Học Bề Mặt (Cơ chế #4)
 import * as THREE from 'three';
 import { models } from './models.js';
-import { ctx, aoe, scheduleBomb, spawnFirePatch, getFirePatches, getToxics, removeFirePatch, removeToxic, dealDamage } from './combat.js';
+import { ctx, aoe, scheduleBomb, spawnFirePatch, spawnToxic, getFirePatches, getToxics, removeFirePatch, removeToxic, dealDamage } from './combat.js';
 import { spawnRing, burst, addShake, spawnTelegraph, damageNumber, explosion, flame, flash, spawnBolt } from './fx.js';
 import { play } from './audio.js';
 import { isBlocked, ROOM_HALF, DS, pillars, currentBiome } from './world.js';
@@ -17,6 +17,8 @@ const elecPatches = [];
 const steamClouds = [];
 const cyclones = [];
 const fallingPillars = [];
+const swampBogs = [];
+const teslaPairs = [];
 export let waveActive = { on: false };
 let rainT = 0;
 let surfaceDepth = 0;
@@ -109,6 +111,17 @@ class Spike {
   }
 }
 
+// Dọn sạch bẫy khi vào Phòng Tập Lò Rèn
+export function clearHazards(scene) {
+  if (group) { scene?.remove(group); group = null; }
+  ctx.barrels.length = 0;
+  spikes.length = 0;
+  icePatches.length = 0; lavaPools.length = 0; graves.length = 0;
+  waterPatches.length = 0; elecPatches.length = 0; steamClouds.length = 0;
+  cyclones.length = 0; fallingPillars.length = 0;
+  swampBogs.length = 0; teslaPairs.length = 0;
+}
+
 // Đặt bẫy cho tầng mới (gọi sau buildWorld)
 export function buildHazards(scene, floor, rand = Math.random) {
   if (group) scene.remove(group);
@@ -119,7 +132,7 @@ export function buildHazards(scene, floor, rand = Math.random) {
   const free = (r) => {
     for (let k = 0; k < 60; k++) {
       const x = (rand() * 2 - 1) * (ROOM_HALF - 3), z = (rand() * 2 - 1) * (ROOM_HALF - 3);
-      if (Math.hypot(x, z - (ROOM_HALF - 4)) < 5 || Math.hypot(x, z) < 3) continue;   // tránh chỗ xuất phát và giữa phòng
+      if (Math.hypot(x, z - (ROOM_HALF - 4)) < 5 || Math.hypot(x, z) < 6.8) continue;   // tránh chỗ xuất phát và Ấn Trung Tâm
       if (!isBlocked(x, z, r)) return [x, z];
     }
     return null;
@@ -128,6 +141,7 @@ export function buildHazards(scene, floor, rand = Math.random) {
   for (let i = 0; i < nBarrels; i++) { const p = free(1.6); if (p) ctx.barrels.push(new Barrel(scene, p[0], p[1])); }
   icePatches.length = 0; lavaPools.length = 0; graves.length = 0;
   waterPatches.length = 0; elecPatches.length = 0; steamClouds.length = 0; cyclones.length = 0; fallingPillars.length = 0;
+  swampBogs.length = 0; teslaPairs.length = 0;
   const biome = currentBiome.id;
   const nSpikes = biome === 'stone' || biome === 'crypt' ? 4 + Math.min(4, floor) : 2;
   for (let i = 0; i < nSpikes; i++) { const p = free(2.4); if (p) spikes.push(new Spike(p[0], p[1], rand() * 3.2)); }
@@ -232,6 +246,61 @@ export function buildHazards(scene, floor, rand = Math.random) {
       group.add(o);
       if (col) pillars.push({ x: p[0], z: p[1], r: col });
       if (name.includes('candle')) { const l = new THREE.PointLight(0x9fffb0, 3, 4, 1.8); l.position.set(p[0], 0.8, p[1]); group.add(l); }
+    }
+  } else if (biome === 'swamp') {
+    // Đầm Lầy Độc: vũng độc tự nhiên + nấm phát sáng (gặp Lửa sẽ nổ dây chuyền cả đầm!)
+    for (let i = 0; i < 7; i++) {
+      const r = 2.1 + rand() * 1.3;
+      const p = freePool(r); if (!p) continue;
+      swampBogs.push({ x: p[0], z: p[1], r, refillT: 0 });
+      spawnToxic(new THREE.Vector3(p[0], 0, p[1]), r, 999);
+    }
+    const capMat = new THREE.MeshStandardMaterial({ color: 0x70e84a, emissive: 0x3ad820, emissiveIntensity: 0.7, flatShading: true });
+    const stemMat = new THREE.MeshStandardMaterial({ color: 0xc8c0a0, roughness: 0.9 });
+    for (let i = 0; i < 10; i++) {
+      const p = free(1.3); if (!p) continue;
+      const g = new THREE.Group();
+      for (let k = 0; k < 3; k++) {
+        const h = 0.6 + rand() * 0.9;
+        const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.18, h, 6), stemMat);
+        const cap = new THREE.Mesh(new THREE.ConeGeometry(0.45 + rand() * 0.25, 0.4, 7), capMat);
+        const ox = k === 0 ? 0 : (rand() - 0.5) * 0.9, oz = k === 0 ? 0 : (rand() - 0.5) * 0.9;
+        stem.position.set(ox, h / 2, oz); cap.position.set(ox, h + 0.1, oz);
+        g.add(stem, cap);
+      }
+      g.position.set(p[0], 0, p[1]); group.add(g);
+      const l = new THREE.PointLight(0x8fe83a, 3.5, 6, 1.8); l.position.set(p[0], 1.2, p[1]); group.add(l);
+      pillars.push({ x: p[0], z: p[1], r: 0.65 });
+    }
+  } else if (biome === 'sanctum') {
+    // Thánh Điện Lôi: các cặp Cột Thu Lôi phóng tia sét nối nhau định kỳ (hất quái vào đường sét!)
+    const pylonMat = new THREE.MeshStandardMaterial({ color: 0xd8c890, metalness: 0.7, roughness: 0.3 });
+    const orbMat = new THREE.MeshStandardMaterial({ color: 0xffe880, emissive: 0xffe14a, emissiveIntensity: 1.0 });
+    const makePylon = (x, z) => {
+      const g = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.42, 2.6, 8), pylonMat);
+      body.position.y = 1.3; body.castShadow = true;
+      const orb = new THREE.Mesh(new THREE.OctahedronGeometry(0.38, 0), orbMat.clone());
+      orb.position.y = 2.85;
+      g.add(body, orb);
+      g.position.set(x, 0, z);
+      group.add(g);
+      pillars.push({ x, z, r: 0.55 });
+      return { x, z, orb };
+    };
+    const anchors = [[-10, -10, 10, -10], [-10, 10, 10, 10], [-15, -4, -15, 10], [15, -10, 15, 4]];
+    for (let i = 0; i < anchors.length; i++) {
+      const [ax, az, bx, bz] = anchors[i];
+      if (isBlocked(ax, az, 0.8) || isBlocked(bx, bz, 0.8)) continue;
+      const a = makePylon(ax, az), b = makePylon(bx, bz);
+      const beam = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.11, 0.11, Math.hypot(bx - ax, bz - az), 8, 1, true),
+        new THREE.MeshBasicMaterial({ color: 0xffe860, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }),
+      );
+      beam.position.set((ax + bx) / 2, 1.5, (az + bz) / 2);
+      beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(bx - ax, 0, bz - az).normalize());
+      group.add(beam);
+      teslaPairs.push({ a, b, beam, t: i * 1.4, tick: 0 });
     }
   }
 }
@@ -509,6 +578,7 @@ export function damagePillars(pos, radius, dir, heavy = false) {
       play('hitHeavy', { at: p0, rate: 0.9 });
       if (p.hp <= 0) {
         pillars.splice(i, 1);
+        ctx.onPillarCollapse?.();
         damageNumber(p0, 'Sập Cột Đá!', 'react stun');
         addShake(0.65);
         play('explode', { at: p0, rate: 0.75 });
@@ -678,6 +748,53 @@ export function updateHazards(dt, rain) {
       }
     }
   }
+  // Đầm Lầy Độc: tự tái tạo vũng độc sau 9s nếu bị đốt nổ sạch
+  if (swampBogs.length) {
+    const tox = getToxics();
+    for (const bog of swampBogs) {
+      const has = tox.some((t) => Math.hypot(t.pos.x - bog.x, t.pos.z - bog.z) < bog.r);
+      if (!has) {
+        bog.refillT += dt;
+        if (bog.refillT >= 9) { bog.refillT = 0; spawnToxic(new THREE.Vector3(bog.x, 0, bog.z), bog.r, 999); }
+      } else bog.refillT = 0;
+    }
+  }
+
+  // Thánh Điện Lôi: chu kỳ 6s (3.2s nghỉ -> 0.8s nạp điện -> 2.0s phóng tia sét giữa cặp cột!)
+  for (const tp of teslaPairs) {
+    tp.t = (tp.t + dt) % 6.0;
+    const warn = tp.t >= 3.2 && tp.t < 4.0;
+    const active = tp.t >= 4.0;
+    tp.a.orb.rotation.y += dt * (active ? 8 : warn ? 4 : 1.5);
+    tp.b.orb.rotation.y += dt * (active ? 8 : warn ? 4 : 1.5);
+    tp.beam.material.opacity = active ? 0.72 : warn ? 0.22 + Math.sin(tp.t * 35) * 0.12 : 0;
+    if (active) {
+      if (Math.random() < dt * 12) spawnBolt(ctx.scene, new THREE.Vector3(tp.a.x, 2.2, tp.a.z), new THREE.Vector3(tp.b.x, 2.2, tp.b.z), 0xffe860);
+      tp.tick -= dt;
+      if (tp.tick <= 0) {
+        tp.tick = 0.4;
+        const ax = tp.a.x, az = tp.a.z, bx = tp.b.x, bz = tp.b.z;
+        const abx = bx - ax, abz = bz - az, lenSq = abx * abx + abz * abz || 1;
+        const distSeg = (px, pz) => {
+          const u = Math.max(0, Math.min(1, ((px - ax) * abx + (pz - az) * abz) / lenSq));
+          return Math.hypot(px - (ax + abx * u), pz - (az + abz * u));
+        };
+        if (pl && !pl.dead && pl.dashTime <= 0 && distSeg(pl.pos.x, pl.pos.z) < 0.75 + pl.radius) {
+          if (pl.hurt(10)) damageNumber(pl.pos, 10, 'player');
+          play('zap', { at: pl.pos, vol: 0.5 });
+        }
+        for (const e of ctx.enemies) {
+          if (!e.alive || e.spawning) continue;
+          if (distSeg(e.pos.x, e.pos.z) < 0.85 + e.radius) {
+            dealDamage(e, 34, { element: 'lightning', element2: null }, null, 4, true, false);
+            if (!e.isBoss) e.stunT = Math.max(e.stunT, 0.8);
+            play('zap', { at: e.pos, vol: 0.4 });
+          }
+        }
+      }
+    }
+  }
+
   // Biến cố "Mưa Lửa"
   if (rain) {
     rainT -= dt;

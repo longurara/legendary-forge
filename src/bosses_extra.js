@@ -1,10 +1,11 @@
-// 6 Boss mới nâng tổng số lên 10 Boss độc đáo (mỗi Boss có Bộ Phận Phá Được + Lõi Boss riêng):
+// 7 Boss mới nâng tổng số lên 11 Boss độc đáo (mỗi Boss có Bộ Phận Phá Được + Lõi Boss riêng):
 // 4. ForgeOgre (Chúa Quỷ Lò Rèn - mon_ogre.glb)
 // 5. FrostDragon (Băng Long Vương - mon_dragon.glb)
 // 6. EmberDragon (Hỏa Long Cổ Đại - mon_dragon.glb)
 // 7. PlagueKing (Vua Nấm Dịch Hạch - mon_mushroom_king.glb)
 // 8. FrostWarden (Băng Vương Giáp Sĩ - enemy_boss + Vương Miện Băng)
 // 9. TwinReapers (Song Tử Tử Thần: Hỏa Ảnh & Lôi Ảnh - Dual-Boss cầm Lưỡi Hái 3D prop_scythe.glb)
+// 10. FallenSmith (TRÙM CUỐI TẦNG 5: Thợ Rèn Sa Ngã · Hắc Hỏa Tôn - 3 Giai Đoạn, cầm prop_hammer_gold.glb)
 import * as THREE from 'three';
 import { collide, isBlocked } from './world.js';
 import { burst, damageNumber, spawnRing, addShake, spawnTelegraph, smoke, flash, emit, F, explosion, flame, spawnBolt } from './fx.js';
@@ -13,7 +14,7 @@ import { ctx, enemyShot, scheduleBomb, spawnFirePatch, spawnToxic, getToxics, re
 import { damagePillars } from './hazards.js';
 import { play } from './audio.js';
 import { Walker, tintMats, hurtPlayer } from './enemies_new.js';
-import { Creature, FireImp, FrostDrake, AcidGlub, VenomSpider, GoblinRaider, FrostGuard, StoneCrab } from './enemies_pack.js';
+import { Creature, FireImp, FrostDrake, AcidGlub, VenomSpider, GoblinRaider, FrostGuard, StoneCrab, OrcBrute, PyroMage } from './enemies_pack.js';
 
 const inSector = (from, facing, target, range, arc) => {
   const dx = target.x - from.x, dz = target.z - from.z;
@@ -1043,4 +1044,260 @@ export function spawnTwinReapers(scene, level = 1) {
   flameR.sibling = stormR;
   stormR.sibling = flameR;
   return [flameR, stormR];
+}
+
+// =========================================================================
+// BOSS #10 (TRÙM CUỐI TẦNG 5): THỢ RÈN SA NGÃ · HẮC HỎA TÔN (FallenSmith)
+// 3 Giai đoạn kịch tính · 2 Bộ Phận Phá Được (Búa Hắc Hỏa rơi core_smith & Giáp Ngọn Lửa)
+// =========================================================================
+export class FallenSmith extends Walker {
+  constructor(scene, x, z, level = 1) {
+    super(scene, x, z);
+    this.isBoss = true;
+    this.isTrueBoss = true;
+    this.name = 'Thợ Rèn Sa Ngã · Hắc Hỏa Tôn';
+    this.maxHp = this.hp = 820 + (level - 1) * 420;
+    this.poiseMax = 200 * level;
+    this.color = 0xff8a24; this.mass = 8; this.contactDmg = 14; this.dropChance = 0; this.xp = 100;
+    this.hurtSound = 'hitHeavy'; this.dieSound = 'explode';
+    this.state = 'intro'; this.timer = 1.8; this.next = 0; this.chargesLeft = 0;
+    this.shadowScale = 2.5;
+
+    const hammer = models.prop_hammer_gold ? ['prop_hammer_gold', 'handslotr', 0.95] : ['weapon_greatsword', 'handslotr', 1.25];
+    this.build('enemy_boss', 4.4, [hammer]);
+    tintMats(this, 0x2a1812, 0.55, 0xff5a10, 0.42);
+    this.spawning = true; this.spawnT = -0.5;
+
+    // Vòng Hắc Hỏa xoay sau lưng (Giáp Ngọn Lửa — bộ phận phá được)
+    this.plateRing = new THREE.Group();
+    const torus = new THREE.Mesh(
+      new THREE.TorusGeometry(1.55, 0.14, 10, 28),
+      new THREE.MeshStandardMaterial({ color: 0xffcf4a, emissive: 0xff5a00, emissiveIntensity: 1.5, metalness: 0.85, roughness: 0.2 }),
+    );
+    this.plateRing.add(torus);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const sp = new THREE.Mesh(new THREE.OctahedronGeometry(0.28, 0), new THREE.MeshBasicMaterial({ color: 0xffe880 }));
+      sp.position.set(Math.cos(a) * 1.55, Math.sin(a) * 1.55, 0);
+      this.plateRing.add(sp);
+    }
+    this.plateRing.position.set(0, 2.75, -0.75);
+    this.group.add(this.plateRing);
+
+    // Lõi Hắc Hỏa trên búa (Búa Hắc Hỏa — bộ phận phá được, rơi core_smith)
+    this.hammerAura = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.55, 0),
+      new THREE.MeshBasicMaterial({ color: 0xff9a30, wireframe: true, transparent: true, opacity: 0.85 }),
+    );
+    this.hammerAura.position.set(1.1, 2.2, 0.9);
+    this.group.add(this.hammerAura);
+
+    this.initBossParts([
+      { id: 'hammer', name: 'Búa Hắc Hỏa', icon: 'anvil', pct: 0.25, mesh: this.hammerAura, core: 'core_smith', cond: (i) => i.crit || i.big || i.clash },
+      { id: 'plate', name: 'Giáp Ngọn Lửa', icon: 'x_shield', pct: 0.28, mesh: this.plateRing, core: null, cond: (i) => i.big || !i.back || this.stunT > 0 },
+    ]);
+  }
+  get radius() { return 1.35; }
+  get phaseLevel() {
+    const r = this.hp / Math.max(1, this.maxHp);
+    return r <= 0.33 ? 3 : r <= 0.66 ? 2 : 1;
+  }
+  get enraged() { return this.phaseLevel >= 2; }
+  get grounded() { return !this.spawning && this.state !== 'intro'; }
+  onStagger() { this.knock.multiplyScalar(0.15); }
+  takeHit(dmg, dir, kb, crit, kind) {
+    if (this.isPartBroken('plate')) dmg = Math.round(dmg * 1.25);
+    return super.takeHit(dmg, dir, kb, crit, kind);
+  }
+
+  think(bdt, player, d, dx, dz) {
+    const ph = this.phaseLevel;
+    const fast = ph === 3 ? 1.42 : ph === 2 ? 1.22 : 1.0;
+    const fdt = bdt * fast;
+    switch (this.state) {
+      case 'intro':
+        this.timer -= fdt;
+        if (Math.random() < 0.45) flame(this.pos.clone().setY(2.2), { count: 1, size: 1.0, spread: 0.9 });
+        if (this.timer <= 0) { this.state = 'chase'; this.timer = 1.0; }
+        return 'Idle_Combat';
+      case 'chase':
+        this.facing = Math.atan2(dx, dz);
+        this.timer -= fdt;
+        if (d > 3.2) { this.move(dx / d, dz / d, 3.3 * fast, bdt); return { name: 'Running_C', opts: { speed: 1.05 * fast } }; }
+        if (this.timer <= 0 && !player.dead) this.choose(player, d);
+        return 'Idle_Combat';
+      case 'slamWind':
+        this.timer -= fdt;
+        if (Math.random() < 0.6) flame(this.pos.clone().setY(2.0), { count: 1, size: 0.9, spread: 0.6 });
+        if (this.timer <= 0) {
+          this.teleKind = null;
+          const R = this.isPartBroken('hammer') ? 4.8 : (ph === 3 ? 7.0 : 6.0);
+          spawnRing(this.scene, this.pos, R, 0xff8a20, 0.6);
+          explosion(this.pos, R, 0xff5a18, { smoke: true, scorch: true, core: 0xffe880 });
+          damagePillars(this.pos, R * 0.9, null, true);
+          addShake(1.0); play('anvil', { rate: 0.55 }); play('explode', { at: this.pos, rate: 0.7 });
+          if (!player.dead && d < R + player.radius) hurtPlayer(player, ph === 3 ? 30 : 25);
+          spawnFirePatch(this.pos.clone(), R * 0.55, 4.5, 16, true);
+          this.state = 'recover'; this.timer = 0.95;
+        }
+        return null;
+      case 'chargeAim':
+        this.timer -= fdt;
+        if (this.timer <= 0) {
+          this.state = 'charge'; this.left = 18; this.hitDone = false; this.teleKind = 'pierce';
+          play('dash', { at: this.pos, rate: 0.5 });
+        }
+        return null;
+      case 'charge': {
+        const step = 24 * fdt;
+        const fx = Math.sin(this.facing), fz = Math.cos(this.facing);
+        this.move(fx, fz, 24 * fast, bdt);
+        this.left -= step;
+        if (Math.random() < 0.45) spawnFirePatch(this.pos.clone(), 1.6, 3.6, 14, true);
+        damagePillars(this.pos, 2.5, new THREE.Vector3(fx, 0, fz), true);
+        if (!this.hitDone && !player.dead && Math.hypot(player.pos.x - this.pos.x, player.pos.z - this.pos.z) < 2.2) {
+          this.hitDone = true; hurtPlayer(player, 26);
+          player.pos.x += fx * 2.4; player.pos.z += fz * 2.4;
+        }
+        const before = this.pos.clone(); collide(this.pos, this.radius);
+        if (this.left <= 0 || before.distanceTo(this.pos) > 0.02) {
+          addShake(0.65); play('hitHeavy', { at: this.pos, rate: 0.6 });
+          if (this.chargesLeft > 0 && !player.dead) {
+            this.chargesLeft--;
+            this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
+            this.state = 'chargeAim'; this.timer = 0.55; this.teleKind = 'pierce';
+            this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.8, length: 18, facing: this.facing, duration: 0.55 / fast, kind: 'pierce' });
+          } else {
+            this.teleKind = null;
+            this.state = 'recover'; this.timer = 0.9;
+          }
+        }
+        return { name: 'Running_C', opts: { speed: 1.75 } };
+      }
+      case 'radialWind':
+        this.timer -= fdt;
+        if (this.timer <= 0) {
+          this.teleKind = null;
+          const cnt = ph === 3 ? 14 : ph === 2 ? 10 : 8;
+          for (let i = 0; i < cnt; i++) {
+            const a = this.facing + (i / cnt) * Math.PI * 2;
+            const dir = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
+            enemyShot(this.pos.clone().setY(1.8).addScaledVector(dir, 1.3), dir, 13, 'orb');
+          }
+          spawnRing(this.scene, this.pos, 4.5, 0xffaa30, 0.45);
+          play('mageCast', { at: this.pos, rate: 0.7 });
+          this.state = 'recover'; this.timer = 0.85;
+        }
+        return null;
+      case 'crossWind':
+        this.timer -= fdt;
+        if (this.timer <= 0) {
+          this.teleKind = null;
+          const dirs = ph === 3 ? 8 : 4;
+          const rings = this.isPartBroken('hammer') ? 2 : 4;
+          for (let k = 0; k < dirs; k++) {
+            const a = this.facing + (k / dirs) * Math.PI * 2;
+            for (let s = 1; s <= rings; s++) {
+              const at = new THREE.Vector3(this.pos.x + Math.sin(a) * s * 4.0, 0, this.pos.z + Math.cos(a) * s * 4.0);
+              if (isBlocked(at.x, at.z, 0.6)) break;
+              scheduleBomb(at, 0.65 + s * 0.16, 2.3, 0, 20, 0xff6a18);
+              spawnFirePatch(at, 1.8, 4.2, 15, true);
+            }
+          }
+          addShake(0.85); play('explode', { at: this.pos, rate: 0.65 });
+          this.state = 'recover'; this.timer = 1.0;
+        }
+        return null;
+      case 'meteorRain':
+        this.timer -= fdt;
+        if (Math.random() < 0.7) flame(this.pos.clone().setY(3.0), { count: 2, size: 1.1, spread: 1.2 });
+        if (this.timer <= 0) {
+          this.teleKind = null;
+          const count = this.isPartBroken('hammer') ? 5 : 8;
+          for (let i = 0; i < count; i++) {
+            const at = i === 0
+              ? player.pos.clone()
+              : player.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 14, 0, (Math.random() - 0.5) * 14));
+            scheduleBomb(at, 0.8 + i * 0.16, 2.5, 0, 22, 0xff4a10);
+            spawnFirePatch(at, 1.9, 4.5, 16, true);
+          }
+          addShake(0.95); play('anvil', { rate: 0.45 }); play('explode', { at: this.pos, rate: 0.6 });
+          this.state = 'recover'; this.timer = 1.1;
+        }
+        return null;
+      case 'summon':
+        this.timer -= fdt;
+        if (this.timer <= 0) {
+          this.teleKind = null;
+          const picks = [OrcBrute, PyroMage];
+          for (let i = 0; i < 2; i++) {
+            const a = this.facing + (i ? 1.2 : -1.2);
+            const sx = this.pos.x + Math.sin(a) * 4.2, sz = this.pos.z + Math.cos(a) * 4.2;
+            if (isBlocked(sx, sz, 0.8)) continue;
+            const m = new picks[i](this.scene, sx, sz);
+            m.spawnT = 0.2; ctx.spawnEnemy?.(m);
+          }
+          play('mageCast', { at: this.pos, rate: 0.6 });
+          this.state = 'recover'; this.timer = 0.75;
+        }
+        return null;
+      case 'recover':
+        this.teleKind = null;
+        this.timer -= fdt;
+        if (this.timer <= 0) { this.state = 'chase'; this.timer = ph === 3 ? 0.5 : ph === 2 ? 0.75 : 1.05; }
+        return 'Idle_Combat';
+    }
+    return null;
+  }
+
+  choose(player, d) {
+    const ph = this.phaseLevel;
+    const fast = ph === 3 ? 1.42 : ph === 2 ? 1.22 : 1.0;
+    const allies = ctx.enemies.filter((e) => (e instanceof OrcBrute || e instanceof PyroMage) && !e.dead).length;
+    const opts = ph === 1
+      ? ['slam', 'charge', 'radial']
+      : ph === 2
+        ? ['cross', 'charge', 'slam', 'radial', ...(allies < 2 ? ['summon'] : [])]
+        : ['meteor', 'charge', 'cross', 'slam', 'radial'];
+    let pick = opts[this.next++ % opts.length];
+    if (pick === 'slam' && d > 9.5) pick = 'charge';
+    this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
+
+    if (pick === 'slam') {
+      this.state = 'slamWind'; this.timer = 1.05; this.teleKind = 'interrupt';
+      const R = this.isPartBroken('hammer') ? 4.8 : (ph === 3 ? 7.0 : 6.0);
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: R, duration: 1.05 / fast, kind: 'interrupt' });
+      if (this.anim) this.anim.play('2H_Melee_Attack_Chop', { once: true, fade: 0.1, speed: 0.7 });
+      play('anvil', { rate: 0.7 });
+    } else if (pick === 'charge') {
+      this.state = 'chargeAim'; this.timer = 0.76; this.teleKind = 'pierce';
+      this.chargesLeft = ph === 3 ? 1 : 0;
+      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.8, length: 18, facing: this.facing, duration: 0.76 / fast, kind: 'pierce' });
+      if (this.anim) this.anim.play('2H_Melee_Attack_Spin', { once: true, fade: 0.1, speed: 1.2 });
+    } else if (pick === 'radial') {
+      this.state = 'radialWind'; this.timer = 0.85; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.2, duration: 0.85 / fast, kind: 'interrupt' });
+      if (this.anim) this.anim.play('Spellcast_Raise', { once: true, fade: 0.1 });
+    } else if (pick === 'cross') {
+      this.state = 'crossWind'; this.timer = 1.0; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 5.0, duration: 1.0 / fast, kind: 'interrupt' });
+      if (this.anim) this.anim.play('2H_Melee_Attack_Chop', { once: true, fade: 0.1, speed: 0.75 });
+      play('ignite', { at: this.pos, rate: 0.65 });
+    } else if (pick === 'meteor') {
+      this.state = 'meteorRain'; this.timer = 1.15; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.5, duration: 1.15 / fast, kind: 'interrupt' });
+      if (this.anim) this.anim.play('Spellcast_Summon', { once: true, fade: 0.1 });
+      play('anvil', { rate: 0.5 });
+    } else {
+      this.state = 'summon'; this.timer = 1.0; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.5, duration: 1.0 / fast, kind: 'interrupt' });
+      if (this.anim) this.anim.play('Spellcast_Summon', { once: true, fade: 0.1 });
+    }
+  }
+
+  after(dt) {
+    if (this.plateRing?.visible) { this.plateRing.rotation.z += dt * (this.phaseLevel === 3 ? 3.5 : 1.8); }
+    if (this.hammerAura?.visible) { this.hammerAura.rotation.y += dt * 3.0; this.hammerAura.rotation.x += dt * 2.0; }
+  }
+  die() { if (this.tele) this.tele.done = true; super.die(); }
 }
