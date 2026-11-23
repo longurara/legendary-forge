@@ -89,7 +89,13 @@ export class Enemy {
       this.shieldHp -= absorbed;
       dmg -= absorbed;
       burst(this.pos.clone().setY(1), 0x6fc3ff, 6, { speed: 4, size: 0.12 });
-      if (this.shieldHp <= 0 && this.shieldMesh) { this.group.remove(this.shieldMesh); this.shieldMesh = null; play('freeze', { at: this.pos, rate: 1.5 }); }
+      if (this.shieldHp <= 0 && this.shieldMesh) {
+        this.group.remove(this.shieldMesh);
+        this.shieldMesh.geometry?.dispose();
+        this.shieldMesh.material?.dispose();
+        this.shieldMesh = null;
+        play('freeze', { at: this.pos, rate: 1.5 });
+      }
       if (dmg <= 0) { damageNumber(this.pos, 'Chặn', 'burn'); return 0; }
     }
     this.hp -= dmg;
@@ -202,7 +208,16 @@ export class Enemy {
     smoke(this.pos.clone().setY(0.4), { count: 3, size: 0.7 * this.mass, color: 0x5a5048, life: 0.9, speed: 1.2, rise: 0.8, alpha: 0.45 });
     this.scene.remove(this.group);
     this.scene.remove(this.shadow);
-    if (this.eliteRing) this.scene.remove(this.eliteRing);
+    if (this.eliteRing) {
+      this.scene.remove(this.eliteRing);
+      this.eliteRing.material?.dispose();
+    }
+    if (this.shieldMesh) {
+      this.group.remove(this.shieldMesh);
+      this.shieldMesh.geometry?.dispose();
+      this.shieldMesh.material?.dispose();
+      this.shieldMesh = null;
+    }
     if (this.label) this.label.remove();
     for (const m of this.mats) m.dispose();
   }

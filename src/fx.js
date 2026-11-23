@@ -3,10 +3,25 @@ import * as THREE from 'three';
 // Hiệu ứng hình ảnh: hạt dùng texture Kenney Particle Pack (CC0) vẽ bằng shader (1 draw call / lớp),
 // vệt chém dạng shader, sóng xung kích, tia sét dạng ống, vết cháy trên sàn, đèn chớp khi nổ.
 
+// ---------- Tùy chọn hiển thị & cảm giác ----------
+export const fxSettings = (() => {
+  try {
+    const r = JSON.parse(localStorage.getItem('lorenh_settings') || '{}');
+    return { shakeScale: r.shakeScale ?? 1, showDmg: r.showDmg !== false, showFps: !!r.showFps };
+  } catch { return { shakeScale: 1, showDmg: true, showFps: false }; }
+})();
+export function setFxSettings(patch = {}) {
+  Object.assign(fxSettings, patch);
+  try { localStorage.setItem('lorenh_settings', JSON.stringify(fxSettings)); } catch {}
+}
+let fxBiome = 'stone';
+export function setFxBiome(id) { fxBiome = id || 'stone'; }
+
 // ---------- Rung màn hình ----------
 export const shake = { trauma: 0 };
 export function addShake(amount) {
-  shake.trauma = Math.min(1, shake.trauma + amount);
+  if (fxSettings.shakeScale <= 0) { shake.trauma = 0; return; }
+  shake.trauma = Math.min(1, shake.trauma + amount * fxSettings.shakeScale);
 }
 
 // ---------- Hit stop (đóng băng game trong tích tắc khi đánh trúng) ----------
@@ -684,6 +699,8 @@ export function spawnTelegraph(scene, opts) {
   }
   const { shape = 'circle', pos, radius = 2, arc = 1.6, facing = 0, width = 1.5, length = 8, duration = 0.8, kind = 'normal' } = opts;
   const color = opts.color ?? (kind === 'pierce' ? 0xff2850 : kind === 'interrupt' ? 0xc050ff : 0xff3020);
+  const lavaHi = fxBiome === 'lava' && kind === 'normal';
+  const edgeCol = kind === 'pierce' ? (shape === 'rect' ? 0xffffff : 0xffeef2) : kind === 'interrupt' ? 0xe8a8ff : lavaHi ? 0xfff2a8 : color;
   const group = new THREE.Group();
   const mk = (geo, opacity, col = color) => new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
     color: col, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
@@ -693,17 +710,17 @@ export function spawnTelegraph(scene, opts) {
     const g = new THREE.PlaneGeometry(width, length).translate(0, length / 2, 0);
     g.rotateX(-Math.PI / 2);
     g.scale(1, 1, -1);                               // kéo dài theo +Z
-    base = mk(g, 0.16); fill = mk(g.clone(), 0.34);
-    edge = new THREE.LineSegments(new THREE.EdgesGeometry(g), new THREE.LineBasicMaterial({ color: kind === 'pierce' ? 0xffffff : color, transparent: true, opacity: 0.9 }));
+    base = mk(g, lavaHi ? 0.22 : 0.16); fill = mk(g.clone(), lavaHi ? 0.42 : 0.34);
+    edge = new THREE.LineSegments(new THREE.EdgesGeometry(g), new THREE.LineBasicMaterial({ color: edgeCol, transparent: true, opacity: 0.95 }));
   } else {
     const start = shape === 'sector' ? -Math.PI / 2 - arc / 2 : 0;
     const len = shape === 'sector' ? arc : Math.PI * 2;
     const g = new THREE.CircleGeometry(radius, 40, start, len);
     g.rotateX(-Math.PI / 2);
-    base = mk(g, 0.16); fill = mk(g.clone(), 0.34);
-    const ring = new THREE.RingGeometry(radius * 0.93, radius, 48, 1, start, len);
+    base = mk(g, lavaHi ? 0.22 : 0.16); fill = mk(g.clone(), lavaHi ? 0.42 : 0.34);
+    const ring = new THREE.RingGeometry(radius * (lavaHi ? 0.90 : 0.93), radius, 48, 1, start, len);
     ring.rotateX(-Math.PI / 2);
-    edge = mk(ring, 0.9, kind === 'pierce' ? 0xffeef2 : kind === 'interrupt' ? 0xe8a8ff : color);
+    edge = mk(ring, 0.95, edgeCol);
   }
   group.add(base, fill, edge);
   // Dấu hiệu phụ trực quan cho đòn Phản Xuyên (viền trắng chói) và Cắt Chiêu (vòng cổ ngữ tím xoay)
@@ -760,6 +777,7 @@ const tmpP = new THREE.Vector3();
 export const dmgScale = { player: 1 };
 export function damageNumber(pos, value, kind = '') {
   if (!dmgLayer || !pos) return;
+  if (!fxSettings.showDmg && !kind.startsWith('react') && kind !== 'player') return;
   if (kind === 'player' && typeof value === 'number') value = Math.max(1, Math.round(value * dmgScale.player));
   if (dmgNums.length >= 22 && (kind === 'burn' || kind === 'poison')) return;
   if (kind.startsWith('react')) {

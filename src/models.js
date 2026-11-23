@@ -30,22 +30,28 @@ export const MODEL_NAMES = [
 // models[name] = { scene, animations }
 export const models = {};
 
-export async function loadModels() {
+export async function loadModels(onProgress) {
   const loader = new GLTFLoader();
   loader.setMeshoptDecoder(MeshoptDecoder);
-  await Promise.all(MODEL_NAMES.map(async (name) => {
-    const url = `/models/${name}${name.startsWith('crypt/') ? '.gltf' : '.glb'}`;
-    try {
-      const res = await fetch(url, { method: 'HEAD' });
-      const type = res.headers.get('content-type') || '';
-      if (!res.ok || type.includes('text/html')) return;   // không có file
-      const gltf = await loader.loadAsync(url);
-      models[name] = { scene: gltf.scene, animations: gltf.animations };
-      
-    } catch (err) {
-      console.warn(`[models] không nạp được ${url}`, err);
+  let next = 0;
+  let done = 0;
+  const total = MODEL_NAMES.length;
+  const worker = async () => {
+    while (next < total) {
+      const name = MODEL_NAMES[next++];
+      const url = `/models/${name}${name.startsWith('crypt/') ? '.gltf' : '.glb'}`;
+      try {
+        const gltf = await loader.loadAsync(url);
+        models[name] = { scene: gltf.scene, animations: gltf.animations };
+      } catch (err) {
+        console.warn(`[models] không nạp được ${url}`, err);
+      } finally {
+        done++;
+        onProgress?.(done, total);
+      }
     }
-  }));
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
 }
 
 function boundsOf(obj) {

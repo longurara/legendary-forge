@@ -328,9 +328,13 @@ export class EchoManager {
   update(dt, camera, time, playerPos) {
     const place = (el, pos, y) => {
       tmpV.set(pos.x, y, pos.z).project(camera);
-      el.style.display = Math.abs(tmpV.x) > 1 || Math.abs(tmpV.y) > 1 ? 'none' : '';
-      el.style.left = (tmpV.x * 0.5 + 0.5) * innerWidth + 'px';
-      el.style.top = (-tmpV.y * 0.5 + 0.5) * innerHeight + 'px';
+      const off = Math.abs(tmpV.x) > 1 || Math.abs(tmpV.y) > 1;
+      el.style.display = off ? 'none' : '';
+      if (!off) {
+        const x = (tmpV.x * 0.5 + 0.5) * innerWidth;
+        const y2 = (-tmpV.y * 0.5 + 0.5) * innerHeight;
+        el.style.transform = `translate3d(${x.toFixed(1)}px,${y2.toFixed(1)}px,0) translate(-50%,-50%)`;
+      }
     };
     if (this.grave) {
       this.grave.ring.rotation.z += dt * 0.8;

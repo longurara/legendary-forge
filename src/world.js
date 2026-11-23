@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { models } from './models.js';
-import { emit, F, rectLiquid, disposeLiquids } from './fx.js';
+import { emit, F, rectLiquid, disposeLiquids, setFxBiome } from './fx.js';
 import { buildDungeonFloor } from './floor_art.js';
 
 // ================== Kích thước phòng (mở rộng 18x18: diện tích gấp 2.25 lần!) ==================
@@ -71,6 +71,7 @@ function tintObject(o, tint) {
 }
 
 let worldGroup = null;
+let ownedWorld = [];
 let moon = null;
 let hemi = null;
 let darkHook = null;
@@ -196,7 +197,12 @@ export function buildWorld(scene, floor = 1) {
     moon.shadow.bias = -0.0005;
     scene.add(moon, moon.target);
   }
-  if (worldGroup) scene.remove(worldGroup);
+  if (worldGroup) {
+    worldGroup.traverse((o) => { if (o.isInstancedMesh) o.dispose(); });
+    for (const r of ownedWorld) r?.dispose?.();
+    ownedWorld.length = 0;
+    scene.remove(worldGroup);
+  }
   disposeLiquids();
   worldGroup = new THREE.Group();
   scene.add(worldGroup);
@@ -209,6 +215,7 @@ export function buildWorld(scene, floor = 1) {
   const theme = floorTheme(floor);
   const B = theme.biome;
   currentBiome = B;
+  setFxBiome(B.id);
   scene.background.set(B.fog);
   scene.fog.color.set(B.fog);
   hemi.color.set(B.sky); hemi.groundColor.set(B.ground);
@@ -223,9 +230,13 @@ export function buildWorld(scene, floor = 1) {
     const bottom = rectLiquid(r.x1 - r.x0, r.z1 - r.z0, { lava: 'lava', ice: 'water', crypt: 'mist', swamp: 'mist', sanctum: 'elec', stone: 'void' }[B.id] || 'void');
     bottom.material.transparent = false;
     bottom.position.set(b.x, -1.1, b.z);
+    ownedWorld.push(bottom.geometry);
     worldGroup.add(bottom);
     // Thành đá bên trong miệng hố
-    const rim = new THREE.Mesh(new THREE.BoxGeometry(r.x1 - r.x0, 1.2, r.z1 - r.z0), new THREE.MeshStandardMaterial({ color: new THREE.Color(0x2a2420).multiply(new THREE.Color(B.tint)), roughness: 0.9, side: THREE.BackSide }));
+    const rimGeo = new THREE.BoxGeometry(r.x1 - r.x0, 1.2, r.z1 - r.z0);
+    const rimMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(0x2a2420).multiply(new THREE.Color(B.tint)), roughness: 0.9, side: THREE.BackSide });
+    ownedWorld.push(rimGeo, rimMat);
+    const rim = new THREE.Mesh(rimGeo, rimMat);
     rim.position.set(b.x, -0.6, b.z);
     worldGroup.add(rim);
     if (B.id === 'lava') { const l = new THREE.PointLight(0xff5a1a, 18, 9, 1.6); l.position.set(b.x, 0.5, b.z); worldGroup.add(l); torches.push({ light: l, base: 18, seed: rand() * 100, color: 0xff5a1a }); }
@@ -267,7 +278,9 @@ export function buildWorld(scene, floor = 1) {
   }
   const wallMesh = models['dungeon/wall'].scene.getObjectByProperty('isMesh', true);
   for (const sx of [-1, 1]) {
-    const c = new THREE.Mesh(new THREE.BoxGeometry(0.8, 4 * DS, 0.8), wallMesh.material);
+    const cg = new THREE.BoxGeometry(0.8, 4 * DS, 0.8);
+    ownedWorld.push(cg);
+    const c = new THREE.Mesh(cg, wallMesh.material);
     c.position.set(sx * W, 2 * DS, -W);
     worldGroup.add(c);
   }
@@ -315,20 +328,25 @@ export function spawnExit(x, z) {
   exitObj = new THREE.Group();
   const grate = models['dungeon/floor_tile_big_grate_open'];
   if (grate) { const g = grate.scene.clone(true); g.scale.setScalar(DS * 0.75); g.position.y = 0.02; exitObj.add(g); }
-  const beam = new THREE.Mesh(
-    new THREE.CylinderGeometry(1.0, 1.3, 6, 24, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0x7fd8ff, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
-  );
+  const beamGeo = new THREE.CylinderGeometry(1.0, 1.3, 6, 24, 1, true);
+  const beamMat = new THREE.MeshBasicMaterial({ color: 0x7fd8ff, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  const beam = new THREE.Mesh(beamGeo, beamMat);
   beam.position.y = 3;
   const light = new THREE.PointLight(0x7fd8ff, 14, 9, 1.6);
   light.position.y = 1.5;
   exitObj.add(beam, light);
   exitObj.position.set(x, 0, z);
-  exitObj.userData = { beam, light, pos: new THREE.Vector3(x, 0, z) };
+  exitObj.userData = { beam, light, pos: new THREE.Vector3(x, 0, z), owned: [beamGeo, beamMat] };
   worldGroup.add(exitObj);
   return exitObj.userData.pos;
 }
-export function removeExit() { if (exitObj) { exitObj.parent?.remove(exitObj); exitObj = null; } }
+export function removeExit() {
+  if (exitObj) {
+    exitObj.parent?.remove(exitObj);
+    if (exitObj.userData?.owned) for (const r of exitObj.userData.owned) r?.dispose?.();
+    exitObj = null;
+  }
+}
 export function exitPos() { return exitObj ? exitObj.userData.pos : null; }
 
 const flameVel = new THREE.Vector3();

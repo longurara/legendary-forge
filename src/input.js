@@ -35,7 +35,7 @@ addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ---------- Tay cầm (Gamepad API, sơ đồ nút kiểu Xbox) ----------
 const prevBtn = [];
-const BTN_TO_KEY = { 0: 'Space', 2: 'KeyE', 3: 'KeyQ', 4: 'KeyR', 5: 'KeyR', 9: 'Escape', 8: 'KeyM' };
+const BTN_TO_KEY = { 0: 'Space', 2: 'KeyE', 3: 'KeyQ', 4: 'KeyX', 5: 'KeyR', 8: 'Tab', 9: 'Escape', 10: 'KeyF' };
 const dead = (v) => (Math.abs(v) < 0.2 ? 0 : v);
 export function pollGamepad() {
   const gp = navigator.getGamepads ? [...navigator.getGamepads()].find(Boolean) : null;
@@ -66,7 +66,7 @@ export function pollGamepad() {
   const ax = dead(gp.axes[2] || 0), az = dead(gp.axes[3] || 0);
   pad.aim = Math.hypot(ax, az) > 0.3 ? { x: ax, z: az } : (Math.hypot(pad.move.x, pad.move.z) > 0.3 ? { x: pad.move.x, z: pad.move.z } : pad.aim);
   const wasAttack = pad.attack, wasSpecial = pad.special;
-  pad.attack = !!b[7] || !!b[1] && false;
+  pad.attack = !!b[7];
   pad.special = !!b[6] || !!b[1];
   if (pad.attack && !wasAttack) mouse.clicked = true;
   if (pad.special && !wasSpecial) mouse.rclicked = true;

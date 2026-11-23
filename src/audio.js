@@ -51,6 +51,7 @@ let decoding = false;
 const lastPlayed = {};
 const listener = { x: 0, z: 0 };
 let volume = Number(localStorage.getItem('lorenh_volume') ?? 0.8);
+let musicVol = Number(localStorage.getItem('lorenh_music_vol') ?? 0.75);
 let muted = localStorage.getItem('lorenh_muted') === '1';
 let active = 0;
 export const sfxStats = {};          // đếm số lần phát (để kiểm tra)
@@ -149,11 +150,16 @@ export function play(name, opts = {}) {
 }
 
 export function getVolume() { return volume; }
+export function getMusicVolume() { return musicVol; }
 export function isMuted() { return muted; }
 export function setVolume(v) {
   volume = Math.max(0, Math.min(1, v));
   localStorage.setItem('lorenh_volume', String(volume));
   applyVolume();
+}
+export function setMusicVolume(v) {
+  musicVol = Math.max(0, Math.min(1, v));
+  localStorage.setItem('lorenh_music_vol', String(musicVol));
 }
 export function setMuted(m) {
   muted = m;

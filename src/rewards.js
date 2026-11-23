@@ -22,11 +22,21 @@ export const REWARDS = {
 const labelLayer = () => document.getElementById('dmg-layer');
 const tmp = new THREE.Vector3();
 
-function placeLabel(el, pos, camera, y) {
+function placeLabel(el, pos, camera, y, scale = 1) {
   tmp.set(pos.x, y, pos.z).project(camera);
-  el.style.display = Math.abs(tmp.x) > 1 || Math.abs(tmp.y) > 1 ? 'none' : '';
-  el.style.left = (tmp.x * 0.5 + 0.5) * innerWidth + 'px';
-  el.style.top = (-tmp.y * 0.5 + 0.5) * innerHeight + 'px';
+  const off = Math.abs(tmp.x) > 1 || Math.abs(tmp.y) > 1;
+  el.style.display = off ? 'none' : '';
+  if (!off) {
+    const px = (tmp.x * 0.5 + 0.5) * innerWidth;
+    const py = (-tmp.y * 0.5 + 0.5) * innerHeight;
+    el.style.transform = `translate3d(${px.toFixed(1)}px,${py.toFixed(1)}px,0) translate(-50%,-50%) scale(${scale})`;
+  }
+}
+
+function disposeOwned(list) {
+  if (!list) return;
+  for (const r of list) r?.dispose?.();
+  list.length = 0;
 }
 
 export class Rewards {
@@ -45,21 +55,28 @@ export class Rewards {
       const r = REWARDS[kind];
       const x = (i - (kinds.length - 1) / 2) * gap;
       const g = new THREE.Group();
+      const owned = [];
       // Bệ đá 2 tầng + viền phát sáng theo màu phần thưởng
       const stone = new THREE.MeshStandardMaterial({ color: 0x4a4440, roughness: 0.85 });
-      const b1 = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.2, 0.3, 8), stone);
+      const b1Geo = new THREE.CylinderGeometry(1.05, 1.2, 0.3, 8);
+      const b2Geo = new THREE.CylinderGeometry(0.75, 0.9, 0.35, 8);
+      const b1 = new THREE.Mesh(b1Geo, stone);
       b1.position.y = 0.15;
-      const b2 = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.9, 0.35, 8), stone);
+      const b2 = new THREE.Mesh(b2Geo, stone);
       b2.position.y = 0.47;
       b1.castShadow = b2.castShadow = true; b1.receiveShadow = b2.receiveShadow = true;
-      const trim = new THREE.Mesh(new THREE.TorusGeometry(0.78, 0.05, 6, 32), new THREE.MeshBasicMaterial({ color: new THREE.Color(r.color).multiplyScalar(1.1) }));
+      const trimGeo = new THREE.TorusGeometry(0.78, 0.05, 6, 32);
+      const trimMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(r.color).multiplyScalar(1.1) });
+      const trim = new THREE.Mesh(trimGeo, trimMat);
       trim.rotation.x = Math.PI / 2; trim.position.y = 0.66;
       // Cột sáng mờ dần lên trên
-      const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 3.2, 24, 1, true), beamMaterial(r.color));
+      const beamGeo = new THREE.CylinderGeometry(0.5, 0.7, 3.2, 24, 1, true);
+      const beamMat = beamMaterial(r.color);
+      const beam = new THREE.Mesh(beamGeo, beamMat);
       beam.position.y = 0.65 + 1.6;
       // Vật phẩm lơ lửng + quầng sáng
       const item = new THREE.Group();
-      item.add(makeItem(kind, r.color));
+      item.add(makeItem(kind, r.color, owned));
       const halo = glowSprite(r.color, 1.8);
       halo.material = halo.material.clone(); halo.material.opacity = 0.55;
       halo.position.y = 0.5;
@@ -67,6 +84,7 @@ export class Rewards {
       item.position.y = 1.1;
       // Vòng phép xoay dưới sàn
       const rune = runeDecal(r.color, 1.7);
+      owned.push(stone, b1Geo, b2Geo, trimGeo, trimMat, beamGeo, beamMat, halo.material, rune.geometry, rune.material);
       g.add(b1, b2, trim, beam, item, rune);
       g.position.set(x, 0, z);
       this.scene.add(g);
@@ -74,7 +92,7 @@ export class Rewards {
       label.className = 'label reward';
       label.innerHTML = `<i class="ico" style="--i:url('/ui/icons/${r.icon}.svg');color:#${r.color.toString(16).padStart(6, '0')}"></i>${r.name}<small>${r.desc}</small>`;
       labelLayer().appendChild(label);
-      this.pedestals.push({ kind, group: g, gem: item, rune, beam, color: r.color, label, pos: new THREE.Vector3(x, 0, z), near: 0 });
+      this.pedestals.push({ kind, group: g, gem: item, rune, beam, color: r.color, label, pos: new THREE.Vector3(x, 0, z), near: 0, owned });
       spawnRing(this.scene, new THREE.Vector3(x, 0, z), 2, r.color, 0.5);
     });
   }
@@ -84,7 +102,11 @@ export class Rewards {
   }
 
   clearPedestals() {
-    for (const p of this.pedestals) { this.scene.remove(p.group); p.label.remove(); }
+    for (const p of this.pedestals) {
+      this.scene.remove(p.group);
+      disposeOwned(p.owned);
+      p.label.remove();
+    }
     this.pedestals = [];
   }
 
@@ -129,10 +151,15 @@ export class Rewards {
   // ---------- Rương di vật ----------
   spawnChest(x, z) {
     const g = new THREE.Group();
+    const owned = [];
     let lid = null;
     const m = models['dungeon/chest'];
     if (m) { const c = m.scene.clone(true); c.scale.setScalar(0.75); g.add(c); lid = c.getObjectByName('chest_lid'); }
-    else g.add(new THREE.Mesh(new THREE.BoxGeometry(1, 0.7, 0.7), new THREE.MeshStandardMaterial({ color: 0x8a5a2a })));
+    else {
+      const geo = new THREE.BoxGeometry(1, 0.7, 0.7), mat = new THREE.MeshStandardMaterial({ color: 0x8a5a2a });
+      owned.push(geo, mat);
+      g.add(new THREE.Mesh(geo, mat));
+    }
     const light = new THREE.PointLight(0xc77dff, 8, 5, 1.6);
     light.position.y = 1.4;
     g.add(light);
@@ -143,7 +170,7 @@ export class Rewards {
     label.className = 'label reward';
     label.innerHTML = '<i class="ico" style="--i:url(\'/ui/icons/x_locked-chest.svg\');color:#c77dff"></i>Rương di vật';
     labelLayer().appendChild(label);
-    this.chests.push({ group: g, lid, label, pos: new THREE.Vector3(x, 0, z), opened: false, t: 0 });
+    this.chests.push({ group: g, lid, label, pos: new THREE.Vector3(x, 0, z), opened: false, t: 0, owned });
     burst(new THREE.Vector3(x, 1, z), 0xc77dff, 24, { speed: 6, size: 0.14 });
     play('dropRare', { at: { x, z } });
   }
@@ -176,7 +203,7 @@ export class Rewards {
         const a = Math.random() * Math.PI * 2, rr = Math.random() * 0.6;
         emit(new THREE.Vector3(p.pos.x + Math.cos(a) * rr, 0.7, p.pos.z + Math.sin(a) * rr), { frame: F.sparkle, color: 0xffffff, color2: p.color, size: 0.3, size2: 0.05, life: 1.2, vel: new THREE.Vector3(0, 1.2 + Math.random(), 0), rotV: 2 });
       }
-      placeLabel(p.label, p.pos, camera, 3.1);
+      placeLabel(p.label, p.pos, camera, 3.1, want === 1 ? 1.08 : 1);
     }
     if (this.merchant) {
       this.merchant.anim?.update(dt);
@@ -187,14 +214,14 @@ export class Rewards {
       if (!c.opened) { placeLabel(c.label, c.pos, camera, 1.8); continue; }
       c.t += dt;
       if (c.lid) c.lid.rotation.x = -Math.min(1.9, c.t * 6);
-      if (c.t > 2.5) { this.scene.remove(c.group); this.chests.splice(i, 1); }
+      if (c.t > 2.5) { this.scene.remove(c.group); disposeOwned(c.owned); this.chests.splice(i, 1); }
     }
   }
 
   clear() {
     this.clearPedestals();
     this.removeMerchant();
-    for (const c of this.chests) { this.scene.remove(c.group); c.label.remove(); }
+    for (const c of this.chests) { this.scene.remove(c.group); disposeOwned(c.owned); c.label.remove(); }
     this.chests = [];
   }
 }
@@ -217,7 +244,7 @@ function beamMaterial(color) {
 }
 
 // Mô hình vật phẩm trên bệ theo loại phần thưởng
-function makeItem(kind, color) {
+function makeItem(kind, color, owned) {
   const g = new THREE.Group();
   const fit = (name, size, mode = 'ground') => (models[name] ? fitModel(models[name], size, mode) : null);
   let o = null;
@@ -238,7 +265,10 @@ function makeItem(kind, color) {
   if (!o) {
     // Hồn Thép (hoặc thiếu model): quả cầu năng lượng
     o = new THREE.Group();
-    o.add(new THREE.Mesh(new THREE.IcosahedronGeometry(0.32, 1), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).lerp(new THREE.Color(1, 1, 1), 0.4).multiplyScalar(1.6) })));
+    const geo = new THREE.IcosahedronGeometry(0.32, 1);
+    const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(color).lerp(new THREE.Color(1, 1, 1), 0.4).multiplyScalar(1.6) });
+    if (owned) owned.push(geo, mat);
+    o.add(new THREE.Mesh(geo, mat));
     o.add(glowSprite(color, 1.4));
     o.position.y = 0.4;
   }

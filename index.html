@@ -96,6 +96,7 @@
         <span title="Vàng"><i class="ico ico-gold"></i><b id="gold">0</b></span>
         <span title="Mảnh Thép: phân rã vũ khí (X), cường hóa ở đe (F)"><i class="ico ico-scrap"></i><b id="scrap">0</b></span>
       </div>
+      <div id="fps-meter" class="fps-meter hidden">60 FPS</div>
 
       <div id="slots">
         <div class="slot" id="slot0"></div>
@@ -183,6 +184,7 @@
         <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
       </div>
       <div class="menu-panel panel">
+        <button id="btn-continue" class="btn primary hidden">Tiếp tục lượt <small id="continue-info"></small></button>
         <button id="btn-play" class="btn primary">Bắt đầu</button>
         <button id="btn-daily" class="btn">Thử thách hằng ngày <small id="daily-best" class="muted"></small></button>
         <div class="btn-row">
@@ -198,10 +200,13 @@
         <div class="btn-row"><button id="btn-codex" class="btn">Sổ Rèn</button><button id="btn-bestiary" class="btn">Sổ Quái Vật</button></div>
         <div class="btn-row"><button id="btn-ach" class="btn">Thành tựu</button><button id="btn-save" class="btn">Chuyển Save</button></div>
         <button id="btn-howto" class="btn">Hướng dẫn</button>
-        <div class="sound-row"><button class="mute-btn" title="Tắt tiếng (M)"><i class="ico ico-speaker"></i><i class="ico ico-speaker-off"></i></button><input class="vol-slider" type="range" min="0" max="100" /></div>
+        <div class="sound-row"><button class="mute-btn" title="Tắt tiếng (M)"><i class="ico ico-speaker"></i><i class="ico ico-speaker-off"></i></button><input class="vol-slider" type="range" min="0" max="100" title="Âm lượng hiệu ứng (SFX)" /></div>
         <p id="start-best" class="muted"></p>
       </div>
-      <p class="loading-text">Đang tải...</p>
+      <div class="loading-text">
+        <span id="load-label">Đang tải tài nguyên... 0%</span>
+        <div class="load-track"><div id="load-fill"></div></div>
+      </div>
       <p class="credits">Model: KayKit (Kay Lousberg), Quaternius · Giao diện, âm thanh: Kenney, rubberduck · Nhạc: yd, CleytonRX, Juhani Junkala · Icon: Lorc, Delapouite, sbed, Skoll, Willdabeast, Zeromancer – game-icons.net (CC BY 3.0) · Font: Grenze Gotisch, Alegreya SC, Signika (OFL)</p>
     </div>
 
@@ -405,20 +410,44 @@
 
     <!-- ===== Tạm dừng ===== -->
     <div id="pause" class="overlay hidden">
-      <div class="panel menu-panel">
+      <div class="panel big pause-panel">
         <h2>Tạm dừng</h2>
         <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
-        <button id="btn-resume" class="btn primary">Tiếp tục</button>
-        <button id="btn-howto2" class="btn">Hướng dẫn</button>
-        <button id="btn-restart" class="btn">Chơi lại</button>
-        <button id="btn-menu2" class="btn">Về màn hình chính</button>
-        <button id="btn-fx" class="btn">Hiệu ứng: Cao</button>
-        <div class="touch-settings">
-          <button id="btn-stick-mode" class="btn">Cần di chuyển: Thả nổi</button>
-          <button id="btn-haptic" class="btn">Rung phản hồi: Bật</button>
-          <label class="touch-alpha-row"><span>Độ rõ nút cảm ứng</span><input id="touch-alpha-slider" type="range" min="45" max="100" value="90" /></label>
+        <div class="pause-grid">
+          <div class="pause-left">
+            <button id="btn-resume" class="btn primary">Tiếp tục</button>
+            <button id="btn-howto2" class="btn">Hướng dẫn</button>
+            <div class="btn-row">
+              <button id="btn-restart" class="btn">Chơi lại</button>
+              <button id="btn-menu2" class="btn">Về menu</button>
+            </div>
+            <div class="pause-opts">
+              <button id="btn-fx" class="btn">Hiệu ứng: Cao</button>
+              <button id="btn-shake" class="btn">Rung màn hình: 100%</button>
+              <button id="btn-dmgnum" class="btn">Số sát thương: Bật</button>
+              <button id="btn-fps" class="btn">Hiện FPS: Tắt</button>
+            </div>
+            <div class="touch-settings">
+              <button id="btn-stick-mode" class="btn">Cần di chuyển: Thả nổi</button>
+              <button id="btn-haptic" class="btn">Rung phản hồi: Bật</button>
+              <label class="touch-alpha-row"><span>Độ rõ nút cảm ứng</span><input id="touch-alpha-slider" type="range" min="45" max="100" value="90" /></label>
+            </div>
+            <div class="sound-row">
+              <button class="mute-btn" title="Tắt tiếng (M)"><i class="ico ico-speaker"></i><i class="ico ico-speaker-off"></i></button>
+              <span class="sound-lbl">SFX</span>
+              <input class="vol-slider" type="range" min="0" max="100" />
+            </div>
+            <div class="sound-row bgm-row">
+              <i class="ico" style="--i:url('/ui/icons/x_scroll.svg');color:var(--gold);width:18px;height:18px"></i>
+              <span class="sound-lbl">Nhạc</span>
+              <input id="bgm-slider" class="vol-slider" type="range" min="0" max="100" />
+            </div>
+          </div>
+          <div class="pause-right">
+            <h3>Chỉ số &amp; Build hiện tại</h3>
+            <div id="pause-build" class="pause-build"></div>
+          </div>
         </div>
-        <div class="sound-row"><button class="mute-btn" title="Tắt tiếng (M)"><i class="ico ico-speaker"></i><i class="ico ico-speaker-off"></i></button><input class="vol-slider" type="range" min="0" max="100" /></div>
       </div>
     </div>
 

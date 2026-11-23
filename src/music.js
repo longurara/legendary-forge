@@ -1,6 +1,6 @@
 // Nhạc nền đổi theo trạng thái: 'calm' (nghỉ), 'battle' (đánh nhau), 'boss'
 // Nhạc CC0 từ OpenGameArt (xem public/music/CREDITS.txt)
-import { getVolume, isMuted } from './audio.js';
+import { getMusicVolume, isMuted } from './audio.js';
 
 const TRACKS = { calm: '/music/calm.ogg', battle: '/music/battle.ogg', boss: '/music/boss.ogg' };
 const BASE = { calm: 0.5, battle: 0.32, boss: 0.38 };
@@ -33,7 +33,7 @@ export function setMusic(name) {
 
 // Chuyển nhạc mượt (gọi mỗi khung hình)
 export function updateMusic(dt) {
-  const master = isMuted() ? 0 : getVolume();
+  const master = isMuted() ? 0 : getMusicVolume();
   for (const [name, t] of Object.entries(els)) {
     const target = name === current ? BASE[name] * master : 0;
     t.vol += (target - t.vol) * Math.min(1, dt * 1.5);

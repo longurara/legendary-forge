@@ -22,7 +22,7 @@ import { CompanionManager } from './companions.js';
 import { SandboxManager, DefenseManager, TURRET_TYPES, DEFENSE_MAX_WAVES } from './modes.js';
 import { enemyBestiaryId, renderBestiaryHtml, renderRunSummaryHtml } from './bestiary.js';
 import { Minion, Boss, Assassin, Archer, KingSlime, ArchMage } from './enemies_extra.js';
-import { initFx, updateFx, shake, hitStop, clearFx, damageNumber, fxQuality, setFxQuality, dmgScale, explosion, spawnRing as fxRing, flash as fxFlash, smoke, burst, addShake } from './fx.js';
+import { initFx, updateFx, shake, hitStop, clearFx, damageNumber, fxQuality, setFxQuality, fxSettings, setFxSettings, fxStats, dmgScale, explosion, spawnRing as fxRing, flash as fxFlash, smoke, burst, addShake } from './fx.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -34,7 +34,7 @@ import { Loot } from './loot.js';
 import { loadModels } from './models.js';
 import { randomWeapon, forgeWeapons, weaponName, weaponIcons, makeWeapon, rollAffixes, affixById, codexKey, RARITY, TYPES, ELEMENTS, scrapValue, MAX_PLUS, enhanceCost, weaponScore } from './weapons.js';
 import { weaponIcon, $, show } from './ui.js';
-import { PERKS, EVOLUTIONS, rollPerks, xpForLevel, META, loadMeta, saveMeta } from './perks.js';
+import { PERKS, EVOLUTIONS, baseStats, rollPerks, xpForLevel, META, loadMeta, saveMeta } from './perks.js';
 import { RELICS, relicById, activeRelicSets, PETS, petById, CHARACTERS, charById, CURSES, EVENTS, ACHIEVEMENTS, DEPTHS } from './content.js';
 import { makeElite, updateEliteLabels } from './elites.js';
 import { buildHazards, updateHazards, clearHazards } from './hazards.js';
@@ -42,7 +42,8 @@ import * as hazards from './hazards.js';
 import { Rewards, REWARDS } from './rewards.js';
 import { updateAbilities, clearAbilities, ULTIMATES } from './abilities.js';
 import { setMusic, updateMusic, unlockMusic } from './music.js';
-import { loadSounds, unlockAudio, play, setListener, getVolume, setVolume, isMuted, setMuted } from './audio.js';
+import { loadSounds, unlockAudio, play, setListener, getVolume, setVolume, getMusicVolume, setMusicVolume, isMuted, setMuted } from './audio.js';
+import { saveRunState, loadRunState, clearRunState, describeSavedRun, renderPauseBuildHtml } from './run_save.js';
 
 // ================= Khởi tạo =================
 const phoneInput = matchMedia("(pointer: coarse)");
@@ -74,6 +75,36 @@ function applyFxQuality() {
   const b = document.getElementById('btn-fx');
   if (b) b.textContent = 'Hiệu ứng: ' + (fxQuality.high ? 'Cao' : 'Thấp');
 }
+function syncExtraSettingsUI() {
+  const sh = $('btn-shake');
+  if (sh) sh.textContent = 'Rung màn hình: ' + (fxSettings.shakeScale > 0 ? Math.round(fxSettings.shakeScale * 100) + '%' : 'Tắt');
+  const dm = $('btn-dmgnum');
+  if (dm) dm.textContent = 'Số sát thương: ' + (fxSettings.showDmg ? 'Bật' : 'Tắt');
+  const fp = $('btn-fps');
+  if (fp) fp.textContent = 'Hiện FPS: ' + (fxSettings.showFps ? 'Bật' : 'Tắt');
+  const meter = $('fps-meter');
+  if (meter) meter.classList.toggle('hidden', !fxSettings.showFps);
+}
+let _lastPromptHtml = '';
+let _lastBossName = '';
+let _lastBossPartsHtml = '';
+let _lastDynCursesHtml = '';
+let _lastTimerHtml = '';
+let _lastFlameInt = -1;
+let _lastCorrInt = -1;
+let _fpsFrames = 0;
+let _fpsAcc = 0;
+
+renderer.domElement.addEventListener('webglcontextlost', (e) => {
+  e.preventDefault();
+  if (started && !paused && !player?.dead) setPaused(true);
+  showBanner('Đồ họa tạm gián đoạn', 'Đang khôi phục WebGL context...', 2.5, '#ffcf4a');
+});
+renderer.domElement.addEventListener('webglcontextrestored', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+  applyFxQuality();
+});
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
@@ -632,6 +663,7 @@ function renderEvent() {
 
 function onWaveCleared() {
   if (run.mode === 'sandbox') return;
+  loot.vacuumAll();
   if (!hitThisWave && wave % 5 !== 0) questProgress('nohit');
   play('waveClear');
   // Hồi độ bền giữa mỗi đợt (+25%, Thợ Rèn hồi 100%)
@@ -706,11 +738,13 @@ function onWaveCleared() {
     // Hạ Trùm Cuối Tầng 5 -> Màn hình Chiến Thắng + lựa chọn Chế Độ Vô Tận (Tầng 6+)!
     if (floor === 5 && !run.endless && !run.bossrush && !victoryShown) {
       addSouls(150);
+      clearRunState();
       showVictory('story');
       return;
     }
     showBanner('Lối xuống đã mở', `Tới nắp hầm giữa phòng, bấm E để xuống tầng ${floor + 1}`, 3.2, '#7fd8ff');
     checkAchievements();
+    autoSaveRun();
     return;
   }
   if (wave <= 2 || Math.random() < 0.4) {
@@ -727,6 +761,7 @@ function onWaveCleared() {
   // Bệ phần thưởng cho đợt sau
   offerRewards();
   checkAchievements();
+  autoSaveRun();
 }
 
 function offerRewards() {
@@ -776,6 +811,7 @@ function chooseReward(kind) {
     for (let i = 0; i < (boostedNext ? 22 : 16); i++) { const [x, z] = spawnPos(1.5); loot.spawnPickup('gold', x, z, 4); }
     showBanner('Phòng Kho Báu', 'Mở rương (E) và nhặt vàng trước khi đợt sau tới', 2.4, '#ffd060');
     intermission = 15;
+    autoSaveRun();
     return;
   }
   if (kind === 'anchor') {
@@ -783,6 +819,7 @@ function chooseReward(kind) {
     showBanner('Mỏ Neo Boss: ' + (ANCHOR_TYPES[anchorWave]?.name || ''), 'Đợt sau sẽ phá Mỏ Neo này để làm yếu Boss!', 2.2, '#ff4080');
     intermission = 2.5;
     renderNextReward();
+    autoSaveRun();
     return;
   }
   if (kind === 'challenge') challengeWave = true;
@@ -791,6 +828,7 @@ function chooseReward(kind) {
   showBanner(r.name + (boostedNext ? ' ★' : ''), kind === 'challenge' ? r.desc : (boostedNext ? 'Nút cường hóa: phần thưởng tốt hơn!' : 'Nhận khi dọn sạch đợt tới'), 1.8, '#' + r.color.toString(16).padStart(6, '0'));
   intermission = 2.5;
   renderNextReward();
+  autoSaveRun();
 }
 
 function renderNextReward() {
@@ -905,12 +943,60 @@ function buyItem(i, useDark = false) {
   renderSlots();
 }
 
+function autoSaveRun() {
+  if (!started || run.mode !== 'normal' || run.coop || !player || player.dead || wave <= 0) return;
+  saveRunState({
+    floor, wave, kills, gold, scrap, runSouls,
+    exitOpen, choosingReward, nextReward, challengeWave, anchorWave, boostedNext, cooledNext,
+    trialDuoBoost, extraDmgCurse, bossBane, victoryShown,
+    pedestals: choosingReward ? rewards.pedestals.map((p) => p.kind) : null,
+    hadAnvil: !!loot?.anvil && !loot.anvil.used,
+    anvilUses: loot?.anvilUses ?? 0,
+    run: { ...run },
+    floorMap,
+    flame: { ...flameState, curses: [...(flameState.curses || [])] },
+    runDmg: { ...runDmg },
+    runeBag: [...runeBag],
+    bossCores: [...bossCores],
+    player: {
+      hp: Math.ceil(player.hp),
+      bonusMaxHp: player.bonusMaxHp || 0,
+      level: player.level,
+      xp: player.xp,
+      rage: player.rage || 0,
+      patron: player.patron || null,
+      weapons: JSON.parse(JSON.stringify(player.weapons || [])),
+      slot: player.slot || 0,
+      relics: [...(player.relics || [])],
+      perkLv: { ...(player.perkLv || {}) },
+      base: { ...player.base },
+    },
+  });
+}
+
+function syncContinueBtn() {
+  const btn = $('btn-continue');
+  const playBtn = $('btn-play');
+  const s = loadRunState();
+  if (!btn) return;
+  if (s) {
+    btn.classList.remove('hidden');
+    const info = $('continue-info');
+    if (info) info.textContent = describeSavedRun(s);
+    playBtn?.classList.remove('primary');
+  } else {
+    btn.classList.add('hidden');
+    playBtn?.classList.add('primary');
+  }
+}
+
 function leaveShop() {
   show('shop', false);
   rewards.removeMerchant();
   inShop = false;
   intermission = 2;
   setMode('playing');
+  autoSaveRun();
   if (pendingLevels > 0) openLevelUp();
 }
 
@@ -978,6 +1064,7 @@ function restart() {
   removeExit();
   floor = 1;
   buildWorld(scene, 1);
+  minimapDirty = true;
   if (run.mode !== 'sandbox') buildHazards(scene, 1, rngFor(4));
   else clearHazards(scene);
   if (!isSpecialMode) { maybeSecret(); maybeSpawnEchoGrave(); }
@@ -1027,6 +1114,13 @@ function setMode(m) {
 function setPaused(p) {
   if (!started || player.dead || inShopOpen()) return;
   paused = p;
+  if (p) {
+    applyFxQuality();
+    syncExtraSettingsUI();
+    syncSoundUI();
+    const pb = $('pause-build');
+    if (pb) pb.innerHTML = renderPauseBuildHtml(player, { PERKS, EVOLUTIONS, BOONS, DUOS, GODS, RELICS, activeRelicSets, RUNES, describeCircuit });
+  }
   show('pause', p);
   play(p ? 'uiOpen' : 'uiClose');
   if (!p) show('howto', false);
@@ -1062,6 +1156,7 @@ function descend() {
     ctx.enemies = enemies;
     clearProjectiles();
     const theme = buildWorld(scene, floor);
+    minimapDirty = true;
     buildHazards(scene, floor, rngFor(4));
     maybeSecret();
     maybeSpawnEchoGrave();
@@ -1089,6 +1184,7 @@ function descend() {
     setTimeout(openPatron, 1600);
     play('waveStart');
     checkAchievements();
+    autoSaveRun();
   }, 550);
 }
 
@@ -1116,9 +1212,10 @@ function updateArrows() {
       const sx = (Math.cos(ang) * k * 0.5 + 0.5) * innerWidth, sy = (-Math.sin(ang) * k * 0.5 + 0.5) * innerHeight;
       let el = arrowPool[used];
       if (!el) { el = document.createElement('div'); layer.appendChild(el); arrowPool.push(el); }
-      el.className = 'arrow' + (e.ward ? ' ward' : e.isBoss ? ' boss' : e.elite ? ' elite' : '');
+      const rangedDanger = !e.ward && (e.casting > 0 || !!e.tele || e.state === 'aim' || e.state === 'cast' || e.state === 'shoot');
+      el.className = 'arrow' + (e.ward ? ' ward' : e.isBoss ? ' boss' : e.elite ? ' elite' : '') + (rangedDanger ? ' danger' : '');
       el.style.display = '';
-      el.style.transform = `translate(${sx}px, ${sy}px) translate(-50%, -50%) rotate(${-ang}rad)`;
+      el.style.transform = `translate3d(${sx.toFixed(1)}px,${sy.toFixed(1)}px,0) translate(-50%, -50%) rotate(${-ang}rad)`;
       used++;
     }
   }
@@ -1127,6 +1224,37 @@ function updateArrows() {
 
 // ================= Radar Đấu Trường (Minimap góc phải cho bản đồ 18x18) =================
 let minimapCtx = null;
+let minimapBg = null;
+let minimapDirty = true;
+function rebuildMinimapBg(W, H, pad, span, sc) {
+  if (!minimapBg) {
+    minimapBg = document.createElement('canvas');
+    minimapBg.width = W;
+    minimapBg.height = H;
+  }
+  const g = minimapBg.getContext('2d');
+  if (!g) return;
+  const toX = (wx) => pad + ((wx + ROOM_HALF) / (ROOM_HALF * 2)) * span;
+  const toY = (wz) => pad + ((wz + ROOM_HALF) / (ROOM_HALF * 2)) * span;
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = '#1b130e';
+  g.fillRect(0, 0, W, H);
+  g.strokeStyle = 'rgba(226, 184, 108, 0.32)';
+  g.lineWidth = 1;
+  g.strokeRect(pad, pad, span, span);
+  g.fillStyle = '#070506';
+  for (const b of pits) g.fillRect(toX(b.x - b.hx), toY(b.z - b.hz), b.hx * 2 * sc, b.hz * 2 * sc);
+  g.fillStyle = '#6c5a4a';
+  for (const b of boxes) {
+    if (b.pit) continue;
+    g.fillRect(toX(b.x - b.hx), toY(b.z - b.hz), Math.max(2, b.hx * 2 * sc), Math.max(2, b.hz * 2 * sc));
+  }
+  for (const p of pillars) {
+    g.fillStyle = p.destructible ? '#8f7b66' : '#584b3e';
+    g.beginPath(); g.arc(toX(p.x), toY(p.z), Math.max(1.8, p.r * sc), 0, Math.PI * 2); g.fill();
+  }
+  minimapDirty = false;
+}
 function drawMinimap() {
   const wrap = $('minimap-wrap');
   const cv = $('minimap');
@@ -1142,31 +1270,8 @@ function drawMinimap() {
   const toY = (wz) => pad + ((wz + ROOM_HALF) / (ROOM_HALF * 2)) * span;
   const sc = span / (ROOM_HALF * 2);
 
-  g.clearRect(0, 0, W, H);
-  // Nền sàn tối
-  g.fillStyle = '#1b130e';
-  g.fillRect(0, 0, W, H);
-  g.strokeStyle = 'rgba(226, 184, 108, 0.32)';
-  g.lineWidth = 1;
-  g.strokeRect(pad, pad, span, span);
-  // Hố / Vực
-  g.fillStyle = '#070506';
-  for (const b of pits) {
-    g.fillRect(toX(b.x - b.hx), toY(b.z - b.hz), b.hx * 2 * sc, b.hz * 2 * sc);
-  }
-  // Tường thấp
-  g.fillStyle = '#6c5a4a';
-  for (const b of boxes) {
-    if (b.pit) continue;
-    g.fillRect(toX(b.x - b.hx), toY(b.z - b.hz), Math.max(2, b.hx * 2 * sc), Math.max(2, b.hz * 2 * sc));
-  }
-  // Cột đá
-  for (const p of pillars) {
-    g.fillStyle = p.destructible ? '#8f7b66' : '#584b3e';
-    g.beginPath();
-    g.arc(toX(p.x), toY(p.z), Math.max(1.8, p.r * sc), 0, Math.PI * 2);
-    g.fill();
-  }
+  if (minimapDirty || !minimapBg) rebuildMinimapBg(W, H, pad, span, sc);
+  g.drawImage(minimapBg, 0, 0);
   // Nắp hầm xuống tầng
   const ex = exitOpen && exitPos();
   if (ex) {
@@ -1769,8 +1874,11 @@ function handleInteract() {
     if (touchActions.KeyF) touchActions.KeyF.hidden = !canEnhance;
     if (touchActions.KeyQ) touchActions.KeyQ.hidden = player.weapons.length < 2 && !player.weapon?.altForm;
   }
-  hud.prompt.innerHTML = text;
-  hud.prompt.classList.toggle('show', !!text);
+  if (text !== _lastPromptHtml) {
+    _lastPromptHtml = text;
+    hud.prompt.innerHTML = text;
+    hud.prompt.classList.toggle('show', !!text);
+  }
 }
 
 // ================= Vòng lặp =================
@@ -1950,7 +2058,8 @@ function update(realDt, render = true) {
       }
     }
 
-    loot.update(dt, camera, player, time);
+    const combatActive = enemies.some((e) => e.alive && !e.isDummy);
+    loot.update(dt, camera, player, time, combatActive);
     rewards.update(dt, camera, time, player.pos);
     echoMgr?.update(dt, camera, time, player.pos);
     updateEliteLabels(enemies, camera);
@@ -2005,6 +2114,22 @@ function update(realDt, render = true) {
   else camera.lookAt(camera.position.x - CAM_OFFSET.x * camZoom, 0, camera.position.z - CAM_OFFSET.z * camZoom);
 
   updateHud(realDt);
+  if (fxSettings.showFps) {
+    _fpsFrames++;
+    _fpsAcc += realDt;
+    if (_fpsAcc >= 0.25) {
+      const fps = Math.round(_fpsFrames / _fpsAcc);
+      const scale = Math.round((fxStats().loadScale ?? 1) * 100);
+      const meter = $('fps-meter');
+      if (meter) {
+        meter.classList.remove('hidden');
+        meter.classList.toggle('warn', fps < 45);
+        meter.textContent = scale < 99 ? `${fps} FPS · FX ${scale}%` : `${fps} FPS`;
+      }
+      _fpsFrames = 0;
+      _fpsAcc = 0;
+    }
+  }
 
   if (render) composer.render();
   camera.position.copy(base);
@@ -2096,25 +2221,29 @@ function updateHud(realDt) {
       const maxSum = activeBosses.reduce((s, b) => s + (b.maxHp || b.maxHpEff || 1), 0);
       const poisePct = Math.max(...activeBosses.map((b) => (b.poiseMax ? (b.stunned ? 100 : (b.poise / b.poiseMax) * 100) : 0)));
       const allParts = activeBosses.flatMap((b) => b.parts || []);
-      $('boss-name').textContent = 'Song Tử Tử Thần · ' + activeBosses.map((b) => b.role === 'flame' ? 'Hỏa Ảnh' : 'Lôi Ảnh').join(' & ') + (wards > 0 ? ` · BẤT TỬ (Phá ${wards} Pha Lê Tím!)` : '');
+      const bName = 'Song Tử Tử Thần · ' + activeBosses.map((b) => b.role === 'flame' ? 'Hỏa Ảnh' : 'Lôi Ảnh').join(' & ') + (wards > 0 ? ` · BẤT TỬ (Phá ${wards} Pha Lê Tím!)` : '');
+      if (bName !== _lastBossName) { _lastBossName = bName; $('boss-name').textContent = bName; }
       $('boss-fill').style.width = Math.max(0, (hpSum / maxSum) * 100) + '%';
       $('boss-poise').style.width = Math.min(100, poisePct) + '%';
       const bp = $('boss-parts');
       if (bp) {
-        bp.innerHTML = allParts.length
+        const bpHtml = allParts.length
           ? allParts.map((pt) => `<span class="bpart${pt.broken ? ' broken' : ''}"><i class="ico" style="--i:url('/ui/icons/${pt.icon}.svg')"></i>${pt.name}${pt.broken ? ' ✕' : ` ${Math.max(0, Math.ceil((pt.hp / pt.maxHp) * 100))}%`}</span>`).join('')
           : '';
+        if (bpHtml !== _lastBossPartsHtml) { _lastBossPartsHtml = bpHtml; bp.innerHTML = bpHtml; }
       }
     } else {
       const suffix = wards > 0 ? ` · BẤT TỬ (Phá ${wards} Pha Lê Tím!)` : (boss.stunned ? ' · Choáng!' : boss.absorbed ? ' · Hấp Thụ!' : boss.enraged ? ' · Nổi giận!' : '');
-      $('boss-name').textContent = boss.name + suffix;
+      const bName = boss.name + suffix;
+      if (bName !== _lastBossName) { _lastBossName = bName; $('boss-name').textContent = bName; }
       $('boss-fill').style.width = Math.max(0, (boss.hp / (boss.maxHp || boss.maxHpEff)) * 100) + '%';
       $('boss-poise').style.width = boss.poiseMax ? Math.min(100, (boss.stunned ? 100 : boss.poise / boss.poiseMax * 100)) + '%' : '0%';
       const bp = $('boss-parts');
       if (bp) {
-        bp.innerHTML = boss.parts?.length
+        const bpHtml = boss.parts?.length
           ? boss.parts.map((pt) => `<span class="bpart${pt.broken ? ' broken' : ''}"><i class="ico" style="--i:url('/ui/icons/${pt.icon}.svg')"></i>${pt.name}${pt.broken ? ' ✕' : ` ${Math.max(0, Math.ceil((pt.hp / pt.maxHp) * 100))}%`}</span>`).join('')
           : '';
+        if (bpHtml !== _lastBossPartsHtml) { _lastBossPartsHtml = bpHtml; bp.innerHTML = bpHtml; }
       }
     }
   } else {
@@ -2139,7 +2268,7 @@ function updateHud(realDt) {
   $('slowmo').style.opacity = player.slowmoT > 0 ? 1 : 0;
   const idle = started && !player.dead && enemies.length === 0 && wave > 0;
   const creepLimit = deep(10) ? 40 : 60;
-  hud.timer.innerHTML = creeping ? '<i class="ico ico-hourglass"></i> <span style="color:#b89aff">Bóng Tối Lan!</span>'
+  const tHtml = creeping ? '<i class="ico ico-hourglass"></i> <span style="color:#b89aff">Bóng Tối Lan!</span>'
     : waveTime > creepLimit - 15 && enemies.length ? `<i class="ico ico-hourglass"></i> Bóng Tối Lan sau ${Math.ceil(creepLimit - waveTime)} giây`
     : arenaT > 0 ? `<i class="ico ico-hourglass"></i> Đấu Trường: còn ${Math.ceil(arenaT)} giây`
     : !idle ? ''
@@ -2147,6 +2276,7 @@ function updateHud(realDt) {
     : choosingReward ? '<i class="ico ico-hourglass"></i> Chọn một bệ phần thưởng để bắt đầu đợt tiếp theo'
     : inShop ? '<i class="ico ico-hourglass"></i> Mua đồ ở thương nhân, bấm "Rời đi" khi xong'
     : intermission !== null && isFinite(intermission) ? `<i class="ico ico-hourglass"></i> Đợt ${wave + 1} sau ${Math.ceil(intermission)} giây` : '';
+  if (tHtml !== _lastTimerHtml) { _lastTimerHtml = tHtml; hud.timer.innerHTML = tHtml; }
   if (bannerTimer > 0) { bannerTimer -= realDt; if (bannerTimer <= 0) hud.bannerWrap.classList.remove('show'); }
   if (player.dead && (!player2 || player2.dead) && !deathShown) onDeath();
 }
@@ -2177,6 +2307,8 @@ function showVictory(reason = 'story') {
 
 function onDeath() {
   deathShown = true;
+  clearRunState();
+  syncContinueBtn();
   const isRecord = run.mode === 'normal' && wave > best;
   if (isRecord) { best = wave; localStorage.setItem('lorenh_best', String(best)); }
   if (run.daily) {
@@ -2241,12 +2373,97 @@ function startGame(opts = {}) {
         endless: false,
       };
   coop.on = !!run.coop;
+  if (run.mode === 'normal' && !run.bossrush && !run.coop) { clearRunState(); syncContinueBtn(); }
   setSeed(run.daily ? daySeed() : null);
   started = true;
   for (const id of ['start', 'howto', 'prep', 'bestiary', 'save-modal', 'victory']) show(id, false);
   restart();
   camera.position.copy(player.pos).add(CAM_OFFSET);
   setMode('playing');
+}
+
+function continueSavedRun() {
+  if (started) return;
+  const s = loadRunState();
+  if (!s) return;
+  unlockAudio();
+  unlockMusic();
+  play('uiConfirm');
+  run = { char: 'knight', pet: meta.pet || 'none', curses: [], daily: false, depth: 0, mode: 'normal', endless: false, ...(s.run || {}), coop: false };
+  coop.on = false;
+  setSeed(run.daily ? daySeed() : null);
+  started = true;
+  for (const id of ['start', 'howto', 'prep', 'bestiary', 'save-modal', 'victory']) show(id, false);
+  restart();
+  clearTimeout(patronTimer);
+  patronTimer = null;
+  floor = s.floor || 1;
+  wave = s.wave || 0;
+  kills = s.kills || 0;
+  gold = s.gold || 0;
+  scrap = s.scrap || 0;
+  runSouls = s.runSouls || 0;
+  exitOpen = !!s.exitOpen;
+  choosingReward = !!s.choosingReward;
+  nextReward = s.nextReward || null;
+  challengeWave = !!s.challengeWave;
+  anchorWave = s.anchorWave || null;
+  boostedNext = !!s.boostedNext;
+  cooledNext = !!s.cooledNext;
+  trialDuoBoost = !!s.trialDuoBoost;
+  extraDmgCurse = s.extraDmgCurse || 0;
+  bossBane = s.bossBane || 0;
+  victoryShown = !!s.victoryShown;
+  if (s.floorMap) floorMap = s.floorMap;
+  runeBag = Array.isArray(s.runeBag) ? [...s.runeBag] : [];
+  bossCores = Array.isArray(s.bossCores) ? [...s.bossCores] : [];
+  if (s.runDmg) runDmg = { ...runDmg, ...s.runDmg };
+  if (s.flame) {
+    flameState.flame = s.flame.flame ?? 100;
+    flameState.corruption = s.flame.corruption ?? 0;
+    flameState.curses = [...(s.flame.curses || [])];
+  }
+  if (floor > 1) {
+    buildWorld(scene, floor);
+    minimapDirty = true;
+    buildHazards(scene, floor, rngFor(4));
+    echoMgr?.clear();
+    maybeSecret();
+    maybeSpawnEchoGrave();
+  }
+  const sp = s.player || {};
+  player.curses = run.curses;
+  player.setCharacter(run.char);
+  player.bonusMaxHp = sp.bonusMaxHp || 0;
+  player.level = sp.level || 1;
+  player.xp = sp.xp || 0;
+  player.rage = sp.rage || 0;
+  player.patron = sp.patron || null;
+  player.perkLv = { ...(sp.perkLv || {}) };
+  player.base = { ...baseStats(), ...(sp.base || {}) };
+  player.relics = [...(sp.relics || [])];
+  if (Array.isArray(sp.weapons) && sp.weapons.length) {
+    player.setWeapons(sp.weapons, sp.slot || 0);
+  }
+  player.recalc();
+  player.hp = Math.min(player.maxHp, Math.max(1, sp.hp || player.maxHp));
+  player.pos.set(0, 0, ROOM_HALF - 4);
+  lastHp = ghostHp = player.hp;
+  if (run.pet && run.pet !== 'none') companions?.setPet(run.pet, player.pos);
+  if (s.hadAnvil) { loot.spawnAnvil(6, -2); loot.anvilUses = s.anvilUses ?? 1; }
+  if (exitOpen) { spawnExit(0, 0); intermission = Infinity; }
+  else if (choosingReward && s.pedestals?.length) { rewards.offer(s.pedestals, -7); intermission = Infinity; }
+  else intermission = 3.0;
+  const se = $('scrap'); if (se) se.textContent = scrap;
+  const ge = $('gold'); if (ge) ge.textContent = gold;
+  renderSlots();
+  renderRelics();
+  renderNextReward();
+  renderFlameHud();
+  setFlameLevel(flameState.flame);
+  camera.position.copy(player.pos).add(CAM_OFFSET);
+  setMode('playing');
+  showBanner(`Tiếp tục: Tầng ${floor}`, `Đợt ${wave}${exitOpen ? ' · Lối xuống đang mở' : choosingReward ? ' · Chọn phần thưởng' : ''}`, 2.6, '#7fd8ff');
 }
 
 function toMenu() {
@@ -2260,6 +2477,7 @@ function toMenu() {
   restart();
   hud.startBest.textContent = best ? `Kỷ lục: đợt ${best}` : 'Chưa có kỷ lục';
   renderDaily();
+  syncContinueBtn();
   show('start', true);
   setMode('menu');
 }
@@ -2296,7 +2514,12 @@ function leaveShopPanel() {
 
 // ================= Âm lượng =================
 function syncSoundUI() {
-  for (const el of document.querySelectorAll('.vol-slider')) el.value = Math.round(getVolume() * 100);
+  for (const el of document.querySelectorAll('.vol-slider')) {
+    if (el.id === 'bgm-slider') continue;
+    el.value = Math.round(getVolume() * 100);
+  }
+  const bgm = $('bgm-slider');
+  if (bgm) bgm.value = Math.round(getMusicVolume() * 100);
   for (const el of document.querySelectorAll('.mute-btn')) {
     el.classList.toggle('off', isMuted());
     el.title = isMuted() ? 'Bật tiếng (M)' : 'Tắt tiếng (M)';
@@ -2305,11 +2528,36 @@ function syncSoundUI() {
 function toggleMute() { setMuted(!isMuted()); syncSoundUI(); if (!isMuted()) play('uiClick'); }
 
 async function init() {
-  await Promise.all([loadModels(), loadSounds()]);
+  const fillEl = $('load-fill'), lblEl = $('load-label');
+  await Promise.all([
+    loadModels((done, total) => {
+      const pct = total ? Math.round((done / total) * 100) : 100;
+      if (fillEl) fillEl.style.width = pct + '%';
+      if (lblEl) lblEl.textContent = `Đang tải mô hình 3D... ${pct}% (${done}/${total})`;
+    }),
+    loadSounds(),
+  ]);
   buildWorld(scene);
   initFx(scene, renderer);
   applyFxQuality();
   $('btn-fx').onclick = () => { setFxQuality(!fxQuality.high); applyFxQuality(); play('uiClick'); };
+  syncExtraSettingsUI();
+  if ($('btn-shake')) $('btn-shake').onclick = () => {
+    const nxt = fxSettings.shakeScale >= 0.9 ? 0.5 : fxSettings.shakeScale >= 0.4 ? 0 : 1;
+    setFxSettings({ shakeScale: nxt });
+    syncExtraSettingsUI();
+    play('uiClick');
+  };
+  if ($('btn-dmgnum')) $('btn-dmgnum').onclick = () => {
+    setFxSettings({ showDmg: !fxSettings.showDmg });
+    syncExtraSettingsUI();
+    play('uiClick');
+  };
+  if ($('btn-fps')) $('btn-fps').onclick = () => {
+    setFxSettings({ showFps: !fxSettings.showFps });
+    syncExtraSettingsUI();
+    play('uiClick');
+  };
   // Cài đặt điều khiển cảm ứng trong menu Tạm Dừng
   const syncTouchSettingsUI = () => {
     const cfg = getTouchCfg();
@@ -2345,7 +2593,7 @@ async function init() {
     meta.stats.clashes = (meta.stats.clashes || 0) + 1;
     if (enemies.some((x) => x.isBoss && x.alive)) addFlame(2.5);
   };
-  ctx.onPillarCollapse = () => { meta.stats.pillarsCollapsed = (meta.stats.pillarsCollapsed || 0) + 1; };
+  ctx.onPillarCollapse = () => { minimapDirty = true; meta.stats.pillarsCollapsed = (meta.stats.pillarsCollapsed || 0) + 1; };
   ctx.spawnEnemy = (e) => { e.maxHpEff = e.hp; recordBestiary(e, false); enemies.push(e); };
   ctx.spawnGrave = (x, z) => { const m = new Minion(scene, x, z); m.isGrave = true; m.xp = 1; m.dropChance = 0.03; addEnemy(m); ctx.enemies = enemies; };
   // Boss chuyển giai đoạn: sóng xung kích, gọi thêm quân, thông báo
@@ -2466,6 +2714,8 @@ async function init() {
   renderDaily();
   for (const el of document.querySelectorAll('.overlay')) el.addEventListener('mousedown', (e) => e.stopPropagation());
   $('btn-play').onclick = () => { renderPrep(); show('prep', true); play('uiOpen'); };
+  if ($('btn-continue')) $('btn-continue').onclick = () => continueSavedRun();
+  syncContinueBtn();
   $('btn-go').onclick = () => startGame();
   $('btn-daily').onclick = () => startGame({ daily: true });
   $('btn-bossrush').onclick = () => startGame({ bossrush: true });
@@ -2511,6 +2761,7 @@ async function init() {
     show('victory', false);
     setMode('playing');
     play('forged');
+    autoSaveRun();
     showBanner('Chế Độ Vô Tận Đã Mở!', 'Tới nắp hầm giữa phòng (E) để chinh phục Tầng 6+!', 3.0, '#7fd8ff');
   };
   $('btn-vic-menu').onclick = () => { show('victory', false); toMenu(); };
@@ -2560,7 +2811,15 @@ async function init() {
   const unlock = () => { unlockAudio(); unlockMusic(); };
   addEventListener('pointerdown', unlock);
   addEventListener('keydown', unlock);
-  for (const s of document.querySelectorAll('.vol-slider')) s.oninput = () => { setVolume(s.value / 100); if (isMuted()) setMuted(false); syncSoundUI(); };
+  for (const s of document.querySelectorAll('.vol-slider')) {
+    if (s.id === 'bgm-slider') continue;
+    s.oninput = () => { setVolume(s.value / 100); if (isMuted()) setMuted(false); syncSoundUI(); };
+  }
+  if ($('bgm-slider')) $('bgm-slider').oninput = (e) => {
+    setMusicVolume(Number(e.target.value) / 100);
+    if (isMuted()) setMuted(false);
+    syncSoundUI();
+  };
   for (const b of document.querySelectorAll('.mute-btn')) b.onclick = toggleMute;
   syncSoundUI();
   $('btn-resume').onclick = () => setPaused(false);
@@ -2575,12 +2834,15 @@ async function init() {
     if (portraitPhone.matches && started && !paused && !choosing && !player.dead && !inShopOpen()) setPaused(true);
   });
   addEventListener('blur', () => { if (started && !player.dead && !choosing && !inShopOpen()) setPaused(true); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && started && !player.dead && !choosing && !inShopOpen()) setPaused(true);
+  });
   addEventListener('gamepadconnected', () => toast('x_gamepad', 'Đã kết nối tay cầm', 'Cần trái di chuyển · cần phải ngắm · RT đánh · LT kỹ năng · A lướt'));
   hud.start.classList.remove('loading');
   setMode('menu');
 
   window.__game = {
-    player, scene, camera, renderer, mouse, pad, loot, rewards, startGame, combat, weapons: weaponsMod, setPaused, meta,
+    player, scene, camera, renderer, mouse, pad, loot, rewards, startGame, continueSavedRun, autoSaveRun, combat, weapons: weaponsMod, setPaused, meta,
     hazards, echoMgr, companions, sandbox, defense, flameState, RUNES, BOSS_CORES,
     addFlame, addCorruption, purgeCurse, openAnvilModal, closeAnvilModal, openTrialRoom, pickRune, pickCore,
     showVictory, exportSaveCode, importSaveCode,
@@ -2930,16 +3192,25 @@ function updateP2(dt, time) {
 // ================= 8 Cơ chế phức tạp: Hàm hỗ trợ & Kết nối UI =================
 function renderFlameHud() {
   const ff = $('flame-fill'), fv = $('flame-val'), cf = $('corr-fill'), cv = $('corr-val'), dc = $('dyn-curses');
-  if (ff) ff.style.width = Math.round(flameState.flame) + '%';
-  if (fv) fv.textContent = Math.round(flameState.flame);
-  if (ff?.parentElement) ff.parentElement.classList.toggle('ember', flameTier() === 'ember');
-  if (cf) cf.style.width = Math.round(flameState.corruption) + '%';
-  if (cv) cv.textContent = Math.round(flameState.corruption);
+  const fInt = Math.round(flameState.flame);
+  if (fInt !== _lastFlameInt) {
+    _lastFlameInt = fInt;
+    if (ff) ff.style.width = fInt + '%';
+    if (fv) fv.textContent = fInt;
+    if (ff?.parentElement) ff.parentElement.classList.toggle('ember', flameTier() === 'ember');
+  }
+  const cInt = Math.round(flameState.corruption);
+  if (cInt !== _lastCorrInt) {
+    _lastCorrInt = cInt;
+    if (cf) cf.style.width = cInt + '%';
+    if (cv) cv.textContent = cInt;
+  }
   if (dc) {
-    dc.innerHTML = flameState.curses.map((id) => {
+    const dcHtml = flameState.curses.map((id) => {
       const c = dynCurseById(id);
       return c ? `<div class="dyn-curse-ico" title="${c.name}: ${c.desc}"><i class="ico" style="--i:url('/ui/icons/${c.icon}.svg')"></i></div>` : '';
     }).join('');
+    if (dcHtml !== _lastDynCursesHtml) { _lastDynCursesHtml = dcHtml; dc.innerHTML = dcHtml; }
   }
 }
 

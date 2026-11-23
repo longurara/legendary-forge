@@ -6,6 +6,14 @@ import { ctx, dealDamage, spawnOrb, aoe } from './combat.js';
 import { burst, spawnRing, damageNumber, emit, F, flash, flame } from './fx.js';
 import { play } from './audio.js';
 
+const COMP_RING_GEO = new THREE.RingGeometry(0.42, 0.52, 24).rotateX(-Math.PI / 2);
+const PET_RING_MAT = new THREE.MeshBasicMaterial({ color: 0x7fffb0, transparent: true, opacity: 0.55, depthWrite: false });
+const ALLY_RING_MAT = new THREE.MeshBasicMaterial({ color: 0x50ff9a, transparent: true, opacity: 0.6, depthWrite: false });
+const TRAP_BASE_GEO = new THREE.CylinderGeometry(0.65, 0.72, 0.1, 10);
+const TRAP_BASE_MAT = new THREE.MeshStandardMaterial({ color: 0x707880, metalness: 0.8, roughness: 0.35 });
+const TRAP_RING_GEO = new THREE.RingGeometry(0.75, 0.88, 18).rotateX(-Math.PI / 2);
+const TRAP_RING_MAT = new THREE.MeshBasicMaterial({ color: 0x7fff9a, transparent: true, opacity: 0.55, depthWrite: false });
+
 export class CompanionManager {
   constructor(scene) {
     this.scene = scene;
@@ -14,19 +22,26 @@ export class CompanionManager {
     this.traps = [];
   }
 
+  _disposeEntry(entry) {
+    if (!entry?.owned) return;
+    for (const r of entry.owned) r?.dispose?.();
+    entry.owned.length = 0;
+  }
+
   clear() {
     if (this.pet) {
       this.scene.remove(this.pet.group);
+      this._disposeEntry(this.pet);
       this.pet = null;
     }
-    for (const a of this.allies) this.scene.remove(a.group);
+    for (const a of this.allies) { this.scene.remove(a.group); this._disposeEntry(a); }
     this.allies.length = 0;
     for (const t of this.traps) this.scene.remove(t.mesh);
     this.traps.length = 0;
   }
 
   setPet(petId, pos) {
-    if (this.pet) { this.scene.remove(this.pet.group); this.pet = null; }
+    if (this.pet) { this.scene.remove(this.pet.group); this._disposeEntry(this.pet); this.pet = null; }
     if (!petId || petId === 'none') return null;
     const cfg = {
       slime: { model: 'slime', size: 0.65, hoverY: 0, anim: 'Slime_Walk', col: 0xffcf4a, em: 0xd88810 },
@@ -37,6 +52,7 @@ export class CompanionManager {
     if (!cfg) return null;
 
     const group = new THREE.Group();
+    const owned = [];
     let anim = null;
     if (models[cfg.model]) {
       const fitted = fitModel(models[cfg.model], cfg.size, 'ground');
@@ -45,29 +61,28 @@ export class CompanionManager {
           o.material = o.material.clone();
           o.material.color.lerp(new THREE.Color(cfg.col), 0.45);
           if (o.material.emissive) { o.material.emissive.setHex(cfg.em); o.material.emissiveIntensity = 0.25; }
+          owned.push(o.material);
         }
       });
       group.add(fitted);
       anim = new Animator(fitted);
       anim.play(cfg.anim, { fade: 0 });
     } else {
-      const m = new THREE.Mesh(new THREE.SphereGeometry(0.32, 12, 8), new THREE.MeshStandardMaterial({ color: cfg.col, emissive: cfg.em, emissiveIntensity: 0.35 }));
+      const geo = new THREE.SphereGeometry(0.32, 12, 8);
+      const mat = new THREE.MeshStandardMaterial({ color: cfg.col, emissive: cfg.em, emissiveIntensity: 0.35 });
+      owned.push(geo, mat);
+      const m = new THREE.Mesh(geo, mat);
       m.position.y = 0.35;
       group.add(m);
     }
-    // Vòng hào quang xanh-vàng nhỏ dưới chân thú đồng hành (dễ phân biệt với quái địch!)
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.42, 0.52, 24),
-      new THREE.MeshBasicMaterial({ color: 0x7fffb0, transparent: true, opacity: 0.55, depthWrite: false }),
-    );
-    ring.rotation.x = -Math.PI / 2;
+    const ring = new THREE.Mesh(COMP_RING_GEO, PET_RING_MAT);
     ring.position.y = 0.03;
     group.add(ring);
 
     const start = pos ? pos.clone().add(new THREE.Vector3(1.6, 0, 1.2)) : new THREE.Vector3(1.6, 0, 4);
     group.position.set(start.x, cfg.hoverY, start.z);
     this.scene.add(group);
-    this.pet = { id: petId, cfg, group, anim, pos: start, cd: 1.5, facing: 0 };
+    this.pet = { id: petId, cfg, group, anim, pos: start, cd: 1.5, facing: 0, owned };
     return this.pet;
   }
 
@@ -75,8 +90,10 @@ export class CompanionManager {
     if (this.allies.length >= 3) {
       const old = this.allies.shift();
       this.scene.remove(old.group);
+      this._disposeEntry(old);
     }
     const group = new THREE.Group();
+    const owned = [];
     let anim = null;
     if (models.enemy_minion) {
       const fitted = fitModel(models.enemy_minion, 1.6, 'ground');
@@ -85,27 +102,28 @@ export class CompanionManager {
           o.material = o.material.clone();
           o.material.color.lerp(new THREE.Color(0x50ff9a), 0.5);
           if (o.material.emissive) { o.material.emissive.setHex(0x20d86a); o.material.emissiveIntensity = 0.45; }
+          owned.push(o.material);
         }
       });
       group.add(fitted);
       anim = new Animator(fitted);
       anim.play('Running_C', { fade: 0 });
     } else {
-      const m = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 0.7, 4, 8), new THREE.MeshStandardMaterial({ color: 0x50ff9a, emissive: 0x20a850, emissiveIntensity: 0.5 }));
+      const geo = new THREE.CapsuleGeometry(0.28, 0.7, 4, 8);
+      const mat = new THREE.MeshStandardMaterial({ color: 0x50ff9a, emissive: 0x20a850, emissiveIntensity: 0.5 });
+      owned.push(geo, mat);
+      const m = new THREE.Mesh(geo, mat);
       m.position.y = 0.65;
       group.add(m);
     }
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.45, 0.56, 20),
-      new THREE.MeshBasicMaterial({ color: 0x50ff9a, transparent: true, opacity: 0.6, depthWrite: false }),
-    );
-    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.03;
+    const ring = new THREE.Mesh(COMP_RING_GEO, ALLY_RING_MAT);
+    ring.position.y = 0.03;
     group.add(ring);
     const p = pos.clone();
     group.position.copy(p);
     this.scene.add(group);
     burst(p.clone().setY(0.8), 0x50ff9a, 14, { speed: 6, size: 0.15 });
-    const ally = { group, anim, pos: p, life: 24, cd: 0.4, facing: 0, dmgMul };
+    const ally = { group, anim, pos: p, life: 24, cd: 0.4, facing: 0, dmgMul, owned };
     this.allies.push(ally);
     return ally;
   }
@@ -116,16 +134,10 @@ export class CompanionManager {
       this.scene.remove(old.mesh);
     }
     const mesh = new THREE.Group();
-    const base = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.65, 0.72, 0.1, 10),
-      new THREE.MeshStandardMaterial({ color: 0x707880, metalness: 0.8, roughness: 0.35 }),
-    );
+    const base = new THREE.Mesh(TRAP_BASE_GEO, TRAP_BASE_MAT);
     base.position.y = 0.05;
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.75, 0.88, 18),
-      new THREE.MeshBasicMaterial({ color: 0x7fff9a, transparent: true, opacity: 0.55, depthWrite: false }),
-    );
-    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.04;
+    const ring = new THREE.Mesh(TRAP_RING_GEO, TRAP_RING_MAT);
+    ring.position.y = 0.04;
     mesh.add(base, ring);
     mesh.position.set(pos.x, 0, pos.z);
     this.scene.add(mesh);
