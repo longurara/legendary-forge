@@ -35,12 +35,12 @@
           <span class="keycap">R</span>
           <div class="ragebar"><div id="rage-fill"></div><span id="ult-name"></span></div>
         </div>
-        <div class="fc-row">
-          <div class="fc-item" title="Ánh Lửa: Dưới 25 vào chế độ Lửa Tàn (Quái mạnh hơn nhưng Chí Mạng +40% & Rơi đồ ×2)">
+        <div id="fc-row" class="fc-row">
+          <div id="flame-item" class="fc-item" title="Ánh Lửa: Dưới 25 vào chế độ Lửa Tàn (Quái mạnh hơn nhưng Chí Mạng +40% & Rơi đồ ×2)">
             <i class="ico el-fire"></i>
             <div class="fc-bar flame"><div id="flame-fill"></div><span id="flame-val">85</span></div>
           </div>
-          <div class="fc-item" title="Tha Hóa: Đạt 100 nhận 1 Lời Nguyền 2 Mặt. Hạ Boss hoặc hiến vũ khí ở Đe để Thanh Tẩy">
+          <div id="corr-item" class="fc-item" title="Tha Hóa: Đạt 100 nhận 1 Lời Nguyền 2 Mặt. Hạ Boss hoặc hiến vũ khí ở Đe để Thanh Tẩy">
             <i class="ico" style="--i:url('/ui/icons/x_cursed.svg');color:#c070ff"></i>
             <div class="fc-bar corr"><div id="corr-fill"></div><span id="corr-val">0</span></div>
           </div>
@@ -48,8 +48,11 @@
         <div id="dyn-curses" class="dyn-curses"></div>
       </div>
       <div id="relic-dock">
-        <div id="relics"></div>
-        <div id="relic-sets"></div>
+        <div id="relic-summary" class="relic-summary hidden"></div>
+        <div id="relic-tray" class="relic-tray">
+          <div id="relics"></div>
+          <div id="relic-sets"></div>
+        </div>
       </div>
 
       <div id="hud-top">
@@ -90,9 +93,9 @@
       </div>
 
       <div id="hud-right" class="panel slim">
-        <span title="Hạ gục"><i class="ico ico-kills"></i><b id="kills">0</b></span>
-        <span title="Kỷ lục"><i class="ico ico-best"></i><b id="best">0</b></span>
-        <span title="Hồn Thép"><i class="ico ico-soul"></i><b id="souls">0</b></span>
+        <span class="res-extra" title="Hạ gục"><i class="ico ico-kills"></i><b id="kills">0</b></span>
+        <span class="res-extra" title="Kỷ lục"><i class="ico ico-best"></i><b id="best">0</b></span>
+        <span class="res-extra" title="Hồn Thép"><i class="ico ico-soul"></i><b id="souls">0</b></span>
         <span title="Vàng"><i class="ico ico-gold"></i><b id="gold">0</b></span>
         <span title="Mảnh Thép: phân rã vũ khí (X), cường hóa ở đe (F)"><i class="ico ico-scrap"></i><b id="scrap">0</b></span>
       </div>
@@ -234,6 +237,7 @@
             <div class="ctrl"><span><span class="keycap">F</span></span>Cường hóa vũ khí ở đe bằng Mảnh Thép (tối đa +5, mỗi cấp +12% sát thương)</div>
             <div class="ctrl"><span><span class="keycap">Tab</span></span>Xem bản đồ tầng (đường đi tới boss)</div>
             <div class="ctrl"><span><span class="keycap">M</span></span>Tắt / bật tiếng</div>
+            <div class="ctrl"><span><span class="keycap">H</span></span>Chuyển nhanh HUD Gọn / Đầy đủ</div>
             <div class="ctrl"><span><i class="ico" style="--i:url('/ui/icons/x_gamepad.svg')"></i></span>Có hỗ trợ tay cầm</div>
             <h3>Mẹo</h3>
             <p class="muted small">Lướt né đúng lúc quái đánh trúng để <b>Né Hoàn Hảo</b>: thời gian chậm lại, đòn sau chắc chắn chí mạng. Đánh liên tục vào boss để làm đầy thanh vàng dưới máu, boss sẽ <b>choáng</b> và nhận thêm 50% sát thương.</p>
@@ -426,6 +430,7 @@
               <button id="btn-shake" class="btn">Rung màn hình: 100%</button>
               <button id="btn-dmgnum" class="btn">Số sát thương: Bật</button>
               <button id="btn-fps" class="btn">Hiện FPS: Tắt</button>
+              <button id="btn-hudmode" class="btn">HUD: Gọn (H)</button>
             </div>
             <div class="touch-settings">
               <button id="btn-stick-mode" class="btn">Cần di chuyển: Thả nổi</button>

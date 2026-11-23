@@ -7,8 +7,8 @@ import * as THREE from 'three';
 export const fxSettings = (() => {
   try {
     const r = JSON.parse(localStorage.getItem('lorenh_settings') || '{}');
-    return { shakeScale: r.shakeScale ?? 1, showDmg: r.showDmg !== false, showFps: !!r.showFps };
-  } catch { return { shakeScale: 1, showDmg: true, showFps: false }; }
+    return { shakeScale: r.shakeScale ?? 1, showDmg: r.showDmg !== false, showFps: !!r.showFps, compactHud: r.compactHud !== false };
+  } catch { return { shakeScale: 1, showDmg: true, showFps: false, compactHud: true }; }
 })();
 export function setFxSettings(patch = {}) {
   Object.assign(fxSettings, patch);
@@ -41,7 +41,9 @@ export function setFxQuality(high) {
 }
 let smoothDt = 1 / 60;
 let loadScale = 1;
-const frameFx = { explosions: 0, bursts: 0, bolts: 0, rings: 0 };
+let _lagT = 0;
+let autoLowBloom = false;
+const frameFx = { explosions: 0, bursts: 0, bolts: 0, rings: 0, emits: 0, sparks: 0, smokes: 0 };
 const density = () => (fxQuality.high ? 1 : 0.5) * loadScale;
 
 // ---------- Texture ----------
@@ -61,7 +63,7 @@ const TEX = {
 // Các ô trong atlas 4×4
 export const F = { glow: 0, sparkle: 1, streak: 2, smoke: 3, flame: 4, tongue: 5, elec: 6, cross: 7, dust: 8, impact: 9, flare: 10, puff: 11, star: 12, jet: 13, fire: 14, halo: 15 };
 
-// ---------- Hệ hạt (THREE.Points + shader) ----------
+// ---------- Hệ hạt (THREE.Points + shader, pack mảng nén swap-remove) ----------
 const VERT = /* glsl */`
 attribute vec3 aColor;
 attribute float aAlpha, aSize, aFrame, aRot, aStretch;
@@ -70,7 +72,8 @@ uniform float uViewH;
 void main() {
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   gl_Position = projectionMatrix * mv;
-  gl_PointSize = aSize * uViewH * projectionMatrix[1][1] * 0.5 / -mv.z;
+  float pt = aSize * uViewH * projectionMatrix[1][1] * 0.5 / max(0.5, -mv.z);
+  gl_PointSize = min(140.0, pt);
   vColor = aColor; vAlpha = aAlpha; vFrame = aFrame; vRot = aRot; vStretch = aStretch;
 }`;
 const FRAG = /* glsl */`
@@ -94,6 +97,7 @@ class ParticlePool {
   constructor(max, blending, order) {
     this.max = max;
     this.items = [];
+    this.count = 0;
     this.cursor = 0;
     this.dirty = false;
     const geo = new THREE.BufferGeometry();
@@ -105,6 +109,7 @@ class ParticlePool {
     this.aFrame = attr('aFrame', 1);
     this.aRot = attr('aRot', 1);
     this.aStretch = attr('aStretch', 1);
+    geo.setDrawRange(0, 0);
     this.uniforms = { uMap: { value: TEX.atlas }, uViewH: { value: 800 } };
     const mat = new THREE.ShaderMaterial({
       uniforms: this.uniforms, vertexShader: VERT, fragmentShader: FRAG,
@@ -119,49 +124,45 @@ class ParticlePool {
     }
   }
 
-  // Lấy một hạt trống O(1): thử tối đa 4 ô từ cursor, nếu bận thì ghi đè vòng
   take() {
-    for (let k = 0; k < 4; k++) {
-      const p = this.items[this.cursor];
-      this.cursor = (this.cursor + 1) % this.max;
-      if (!p.live) { this.dirty = true; return p; }
-    }
+    this.dirty = true;
+    if (this.count < this.max) return this.items[this.count++];
     const p = this.items[this.cursor];
     this.cursor = (this.cursor + 1) % this.max;
-    this.dirty = true;
     return p;
   }
 
   update(dt, camera, viewH) {
-    if (dt === 0 && !this.dirty) return;
+    if (this.count === 0 && !this.dirty) return;
     this.uniforms.uViewH.value = viewH;
     const P = this.aPos.array, C = this.aColor.array, A = this.aAlpha.array, S = this.aSize.array,
       Fr = this.aFrame.array, R = this.aRot.array, St = this.aStretch.array;
-    let anyLive = false;
-    let changed = false;
-    for (let i = 0; i < this.max; i++) {
+    for (let i = 0; i < this.count; ) {
       const p = this.items[i];
-      if (!p.live) { if (A[i] !== 0) { A[i] = 0; S[i] = 0; changed = true; } continue; }
-      changed = true;
       p.life -= dt;
-      if (p.life <= 0) { p.live = false; A[i] = 0; S[i] = 0; continue; }
-      anyLive = true;
+      if (p.life <= 0) {
+        p.live = false;
+        const last = --this.count;
+        if (i !== last) {
+          this.items[i] = this.items[last];
+          this.items[last] = p;
+        }
+        continue;
+      }
       const t = 1 - p.life / p.maxLife;
       p.vel.y -= p.grav * dt;
       if (p.drag) p.vel.multiplyScalar(Math.max(0, 1 - p.drag * dt));
       p.pos.addScaledVector(p.vel, dt);
       if (p.bounce && p.pos.y < 0.05) { p.pos.y = 0.05; p.vel.y *= -0.35; p.vel.x *= 0.6; p.vel.z *= 0.6; }
       p.rot += p.rotV * dt;
-      let stretch = 1, rot = p.rot, size = p.s0 + (p.s1 - p.s0) * t;
-      if (p.streak) {
-        // Xoay vệt theo hướng bay trên màn hình
+      let rot = p.rot, size = p.s0 + (p.s1 - p.s0) * t;
+      if (p.streak && camera) {
         tA.copy(p.pos).project(camera);
         tB.copy(p.pos).addScaledVector(p.vel, 0.02).project(camera);
         const dx = (tB.x - tA.x) * camera.aspect, dy = tB.y - tA.y;
         rot = Math.atan2(dy, dx) - Math.PI / 2;
         const sp = p.vel.length();
         size *= Math.min(2.2, 0.6 + sp * 0.08);
-        stretch = 1;
       }
       const j = i * 3;
       P[j] = p.pos.x; P[j + 1] = p.pos.y; P[j + 2] = p.pos.z;
@@ -173,23 +174,38 @@ class ParticlePool {
       S[i] = size;
       Fr[i] = p.frame;
       R[i] = rot;
-      St[i] = stretch;
+      St[i] = 1;
+      i++;
     }
-    this.dirty = anyLive;
-    if (changed) for (const a of [this.aPos, this.aColor, this.aAlpha, this.aSize, this.aFrame, this.aRot, this.aStretch]) a.needsUpdate = true;
+    this.points.geometry.setDrawRange(0, this.count);
+    this.dirty = this.count > 0;
+    if (this.count > 0) {
+      for (const a of [this.aPos, this.aColor, this.aAlpha, this.aSize, this.aFrame, this.aRot, this.aStretch]) {
+        a.clearUpdateRanges();
+        a.addUpdateRange(0, this.count * a.itemSize);
+        a.needsUpdate = true;
+      }
+    }
   }
 
-  clear() { for (const p of this.items) p.live = false; this.dirty = true; }
+  clear() {
+    for (let i = 0; i < this.count; i++) this.items[i].live = false;
+    this.count = 0;
+    this.cursor = 0;
+    this.dirty = false;
+    this.points.geometry.setDrawRange(0, 0);
+  }
 }
 
 const tA = new THREE.Vector3(), tB = new THREE.Vector3();
 const tmpC = new THREE.Color(), tmpC2 = new THREE.Color(), WHITE = new THREE.Color(1, 1, 1);
 const hsl = {};
-let addPool = null, smokePool = null, fxScene = null, fxRenderer = null;
+let addPool = null, smokePool = null, fxScene = null, fxRenderer = null, fxRoot = null;
 
 // Phát một hạt. o: { frame, color, color2, size, size2, life, vel, grav, drag, alpha, rotV, bounce, streak, smoke, hdr, fadeIn }
 export function emit(pos, o) {
   if (!addPool) return;
+  if (++frameFx.emits > Math.round(220 * loadScale)) return;
   const p = (o.smoke ? smokePool : addPool).take();
   const hdr = o.smoke ? 1 : (o.hdr ?? 1.6);
   p.live = true;
@@ -197,7 +213,7 @@ export function emit(pos, o) {
   if (o.vel) p.vel.copy(o.vel); else p.vel.set(0, 0, 0);
   p.c0.set(o.color ?? 0xffffff).multiplyScalar(hdr);
   p.c1.set(o.color2 ?? o.color ?? 0xffffff).multiplyScalar(hdr);
-  p.life = p.maxLife = o.life ?? 0.5;
+  p.life = p.maxLife = Math.max(0.01, o.life ?? 0.5);
   p.s0 = o.size ?? 0.4;
   p.s1 = o.size2 ?? p.s0 * 0.3;
   p.a0 = o.alpha ?? 1;
@@ -218,14 +234,13 @@ function randDir(speed, up, out) {
   const s = speed * (0.4 + Math.random() * 0.8);
   return out.set(Math.cos(a) * s, up * (0.5 + Math.random()), Math.sin(a) * s);
 }
-const tmpV = new THREE.Vector3();
 const _p1 = new THREE.Vector3(), _p2 = new THREE.Vector3(), _v1 = new THREE.Vector3();
 const _expPos = new THREE.Vector3(), _sPos = new THREE.Vector3();
 
 // Nổ hạt — API cũ, giờ tự chọn kiểu: màu xám/đất → bụi khói, màu tươi → tia lửa phát sáng
 export function burst(pos, color, count = 10, opts = {}) {
-  if (++frameFx.bursts > 24) return;
-  if (frameFx.bursts > 12) count = Math.max(2, Math.round(count * 0.5));
+  if (++frameFx.bursts > 18) return;
+  if (frameFx.bursts > 9) count = Math.max(2, Math.round(count * 0.5));
   const { speed = 6, size = 0.14, life = 0.5, up = 4, gravity = 18 } = opts;
   tmpC.set(color).getHSL(hsl);
   const style = opts.style || (hsl.s < 0.3 && hsl.l < 0.85 ? 'dust' : 'spark');
@@ -243,18 +258,17 @@ export function burst(pos, color, count = 10, opts = {}) {
     emit(pos, { frame: Math.random() < 0.15 ? F.sparkle : F.glow, color: hot, color2: color, size: size * (2.4 + Math.random() * 2), size2: size * 0.6,
       life: life * (0.6 + Math.random() * 0.6), vel: randDir(speed, up, _v1), grav: gravity, drag: 1.2, bounce: true });
   }
-  // Tia lửa vệt dài
   const m = n >= 4 ? Math.ceil(n * 0.45) : 0;
   for (let i = 0; i < m; i++) {
     emit(pos, { frame: F.streak, color: hot, color2: color, size: size * 6, size2: size * 3, life: life * (0.35 + Math.random() * 0.3),
       vel: randDir(speed * 1.6, up * 0.8, _v1), grav: gravity * 0.6, drag: 2, streak: true, hdr: 2.2 });
   }
-  // Chớp sáng ở tâm
   if (count >= 8) emit(pos, { frame: F.flare, color: hot, size: size * (10 + Math.min(count, 40) * 0.35), size2: size * 4, life: 0.14, hdr: 1.8, alpha: 0.9 });
 }
 
 // Khói (blend thường, bay lên, nở to)
 export function smoke(pos, o = {}) {
+  if (++frameFx.smokes > 10) return;
   const { count = 6, color = 0x3a3430, size = 0.8, life = 1.2, speed = 1.5, rise = 1.2, alpha = 0.6 } = o;
   const n = Math.max(1, Math.round(count * density()));
   _p1.set(pos.x, pos.y, pos.z);
@@ -289,6 +303,7 @@ export function flash(pos, color = 0xffffff, size = 3, life = 0.16, light = true
 
 // Tia lửa khi đánh trúng
 export function hitSpark(pos, color, big = false) {
+  if (++frameFx.sparks > 10) return;
   const s = big ? 1.6 : 1;
   emit(pos, { frame: F.impact, color: 0xfff4d8, color2: color, size: 1.5 * s, size2: 2.4 * s, life: 0.12, hdr: 2, alpha: 0.9 });
   emit(pos, { frame: F.star, color: 0xffffff, color2: color, size: 1.6 * s, size2: 0.6 * s, life: 0.1, hdr: 2.4 });
@@ -337,42 +352,48 @@ function updateLights(dt) {
   }
 }
 
-// ---------- Hình dán trên sàn: vết cháy, vòng phép ----------
+// ---------- Hình dán trên sàn: vết cháy, vòng phép (Pool cố định trên fxRoot) ----------
 const decals = [];
+const scorchPool = [];
+const runePool = [];
+const MAX_SCORCH = 16;
+const MAX_RUNE = 8;
 const planeGeo = new THREE.PlaneGeometry(2, 2).rotateX(-Math.PI / 2);
+
 export function scorch(pos, radius = 1.5, life = 7) {
-  if (!fxScene) return;
-  const m = new THREE.Mesh(planeGeo, new THREE.MeshBasicMaterial({ color: 0x000000, alphaMap: TEX.scorch, transparent: true, opacity: 0.75, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
-  m.position.set(pos.x, 0.03 + decals.length * 0.0005, pos.z);
-  m.rotation.y = Math.random() * Math.PI * 2;
-  m.scale.setScalar(radius);
-  fxScene.add(m);
-  decals.push({ mesh: m, t: life, max: life, kind: 'scorch', base: 0.75 });
-  let count = 0;
-  for (const d of decals) if (d.kind === 'scorch') count++;
-  while (count > 16) {
+  if (!scorchPool.length) return;
+  let slot = scorchPool.find((d) => !d.active);
+  if (!slot) {
     const idx = decals.findIndex((d) => d.kind === 'scorch');
-    if (idx < 0) break;
-    removeDecal(idx);
-    count--;
+    slot = idx >= 0 ? decals.splice(idx, 1)[0] : scorchPool[0];
   }
+  slot.active = true;
+  slot.t = slot.max = life;
+  slot.mesh.position.set(pos.x, 0.03 + decals.length * 0.0005, pos.z);
+  slot.mesh.rotation.y = Math.random() * Math.PI * 2;
+  slot.mesh.scale.setScalar(radius);
+  slot.mesh.material.opacity = 0.75;
+  slot.mesh.visible = true;
+  decals.push(slot);
 }
 export function groundRune(pos, radius = 3, color = 0xffcf4a, life = 1, spin = 1.2) {
-  if (!fxScene) return;
-  const m = new THREE.Mesh(planeGeo, new THREE.MeshBasicMaterial({ map: TEX.rune, color: new THREE.Color(color).multiplyScalar(1.8), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-  m.position.set(pos.x, 0.06, pos.z);
-  m.scale.setScalar(radius);
-  fxScene.add(m);
-  decals.push({ mesh: m, t: life, max: life, kind: 'rune', spin, base: 1, follow: pos.isVector3 ? pos : null });
-  let count = 0;
-  for (const d of decals) if (d.kind === 'rune') count++;
-  while (count > 8) {
+  if (!runePool.length) return null;
+  let slot = runePool.find((d) => !d.active);
+  if (!slot) {
     const idx = decals.findIndex((d) => d.kind === 'rune');
-    if (idx < 0) break;
-    removeDecal(idx);
-    count--;
+    slot = idx >= 0 ? decals.splice(idx, 1)[0] : runePool[0];
   }
-  return m;
+  slot.active = true;
+  slot.t = slot.max = life;
+  slot.spin = spin;
+  slot.mesh.position.set(pos.x, 0.06, pos.z);
+  slot.mesh.rotation.y = 0;
+  slot.mesh.scale.setScalar(radius);
+  slot.mesh.material.color.set(color).multiplyScalar(1.8);
+  slot.mesh.material.opacity = 1;
+  slot.mesh.visible = true;
+  decals.push(slot);
+  return slot.mesh;
 }
 // Vòng phép cố định (không tự biến mất) – dùng cho bệ phần thưởng
 export function runeDecal(color, radius = 1.5) {
@@ -381,12 +402,6 @@ export function runeDecal(color, radius = 1.5) {
   m.position.y = 0.04;
   m.scale.setScalar(radius);
   return m;
-}
-function removeDecal(i) {
-  const d = decals[i];
-  d.mesh.parent?.remove(d.mesh);
-  d.mesh.material.dispose();
-  decals.splice(i, 1);
 }
 function updateDecals(dt) {
   for (let i = decals.length - 1; i >= 0; i--) {
@@ -398,11 +413,15 @@ function updateDecals(dt) {
       const grow = Math.min(1, (1 - k) * 6);
       d.mesh.material.opacity = Math.min(1, k * 3) * grow;
     } else d.mesh.material.opacity = d.base * Math.min(1, k * 2.5);
-    if (d.t <= 0) removeDecal(i);
+    if (d.t <= 0) {
+      d.mesh.visible = false;
+      d.active = false;
+      decals.splice(i, 1);
+    }
   }
 }
 
-// Sprite phát sáng gắn vào vật thể (đạn, cầu phép)
+// Sprite phát sáng gắn vào vật thể (đạn, cầu phép, đuốc)
 const glowMats = new Map();
 export function glowSprite(color, size = 1, frame = F.glow) {
   const key = color + ':' + frame;
@@ -418,21 +437,7 @@ export function glowSprite(color, size = 1, frame = F.glow) {
   return s;
 }
 
-// ---------- Khởi tạo ----------
-export function initFx(scene, renderer) {
-  fxScene = scene;
-  fxRenderer = renderer;
-  addPool = new ParticlePool(2400, THREE.AdditiveBlending, 10);
-  smokePool = new ParticlePool(600, THREE.NormalBlending, 9);
-  scene.add(smokePool.points, addPool.points);
-  for (let i = 0; i < 3; i++) {
-    const light = new THREE.PointLight(0xffffff, 0, 8, 1.6);
-    scene.add(light);
-    lights.push({ light, t: 0, max: 1, peak: 0 });
-  }
-}
-
-// ---------- Vệt chém (shader: sáng ở mép ngoài, quét từ đầu đến cuối cung) ----------
+// ---------- Vệt chém (Pool 10 slot + cache Geometry chuẩn bán kính 1) ----------
 const SLASH_VERT = /* glsl */`
 varying vec2 vUv;
 void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
@@ -450,7 +455,7 @@ void main() {
   vec3 col = mix(uColor, vec3(1.0), core * 0.75 * trail) * (1.4 + core * 1.6);
   gl_FragColor = vec4(clamp(col, 0.0, 8.0), clamp(a, 0.0, 1.0));
 }`;
-function arcGeometry(r0, r1, start, arc, seg = 32) {
+function arcGeometry(r0, r1, start, arc, seg = 24) {
   const pos = [], uv = [], idx = [];
   for (let i = 0; i <= seg; i++) {
     const u = i / seg, th = start + arc * u;
@@ -466,30 +471,47 @@ function arcGeometry(r0, r1, start, arc, seg = 32) {
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   g.setIndex(idx);
   g.rotateX(-Math.PI / 2);
+  g.userData.shared = true;
   return g;
 }
-const slashes = [];
-const MAX_SLASHES = 10;
-export function spawnSlash(scene, pos, facing, arc, radius, color, flip) {
-  while (slashes.length >= MAX_SLASHES) {
-    const old = slashes.shift();
-    old.mesh.parent?.remove(old.mesh);
-    old.mesh.geometry.dispose();
-    old.mesh.material.dispose();
+const slashGeoCache = new Map();
+function getSlashGeo(arc) {
+  const q = Math.round(arc * 10);
+  if (!slashGeoCache.has(q)) {
+    const a = q / 10;
+    slashGeoCache.set(q, arcGeometry(0.3, 1.02, -Math.PI / 2 - a / 2, a));
   }
-  const geo = arcGeometry(radius * 0.3, radius * 1.02, -Math.PI / 2 - arc / 2, arc);
-  const mat = new THREE.ShaderMaterial({
-    uniforms: { uColor: { value: new THREE.Color(color) }, uHead: { value: 0 }, uFade: { value: 1 } },
-    vertexShader: SLASH_VERT, fragmentShader: SLASH_FRAG,
-    transparent: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
-  });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set(pos.x, 0.85, pos.z);
-  mesh.rotation.y = facing;
-  if (flip) mesh.scale.x = -1;
-  mesh.renderOrder = 11;
-  scene.add(mesh);
-  slashes.push({ mesh, life: 0.22, maxLife: 0.22, color, radius, arc, facing, flip, sparked: false });
+  return slashGeoCache.get(q);
+}
+const slashes = [];
+const slashPool = [];
+const MAX_SLASHES = 10;
+
+export function spawnSlash(scene, pos, facing, arc, radius, color, flip) {
+  if (!slashPool.length) return;
+  let slot = slashPool.find((s) => !s.active);
+  if (!slot) {
+    slot = slashes.shift();
+    if (!slot) slot = slashPool[0];
+  }
+  slot.active = true;
+  slot.life = slot.maxLife = 0.22;
+  slot.color = color;
+  slot.radius = radius;
+  slot.arc = arc;
+  slot.facing = facing;
+  slot.flip = !!flip;
+  slot.sparked = false;
+  slot.mesh.geometry = getSlashGeo(arc);
+  const u = slot.mesh.material.uniforms;
+  u.uColor.value.set(color);
+  u.uHead.value = 0;
+  u.uFade.value = 1;
+  slot.mesh.position.set(pos.x, 0.85, pos.z);
+  slot.mesh.rotation.y = facing;
+  slot.mesh.scale.set((flip ? -1 : 1) * radius, 1, radius);
+  slot.mesh.visible = true;
+  slashes.push(slot);
 }
 
 function updateSlashes(dt) {
@@ -498,11 +520,10 @@ function updateSlashes(dt) {
     s.life -= dt;
     const t = 1 - Math.max(0, s.life / s.maxLife);
     const u = s.mesh.material.uniforms;
-    u.uHead.value = Math.min(1.6, t * 3.2);                  // quét nhanh trong ~1/3 đầu
+    u.uHead.value = Math.min(1.6, t * 3.2);
     u.uFade.value = t < 0.45 ? 1 : Math.max(0, 1 - (t - 0.45) / 0.55);
-    const sc = 1 + t * 0.12;
-    s.mesh.scale.set(Math.sign(s.mesh.scale.x) * sc, 1, sc);
-    // Tia lửa văng ra ở đầu lưỡi chém khi quét xong
+    const sc = s.radius * (1 + t * 0.12);
+    s.mesh.scale.set((s.flip ? -1 : 1) * sc, 1, sc);
     if (!s.sparked && t > 0.3) {
       s.sparked = true;
       const side = s.flip ? -1 : 1;
@@ -511,123 +532,142 @@ function updateSlashes(dt) {
       for (let k = 0; k < 3; k++) emit(_p1, { frame: F.streak, color: 0xffffff, color2: s.color, size: 0.5, size2: 0.2, life: 0.15, vel: randDir(8, 2, _v1), drag: 4, streak: true, hdr: 2 });
     }
     if (s.life <= 0) {
-      s.mesh.parent?.remove(s.mesh);
-      s.mesh.geometry.dispose();
-      s.mesh.material.dispose();
+      s.mesh.visible = false;
+      s.active = false;
       slashes.splice(i, 1);
     }
   }
 }
 
-// ---------- Sóng xung kích (texture vòng tròn) ----------
+// ---------- Sóng xung kích (Pool 20 slot cố định trên fxRoot) ----------
 const rings = [];
-export function spawnRing(scene, pos, radius, color, life = 0.35) {
-  scene = scene || fxScene;
-  if (!scene || ++frameFx.rings > 8) return;
-  const maxRings = fxQuality.high ? 20 : 10;
-  while (rings.length >= maxRings) {
-    const old = rings.shift();
-    old.mesh.parent?.remove(old.mesh); old.mesh.material.dispose();
-    old.glow.parent?.remove(old.glow); old.glow.material.dispose();
-  }
-  const mat = new THREE.MeshBasicMaterial({ map: TEX.ring, color: new THREE.Color(color).multiplyScalar(2), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
-  const mesh = new THREE.Mesh(planeGeo, mat);
-  mesh.position.set(pos.x, 0.08, pos.z);
-  mesh.renderOrder = 8;
-  scene.add(mesh);
-  // Quầng sáng dưới sàn
-  const glowMat = new THREE.MeshBasicMaterial({ map: glowTex(), color: new THREE.Color(color).multiplyScalar(0.9), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
-  const glow = new THREE.Mesh(planeGeo, glowMat);
-  glow.position.set(pos.x, 0.07, pos.z);
-  scene.add(glow);
-  rings.push({ mesh, glow, radius: radius / 0.86, life, maxLife: life });
-}
+const ringPool = [];
+const MAX_RINGS = 20;
 let _glowTex = null;
 function glowTex() {
   if (!_glowTex) { _glowTex = TEX.atlas.clone(); _glowTex.repeat.set(0.24, 0.24); _glowTex.offset.set(0.005, 0.755); _glowTex.needsUpdate = true; }
   return _glowTex;
 }
 
-// ---------- Tia sét (dải chữ thập 3D nhẹ + nhánh, không dùng TubeGeometry) ----------
+export function spawnRing(scene, pos, radius, color, life = 0.35) {
+  if (!ringPool.length || ++frameFx.rings > 6) return;
+  const maxRings = fxQuality.high ? MAX_RINGS : 10;
+  let slot = rings.length < maxRings ? ringPool.find((r) => !r.active) : null;
+  if (!slot) {
+    slot = rings.shift();
+    if (!slot) slot = ringPool[0];
+  }
+  slot.active = true;
+  slot.radius = radius / 0.86;
+  slot.life = slot.maxLife = life;
+  slot.mesh.material.color.set(color).multiplyScalar(2);
+  slot.mesh.material.opacity = 1;
+  slot.mesh.position.set(pos.x, 0.08, pos.z);
+  slot.mesh.scale.setScalar(slot.radius * 0.15);
+  slot.mesh.visible = true;
+  slot.glow.material.color.set(color).multiplyScalar(0.9);
+  slot.glow.material.opacity = 0.8;
+  slot.glow.position.set(pos.x, 0.07, pos.z);
+  slot.glow.scale.setScalar(slot.radius * 0.3);
+  slot.glow.visible = true;
+  rings.push(slot);
+}
+
+// ---------- Tia sét (Pool 14 slot buffer tĩnh không tạo mới/hủy Geometry) ----------
 const bolts = [];
-function jagged(a, b, seg, jitter) {
-  const pts = [];
+const boltPool = [];
+const MAX_BOLTS = 14;
+const MAX_BOLT_VERTS = 128;
+const BOLT_INDEX = (() => {
+  const arr = [];
+  for (let b = 0; b < MAX_BOLT_VERTS; b += 4) arr.push(b, b + 1, b + 2, b, b + 2, b + 3);
+  return arr;
+})();
+const _ptsMain = Array.from({ length: 9 }, () => ({ x: 0, y: 0, z: 0 }));
+const _ptsBranch = Array.from({ length: 4 }, () => ({ x: 0, y: 0, z: 0 }));
+
+function fillJagged(out, a, b, seg, jitter) {
   for (let i = 0; i <= seg; i++) {
     const u = i / seg;
     let x = a.x + (b.x - a.x) * u;
     let y = a.y + (b.y - a.y) * u;
     let z = a.z + (b.z - a.z) * u;
     if (i > 0 && i < seg) { x += rv(jitter); y += rv(jitter * 0.5); z += rv(jitter); }
-    pts.push({ x, y, z });
+    out[i].x = x; out[i].y = y; out[i].z = z;
   }
-  return pts;
+  return seg + 1;
 }
-function boltRibbonGeo(polylines, halfW) {
-  const pos = [];
-  const idx = [];
-  let base = 0;
-  for (const pts of polylines) {
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i], b = pts[i + 1];
-      const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
-      const len = Math.hypot(dx, dy, dz) || 1;
-      const ux = dx / len, uy = dy / len, uz = dz / len;
-      let rx = 0, ry = 1, rz = 0;
-      if (Math.abs(uy) > 0.9) { rx = 1; ry = 0; }
-      let s1x = uy * rz - uz * ry, s1y = uz * rx - ux * rz, s1z = ux * ry - uy * rx;
-      const l1 = Math.hypot(s1x, s1y, s1z) || 1;
-      s1x /= l1; s1y /= l1; s1z /= l1;
-      let s2x = uy * s1z - uz * s1y, s2y = uz * s1x - ux * s1z, s2z = ux * s1y - uy * s1x;
-      const l2 = Math.hypot(s2x, s2y, s2z) || 1;
-      s2x /= l2; s2y /= l2; s2z /= l2;
-      for (const [sx, sy, sz] of [[s1x * halfW, s1y * halfW, s1z * halfW], [s2x * halfW, s2y * halfW, s2z * halfW]]) {
-        pos.push(
-          a.x - sx, a.y - sy, a.z - sz,
-          a.x + sx, a.y + sy, a.z + sz,
-          b.x + sx, b.y + sy, b.z + sz,
-          b.x - sx, b.y - sy, b.z - sz,
-        );
-        idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
-        base += 4;
-      }
+
+function appendBoltSegments(posArr, offset, pts, ptCount, halfW) {
+  for (let i = 0; i < ptCount - 1; i++) {
+    if (offset + 24 > posArr.length) break;
+    const a = pts[i], b = pts[i + 1];
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    const len = Math.hypot(dx, dy, dz) || 1;
+    const ux = dx / len, uy = dy / len, uz = dz / len;
+    let rx = 0, ry = 1, rz = 0;
+    if (Math.abs(uy) > 0.9) { rx = 1; ry = 0; }
+    let s1x = uy * rz - uz * ry, s1y = uz * rx - ux * rz, s1z = ux * ry - uy * rx;
+    const l1 = Math.hypot(s1x, s1y, s1z) || 1;
+    s1x /= l1; s1y /= l1; s1z /= l1;
+    let s2x = uy * s1z - uz * s1y, s2y = uz * s1x - ux * s1z, s2z = ux * s1y - uy * s1x;
+    const l2 = Math.hypot(s2x, s2y, s2z) || 1;
+    s2x /= l2; s2y /= l2; s2z /= l2;
+    for (const [sx, sy, sz] of [[s1x * halfW, s1y * halfW, s1z * halfW], [s2x * halfW, s2y * halfW, s2z * halfW]]) {
+      if (offset + 12 > posArr.length) break;
+      posArr[offset++] = a.x - sx; posArr[offset++] = a.y - sy; posArr[offset++] = a.z - sz;
+      posArr[offset++] = a.x + sx; posArr[offset++] = a.y + sy; posArr[offset++] = a.z + sz;
+      posArr[offset++] = b.x + sx; posArr[offset++] = b.y + sy; posArr[offset++] = b.z + sz;
+      posArr[offset++] = b.x - sx; posArr[offset++] = b.y - sy; posArr[offset++] = b.z - sz;
     }
   }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setIndex(idx);
-  return g;
+  return offset;
 }
+
 export function spawnBolt(scene, a, b, color) {
-  scene = scene || fxScene;
-  if (!scene) return;
-  if (++frameFx.bolts > 8) {
+  if (!boltPool.length) return;
+  if (++frameFx.bolts > 6) {
     emit(b, { frame: F.elec, color, size: 1.5, size2: 2.0, life: 0.14, hdr: 2 });
     return;
   }
-  const maxBolts = fxQuality.high ? 14 : 8;
-  while (bolts.length >= maxBolts) {
-    const old = bolts.shift();
-    old.group.parent?.remove(old.group);
-    old.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  const maxBolts = fxQuality.high ? MAX_BOLTS : 8;
+  let slot = bolts.length < maxBolts ? boltPool.find((bl) => !bl.active) : null;
+  if (!slot) {
+    slot = bolts.shift();
+    if (!slot) slot = boltPool[0];
   }
   const len = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
   const seg = Math.min(7, Math.max(4, Math.round(len * 0.9)));
-  const pts = jagged(a, b, seg, Math.min(0.9, 0.25 + len * 0.05));
-  const glowPolys = [pts];
-  if (len > 2 && pts.length > 2) {
-    const k = 1 + Math.floor(Math.random() * (pts.length - 2));
-    const end = { x: pts[k].x + rv(len * 0.25), y: pts[k].y - len * 0.1, z: pts[k].z + rv(len * 0.25) };
-    glowPolys.push(jagged(pts[k], end, 2, 0.25));
+  const mainN = fillJagged(_ptsMain, a, b, seg, Math.min(0.9, 0.25 + len * 0.05));
+
+  const coreArr = slot.corePos.array;
+  const coreFloats = appendBoltSegments(coreArr, 0, _ptsMain, mainN, 0.045);
+  slot.corePos.clearUpdateRanges();
+  slot.corePos.addUpdateRange(0, coreFloats);
+  slot.corePos.needsUpdate = true;
+  slot.coreGeo.setDrawRange(0, (coreFloats / 12) * 6);
+
+  const glowArr = slot.glowPos.array;
+  let glowFloats = appendBoltSegments(glowArr, 0, _ptsMain, mainN, 0.16);
+  if (len > 2 && mainN > 2) {
+    const k = 1 + Math.floor(Math.random() * (mainN - 2));
+    const end = { x: _ptsMain[k].x + rv(len * 0.25), y: _ptsMain[k].y - len * 0.1, z: _ptsMain[k].z + rv(len * 0.25) };
+    const brN = fillJagged(_ptsBranch, _ptsMain[k], end, 2, 0.25);
+    glowFloats = appendBoltSegments(glowArr, glowFloats, _ptsBranch, brN, 0.16);
   }
-  const group = new THREE.Group();
-  const mk = (geo, c, op) => new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
-    color: new THREE.Color(c).multiplyScalar(2.2), transparent: true, opacity: op,
-    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
-  }));
-  group.add(mk(boltRibbonGeo([pts], 0.045), 0xffffff, 1));
-  group.add(mk(boltRibbonGeo(glowPolys, 0.16), color, 0.45));
-  scene.add(group);
-  bolts.push({ group, life: 0.22, max: 0.22 });
+  slot.glowPos.clearUpdateRanges();
+  slot.glowPos.addUpdateRange(0, glowFloats);
+  slot.glowPos.needsUpdate = true;
+  slot.glowGeo.setDrawRange(0, (glowFloats / 12) * 6);
+
+  slot.glowMat.color.set(color).multiplyScalar(2.2);
+  slot.coreMat.opacity = 1;
+  slot.glowMat.opacity = 0.45;
+  slot.active = true;
+  slot.life = slot.max = 0.22;
+  slot.group.visible = true;
+  bolts.push(slot);
+
   emit(b, { frame: F.elec, color, size: 1.8, size2: 2.4, life: 0.18, hdr: 2 });
   emit(b, { frame: F.flare, color: 0xffffff, color2: color, size: 2.2, life: 0.12, hdr: 2 });
   lightPulse(b, color, 30, 7, 0.2);
@@ -638,14 +678,15 @@ function updateRingsAndBolts(dt) {
     const r = rings[i];
     r.life -= dt;
     const t = Math.max(0, r.life / r.maxLife);
-    const e = 1 - Math.pow(t, 2.2);                           // nở nhanh rồi chậm lại
+    const e = 1 - Math.pow(t, 2.2);
     r.mesh.scale.setScalar(r.radius * (0.15 + e * 0.95));
     r.mesh.material.opacity = Math.min(1, t * 1.6);
     r.glow.scale.setScalar(r.radius * 0.9 * (0.3 + e * 0.7));
     r.glow.material.opacity = t * t * 0.8;
     if (r.life <= 0) {
-      r.mesh.parent?.remove(r.mesh); r.mesh.material.dispose();
-      r.glow.parent?.remove(r.glow); r.glow.material.dispose();
+      r.mesh.visible = false;
+      r.glow.visible = false;
+      r.active = false;
       rings.splice(i, 1);
     }
   }
@@ -654,12 +695,113 @@ function updateRingsAndBolts(dt) {
     b.life -= dt;
     const k = Math.max(0, b.life / b.max);
     const flick = 0.6 + Math.random() * 0.4;
-    b.group.children.forEach((m, j) => { m.material.opacity = (j === 1 ? 0.45 : 1) * k * flick; });
+    b.coreMat.opacity = k * flick;
+    b.glowMat.opacity = 0.45 * k * flick;
     if (b.life <= 0) {
-      b.group.parent?.remove(b.group);
-      b.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+      b.group.visible = false;
+      b.active = false;
       bolts.splice(i, 1);
     }
+  }
+}
+
+// ---------- Khởi tạo & dọn toàn bộ FX Pool vào một fxRoot duy nhất ----------
+export function initFx(scene, renderer) {
+  fxScene = scene;
+  fxRenderer = renderer;
+  if (fxRoot?.parent) fxRoot.parent.remove(fxRoot);
+  for (let i = scene.children.length - 1; i >= 0; i--) {
+    const c = scene.children[i];
+    if (c.userData?.isFxRoot || c.userData?.isFxLight) scene.remove(c);
+  }
+  rings.length = 0; ringPool.length = 0;
+  slashes.length = 0; slashPool.length = 0;
+  bolts.length = 0; boltPool.length = 0;
+  decals.length = 0; scorchPool.length = 0; runePool.length = 0;
+  lights.length = 0;
+
+  fxRoot = new THREE.Group();
+  fxRoot.userData.isFxRoot = true;
+  addPool = new ParticlePool(1200, THREE.AdditiveBlending, 10);
+  smokePool = new ParticlePool(320, THREE.NormalBlending, 9);
+  fxRoot.add(smokePool.points, addPool.points);
+
+  for (let i = 0; i < MAX_RINGS; i++) {
+    const mat = new THREE.MeshBasicMaterial({ map: TEX.ring, color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    const mesh = new THREE.Mesh(planeGeo, mat);
+    mesh.renderOrder = 8; mesh.visible = false;
+    const glowMat = new THREE.MeshBasicMaterial({ map: glowTex(), color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    const glow = new THREE.Mesh(planeGeo, glowMat);
+    glow.visible = false;
+    fxRoot.add(mesh, glow);
+    ringPool.push({ mesh, glow, active: false, radius: 1, life: 0, maxLife: 0.35 });
+  }
+
+  const baseSlashMat = new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(0xffffff) }, uHead: { value: 0 }, uFade: { value: 1 } },
+    vertexShader: SLASH_VERT, fragmentShader: SLASH_FRAG,
+    transparent: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  for (let i = 0; i < MAX_SLASHES; i++) {
+    const mesh = new THREE.Mesh(getSlashGeo(2.0), baseSlashMat.clone());
+    mesh.renderOrder = 11; mesh.visible = false;
+    fxRoot.add(mesh);
+    slashPool.push({ mesh, active: false, life: 0, maxLife: 0.22, color: 0xffffff, radius: 1, arc: 2.0, facing: 0, flip: false, sparked: false });
+  }
+
+  for (let i = 0; i < MAX_BOLTS; i++) {
+    const coreGeo = new THREE.BufferGeometry();
+    const corePos = new THREE.BufferAttribute(new Float32Array(MAX_BOLT_VERTS * 3), 3);
+    corePos.setUsage(THREE.DynamicDrawUsage);
+    coreGeo.setAttribute('position', corePos);
+    coreGeo.setIndex(BOLT_INDEX);
+    coreGeo.setDrawRange(0, 0);
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(0xffffff).multiplyScalar(2.2), transparent: true, opacity: 1,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    });
+    const coreMesh = new THREE.Mesh(coreGeo, coreMat);
+    coreMesh.frustumCulled = false;
+
+    const glowGeo = new THREE.BufferGeometry();
+    const glowPos = new THREE.BufferAttribute(new Float32Array(MAX_BOLT_VERTS * 3), 3);
+    glowPos.setUsage(THREE.DynamicDrawUsage);
+    glowGeo.setAttribute('position', glowPos);
+    glowGeo.setIndex(BOLT_INDEX);
+    glowGeo.setDrawRange(0, 0);
+    const glowMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff, transparent: true, opacity: 0.45,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    });
+    const glowMesh = new THREE.Mesh(glowGeo, glowMat);
+    glowMesh.frustumCulled = false;
+
+    const group = new THREE.Group();
+    group.add(coreMesh, glowMesh);
+    group.visible = false;
+    fxRoot.add(group);
+    boltPool.push({ group, coreGeo, glowGeo, corePos, glowPos, coreMat, glowMat, active: false, life: 0, max: 0.22 });
+  }
+
+  for (let i = 0; i < MAX_SCORCH; i++) {
+    const m = new THREE.Mesh(planeGeo, new THREE.MeshBasicMaterial({ color: 0x000000, alphaMap: TEX.scorch, transparent: true, opacity: 0.75, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
+    m.visible = false;
+    fxRoot.add(m);
+    scorchPool.push({ mesh: m, t: 0, max: 7, kind: 'scorch', spin: 0, base: 0.75, active: false });
+  }
+  for (let i = 0; i < MAX_RUNE; i++) {
+    const m = new THREE.Mesh(planeGeo, new THREE.MeshBasicMaterial({ map: TEX.rune, color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+    m.visible = false;
+    fxRoot.add(m);
+    runePool.push({ mesh: m, t: 0, max: 1, kind: 'rune', spin: 1.2, base: 1, active: false });
+  }
+
+  scene.add(fxRoot);
+  for (let i = 0; i < 3; i++) {
+    const light = new THREE.PointLight(0xffffff, 0, 8, 1.6);
+    light.userData.isFxLight = true;
+    scene.add(light);
+    lights.push({ light, t: 0, max: 1, peak: 0 });
   }
 }
 
@@ -677,7 +819,6 @@ export function statusFx(e, dt) {
   if (e.poisonStacks > 0 && Math.random() < dt * (4 + e.poisonStacks * 2) * d) {
     emit(_sPos.set(e.pos.x + rv(0.4 * h), 0.4 + Math.random() * 0.8 * h, e.pos.z + rv(0.4 * h)), { frame: F.glow, color: 0xbfff7a, color2: 0x3a8a10, size: 0.35, size2: 0.05, life: 0.7, vel: _v1.set(0, 0.9, 0) });
   }
-  // Boss nổi giận: hào quang đỏ bốc lên
   if (e.phase > 0 && Math.random() < dt * 14 * d) {
     emit(_sPos.set(e.pos.x + rv(0.8), 0.2, e.pos.z + rv(0.8)), { frame: F.flame, color: 0xff6a4a, color2: 0x8a0010, size: 1.1, size2: 0.2, life: 0.6, vel: _v1.set(0, 2.5, 0), alpha: 0.6, hdr: 1.3, fadeIn: 0.2 });
   }
@@ -686,81 +827,126 @@ export function statusFx(e, dt) {
   }
 }
 
-// ---------- Vùng cảnh báo đòn đánh của quái (phân màu theo Tam Giác Phản Phá) ----------
-// shape: 'circle' (radius) | 'sector' (radius, arc, facing) | 'rect' (width, length, facing)
-// kind: 'normal' (đỏ cam) | 'pierce' (đỏ-trắng: Lướt VÀO để Phản Xuyên) | 'interrupt' (tím: Kỹ năng/Đòn nặng để Cắt Chiêu)
+// ---------- Vùng cảnh báo đòn đánh của quái (Dùng chung Geometry chuẩn hóa) ----------
+const unitCircleGeo = new THREE.CircleGeometry(1, 32).rotateX(-Math.PI / 2);
+unitCircleGeo.userData.shared = true;
+const unitCircleEdgeGeo = new THREE.RingGeometry(0.92, 1, 36).rotateX(-Math.PI / 2);
+unitCircleEdgeGeo.userData.shared = true;
+const unitRectGeo = new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0).rotateX(-Math.PI / 2);
+unitRectGeo.scale(1, 1, -1);
+unitRectGeo.userData.shared = true;
+const unitRectEdgeGeo = new THREE.EdgesGeometry(unitRectGeo);
+unitRectEdgeGeo.userData.shared = true;
+const unitHexGeo = new THREE.RingGeometry(0.55, 0.68, 6).rotateX(-Math.PI / 2);
+unitHexGeo.userData.shared = true;
+const unitTriGeo = new THREE.RingGeometry(0.45, 0.7, 3).rotateX(-Math.PI / 2);
+unitTriGeo.userData.shared = true;
+const sectorGeoCache = new Map();
+function getSectorGeos(arc) {
+  const q = Math.round(arc * 20);
+  if (!sectorGeoCache.has(q)) {
+    const a = q / 20;
+    const start = -Math.PI / 2 - a / 2;
+    const fill = new THREE.CircleGeometry(1, 32, start, a).rotateX(-Math.PI / 2);
+    const edge = new THREE.RingGeometry(0.92, 1, 36, 1, start, a).rotateX(-Math.PI / 2);
+    fill.userData.shared = true;
+    edge.userData.shared = true;
+    sectorGeoCache.set(q, { fill, edge });
+  }
+  return sectorGeoCache.get(q);
+}
+const teleMatCache = new Map();
+function getTeleMat(col, opacity) {
+  const key = col + ':' + opacity.toFixed(2);
+  if (!teleMatCache.has(key)) {
+    const m = new THREE.MeshBasicMaterial({
+      color: col, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+    });
+    m.userData.shared = true;
+    teleMatCache.set(key, m);
+  }
+  return teleMatCache.get(key);
+}
+
 const telegraphs = [];
-const MAX_TELEGRAPHS = 28;
+const MAX_TELEGRAPHS = 24;
 export function spawnTelegraph(scene, opts) {
+  scene = scene || fxScene;
   while (telegraphs.length >= MAX_TELEGRAPHS) {
     const old = telegraphs.shift();
     old.group.parent?.remove(old.group);
-    old.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+    old.group.traverse((o) => {
+      if (o.geometry && !o.geometry.userData?.shared) o.geometry.dispose();
+      if (o.material && !o.material.userData?.shared) o.material.dispose();
+    });
   }
   const { shape = 'circle', pos, radius = 2, arc = 1.6, facing = 0, width = 1.5, length = 8, duration = 0.8, kind = 'normal' } = opts;
   const color = opts.color ?? (kind === 'pierce' ? 0xff2850 : kind === 'interrupt' ? 0xc050ff : 0xff3020);
   const lavaHi = fxBiome === 'lava' && kind === 'normal';
   const edgeCol = kind === 'pierce' ? (shape === 'rect' ? 0xffffff : 0xffeef2) : kind === 'interrupt' ? 0xe8a8ff : lavaHi ? 0xfff2a8 : color;
   const group = new THREE.Group();
-  const mk = (geo, opacity, col = color) => new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
-    color: col, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
-  }));
+  const baseOp = lavaHi ? 0.22 : 0.16;
+  const fillOp = lavaHi ? 0.42 : 0.34;
   let base, fill, edge;
   if (shape === 'rect') {
-    const g = new THREE.PlaneGeometry(width, length).translate(0, length / 2, 0);
-    g.rotateX(-Math.PI / 2);
-    g.scale(1, 1, -1);                               // kéo dài theo +Z
-    base = mk(g, lavaHi ? 0.22 : 0.16); fill = mk(g.clone(), lavaHi ? 0.42 : 0.34);
-    edge = new THREE.LineSegments(new THREE.EdgesGeometry(g), new THREE.LineBasicMaterial({ color: edgeCol, transparent: true, opacity: 0.95 }));
+    base = new THREE.Mesh(unitRectGeo, getTeleMat(color, baseOp));
+    fill = new THREE.Mesh(unitRectGeo, getTeleMat(color, fillOp));
+    base.scale.set(width, 1, length);
+    fill.scale.set(width, 1, 0.01);
+    edge = new THREE.LineSegments(unitRectEdgeGeo, new THREE.LineBasicMaterial({ color: edgeCol, transparent: true, opacity: 0.95 }));
+    edge.scale.set(width, 1, length);
   } else {
-    const start = shape === 'sector' ? -Math.PI / 2 - arc / 2 : 0;
-    const len = shape === 'sector' ? arc : Math.PI * 2;
-    const g = new THREE.CircleGeometry(radius, 40, start, len);
-    g.rotateX(-Math.PI / 2);
-    base = mk(g, lavaHi ? 0.22 : 0.16); fill = mk(g.clone(), lavaHi ? 0.42 : 0.34);
-    const ring = new THREE.RingGeometry(radius * (lavaHi ? 0.90 : 0.93), radius, 48, 1, start, len);
-    ring.rotateX(-Math.PI / 2);
-    edge = mk(ring, 0.95, edgeCol);
+    let fGeo = unitCircleGeo, eGeo = unitCircleEdgeGeo;
+    if (shape === 'sector') { const sg = getSectorGeos(arc); fGeo = sg.fill; eGeo = sg.edge; }
+    base = new THREE.Mesh(fGeo, getTeleMat(color, baseOp));
+    fill = new THREE.Mesh(fGeo, getTeleMat(color, fillOp));
+    base.scale.setScalar(radius);
+    fill.scale.setScalar(0.01);
+    edge = new THREE.Mesh(eGeo, new THREE.MeshBasicMaterial({
+      color: edgeCol, transparent: true, opacity: 0.95, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+    }));
+    edge.scale.setScalar(radius);
   }
   group.add(base, fill, edge);
-  // Dấu hiệu phụ trực quan cho đòn Phản Xuyên (viền trắng chói) và Cắt Chiêu (vòng cổ ngữ tím xoay)
   if (kind === 'interrupt') {
     const r = shape === 'rect' ? Math.max(1.2, width * 0.8) : Math.min(radius, 3.2);
-    const rune = mk(new THREE.RingGeometry(r * 0.55, r * 0.68, 6).rotateX(-Math.PI / 2), 0.75, 0xf0c0ff);
+    const rune = new THREE.Mesh(unitHexGeo, getTeleMat(0xf0c0ff, 0.75));
+    rune.scale.setScalar(r);
     rune.position.y = 0.02;
     group.add(rune);
     group.userData.spin = rune;
   } else if (kind === 'pierce') {
-    const chev = mk(new THREE.RingGeometry(0.45, 0.7, 3).rotateX(-Math.PI / 2), 0.9, 0xffffff);
+    const chev = new THREE.Mesh(unitTriGeo, getTeleMat(0xffffff, 0.9));
     chev.position.set(0, 0.02, shape === 'rect' ? Math.min(2.2, length * 0.3) : 0);
     group.add(chev);
     group.userData.pulse = chev;
   }
   group.position.set(pos.x, 0.06, pos.z);
   group.rotation.y = facing;
-  fill.scale.setScalar(0.01);
   scene.add(group);
-  const t = { group, fill, edge, shape, kind, t: 0, duration, done: false };
+  const t = { group, fill, edge, shape, radius, width, length, kind, t: 0, duration, done: false };
   telegraphs.push(t);
   return t;
 }
 
-export function removeTelegraph(t) { t.done = true; }
+export function removeTelegraph(t) { if (t) t.done = true; }
 
 function updateTelegraphs(dt) {
   for (let i = telegraphs.length - 1; i >= 0; i--) {
     const t = telegraphs[i];
     t.t += dt;
     const k = Math.min(1, t.t / t.duration);
-    if (t.shape === 'rect') t.fill.scale.set(1, 1, Math.max(0.01, k));
-    else t.fill.scale.setScalar(Math.max(0.01, k));
+    if (t.shape === 'rect') t.fill.scale.set(t.width, 1, Math.max(0.01, k * t.length));
+    else t.fill.scale.setScalar(Math.max(0.01, k * t.radius));
     if (t.group.userData.spin) t.group.userData.spin.rotation.y += dt * 4.5;
     if (t.group.userData.pulse) t.group.userData.pulse.scale.setScalar(0.9 + Math.sin(t.t * 28) * 0.25);
-    // Nhấp nháy mép khi sắp đánh
     if (k > 0.65 || t.kind !== 'normal') t.edge.material.opacity = 0.55 + Math.sin(t.t * 42) * 0.45;
     if (k >= 1 || t.done) {
       t.group.parent?.remove(t.group);
-      t.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+      t.group.traverse((o) => {
+        if (o.geometry && !o.geometry.userData?.shared) o.geometry.dispose();
+        if (o.material && !o.material.userData?.shared) o.material.dispose();
+      });
       telegraphs.splice(i, 1);
     }
   }
@@ -815,12 +1001,14 @@ function updateDamageNumbers(dt, camera) {
     d.life -= dt;
     d.vy -= 5 * dt;
     d.y += d.vy * dt;
-    tmpP.set(d.x, d.y, d.z).project(camera);
-    const x = (tmpP.x * 0.5 + 0.5) * innerWidth;
-    const y = (-tmpP.y * 0.5 + 0.5) * innerHeight;
-    const pop = d.life > 0.65 ? 1 + (d.life - 0.65) * 4 : 1;
-    d.el.style.opacity = Math.min(1, d.life * 3);
-    d.el.style.transform = `translate3d(${x.toFixed(1)}px,${y.toFixed(1)}px,0) translate(-50%,-50%) scale(${pop.toFixed(2)})`;
+    if (camera) {
+      tmpP.set(d.x, d.y, d.z).project(camera);
+      const x = (tmpP.x * 0.5 + 0.5) * innerWidth;
+      const y = (-tmpP.y * 0.5 + 0.5) * innerHeight;
+      const pop = d.life > 0.65 ? 1 + (d.life - 0.65) * 4 : 1;
+      d.el.style.opacity = Math.min(1, d.life * 3);
+      d.el.style.transform = `translate3d(${x.toFixed(1)}px,${y.toFixed(1)}px,0) translate(-50%,-50%) scale(${pop.toFixed(2)})`;
+    }
     if (d.life <= 0) {
       d.el.style.display = 'none';
       if (dmgPool.length < MAX_DMG_NUMS) dmgPool.push(d.el);
@@ -840,18 +1028,19 @@ export function clearFx() {
     else d.el.remove();
   }
   lastReactAt.clear();
-  for (const s of slashes) { s.mesh.parent?.remove(s.mesh); s.mesh.geometry.dispose(); s.mesh.material.dispose(); }
+  for (const s of slashes) { s.mesh.visible = false; s.active = false; }
   slashes.length = 0;
-  for (const r of rings) { r.mesh.parent?.remove(r.mesh); r.mesh.material.dispose(); r.glow.parent?.remove(r.glow); r.glow.material.dispose(); }
+  for (const r of rings) { r.mesh.visible = false; r.glow.visible = false; r.active = false; }
   rings.length = 0;
-  for (const b of bolts) { b.group.parent?.remove(b.group); b.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); }); }
+  for (const b of bolts) { b.group.visible = false; b.active = false; }
   bolts.length = 0;
   addPool?.clear();
   smokePool?.clear();
-  while (decals.length) removeDecal(decals.length - 1);
+  for (const d of decals) { d.mesh.visible = false; d.active = false; }
+  decals.length = 0;
   for (const L of lights) L.t = 0;
   hitStop.time = 0; hitStop.cd = 0;
-  frameFx.explosions = 0; frameFx.bursts = 0; frameFx.bolts = 0; frameFx.rings = 0;
+  frameFx.explosions = 0; frameFx.bursts = 0; frameFx.bolts = 0; frameFx.rings = 0; frameFx.emits = 0; frameFx.sparks = 0; frameFx.smokes = 0;
 }
 
 export const fxStats = () => ({
@@ -863,6 +1052,7 @@ export const fxStats = () => ({
   telegraphs: telegraphs.length,
   decals: decals.length,
   loadScale,
+  autoLowBloom,
 });
 
 // Cập nhật toàn bộ hiệu ứng. `dt` là thời gian game (bị đóng băng khi hit stop),
@@ -872,8 +1062,12 @@ export function updateFx(dt, realDt, camera) {
   if (realDt > 0) {
     smoothDt = smoothDt * 0.9 + Math.min(realDt, 0.1) * 0.1;
     loadScale = smoothDt <= 0.022 ? 1 : Math.max(0.35, 1 - (smoothDt - 0.022) / 0.03 * 0.65);
+    if (smoothDt > 0.042) _lagT = Math.min(1.0, _lagT + realDt);
+    else if (smoothDt < 0.026) _lagT = Math.max(0, _lagT - realDt * 0.5);
+    if (!autoLowBloom && _lagT > 0.45) autoLowBloom = true;
+    else if (autoLowBloom && _lagT <= 0) autoLowBloom = false;
   }
-  frameFx.explosions = 0; frameFx.bursts = 0; frameFx.bolts = 0; frameFx.rings = 0;
+  frameFx.explosions = 0; frameFx.bursts = 0; frameFx.bolts = 0; frameFx.rings = 0; frameFx.emits = 0; frameFx.sparks = 0; frameFx.smokes = 0;
   const viewH = fxRenderer ? fxRenderer.domElement.height : innerHeight;
   addPool?.update(dt, camera, viewH);
   smokePool?.update(dt, camera, viewH);
@@ -886,18 +1080,17 @@ export function updateFx(dt, realDt, camera) {
   updateDamageNumbers(realDt, camera);
 }
 
-// ---------- Chất lỏng / mặt sàn đặc biệt: nham thạch chảy, băng nứt, vực tối ----------
+// ---------- Chất lỏng / mặt sàn đặc biệt (3 quãng FBM + cache singleton ShaderMaterial) ----------
 const NOISE = /* glsl */`
 float h21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
   return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }
-float fbm(vec2 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { v += a * vnoise(p); p = p * 2.03 + 17.1; a *= 0.5; } return v; }
-// vân nứt kiểu Voronoi (khoảng cách tới cạnh ô)
+float fbm(vec2 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 3; i++) { v += a * vnoise(p); p = p * 2.03 + 17.1; a *= 0.5; } return v; }
 float cracks(vec2 p){ vec2 i = floor(p), f = fract(p); float d1 = 8.0, d2 = 8.0;
   for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) { vec2 g = vec2(x, y); vec2 o = vec2(h21(i + g), h21(i + g + 7.7));
     float d = length(g + o - f); if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d; }
   return d2 - d1; }`;
-const liquidMats = [];
+const liquidCache = new Map();
 const LIQUID = {
   lava: { a: [0.045, 0.014, 0.008], b: [0.85, 0.16, 0.02], c: [1.0, 0.55, 0.12], glow: 0.9, flow: 0.05 },
   ice: { a: [0.16, 0.34, 0.5], b: [0.36, 0.62, 0.82], c: [0.9, 1.0, 1.0], glow: 0.8, flow: 0 },
@@ -908,10 +1101,14 @@ const LIQUID = {
   mist: { a: [0.0, 0.01, 0.005], b: [0.02, 0.09, 0.04], c: [0.15, 0.5, 0.25], glow: 0.6, flow: 0.015 },
 };
 export function liquidMaterial(kind = 'lava', opts = {}) {
-  const L = LIQUID[kind];
+  const scale = opts.scale ?? 0.45;
+  const opaque = opts.opaque ? 1 : 0;
+  const key = `${kind}:${scale}:${opaque}`;
+  if (liquidCache.has(key)) return liquidCache.get(key);
+  const L = LIQUID[kind] || LIQUID.lava;
   const m = new THREE.ShaderMaterial({
-    uniforms: { uTime: { value: Math.random() * 100 }, uA: { value: new THREE.Vector3(...L.a) }, uB: { value: new THREE.Vector3(...L.b) }, uC: { value: new THREE.Vector3(...L.c) },
-      uGlow: { value: L.glow }, uFlow: { value: L.flow }, uIce: { value: kind === 'ice' ? 1 : 0 }, uScale: { value: opts.scale ?? 0.45 } },
+    uniforms: { uTime: { value: 0 }, uA: { value: new THREE.Vector3(...L.a) }, uB: { value: new THREE.Vector3(...L.b) }, uC: { value: new THREE.Vector3(...L.c) },
+      uGlow: { value: L.glow }, uFlow: { value: L.flow }, uIce: { value: kind === 'ice' ? 1 : 0 }, uScale: { value: scale } },
     vertexShader: `attribute float aEdge; varying float vEdge; varying vec2 vW;
       void main(){ vEdge = aEdge; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xz; gl_Position = projectionMatrix * viewMatrix * w; }`,
     fragmentShader: NOISE + `
@@ -924,14 +1121,12 @@ export function liquidMaterial(kind = 'lava', opts = {}) {
         vec3 col;
         float a = 1.0;
         if (uIce > 0.5) {
-          // băng: nền xanh nhạt, vết nứt trắng, vệt phản chiếu
           float line = 1.0 - smoothstep(0.0, 0.06, k);
           float streak = smoothstep(0.6, 0.9, fbm(vec2(p.x + p.y * 0.6, p.y) * 0.8));
           col = mix(uA, uB, n) + uC * line * 0.6 + streak * 0.15;
           col *= uGlow;
           a = 0.62 * (1.0 - smoothstep(0.7, 1.0, vEdge));
         } else {
-          // nham/vực: các mảng vỏ nguội trôi trên dòng nóng, khe nứt phát sáng
           float hot = smoothstep(0.3, 0.66, n) + (1.0 - smoothstep(0.0, 0.12, k)) * 0.8;
           hot *= 1.0 - smoothstep(0.55, 1.0, vEdge) * 0.85;
           hot = clamp(hot, 0.0, 1.0);
@@ -942,9 +1137,10 @@ export function liquidMaterial(kind = 'lava', opts = {}) {
         }
         gl_FragColor = vec4(clamp(col, 0.0, 8.0), a);
       }`,
-    transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1,
+    transparent: !opaque, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1,
   });
-  liquidMats.push(m);
+  m.userData.shared = true;
+  liquidCache.set(key, m);
   return m;
 }
 // Hình vũng méo tự nhiên: các vòng đồng tâm có thuộc tính aEdge (0 tâm → 1 mép)
@@ -973,13 +1169,9 @@ export function blobGeometry(r, rand = Math.random, seg = 48) {
 export function rectLiquid(w, h, kind) {
   const g = new THREE.PlaneGeometry(w, h, 1, 1).rotateX(-Math.PI / 2);
   g.setAttribute('aEdge', new THREE.Float32BufferAttribute([0, 0, 0, 0], 1));
-  return new THREE.Mesh(g, liquidMaterial(kind, { scale: 0.35 }));
+  return new THREE.Mesh(g, liquidMaterial(kind, { scale: 0.35, opaque: true }));
 }
 export function updateLiquids(dt) {
-  for (let i = liquidMats.length - 1; i >= 0; i--) {
-    const m = liquidMats[i];
-    if (m.userData.disposed) { liquidMats.splice(i, 1); continue; }
-    m.uniforms.uTime.value += dt;
-  }
+  for (const m of liquidCache.values()) m.uniforms.uTime.value += dt;
 }
-export function disposeLiquids() { for (const m of liquidMats) { m.dispose(); m.userData.disposed = true; } liquidMats.length = 0; }
+export function disposeLiquids() {}

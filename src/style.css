@@ -1379,3 +1379,121 @@ h3.sec { font: 700 19px var(--f-label); color: var(--gold); margin: 10px 0 4px; 
   #start .menu-panel #btn-continue:not(.hidden) + #btn-play { grid-column: span 1; }
   .fps-meter { top: calc(var(--top-edge) + 34px); right: var(--right-edge); }
 }
+
+/* ================= HUD Gọn (Compact HUD) ================= */
+#pause .pause-opts #btn-hudmode { grid-column: 1 / -1; }
+.relic-summary { display: none; }
+.slot-tip { display: none; }
+#hint { transition: opacity .35s; }
+#hint.hint-auto-hide { opacity: 0; pointer-events: none; }
+#quest-chip.quest-quiet { display: none !important; }
+
+body.hud-compact #hud-left {
+  width: 256px; gap: 5px; border-width: 11px; border-image-width: 11px; padding: 5px 8px;
+}
+body.hud-compact #hud-left .hp-row .bar { height: 17px; }
+body.hud-compact #hud-left .hp-row .ico { width: 20px; height: 20px; }
+body.hud-compact #hud-left .xp-row { margin-top: -3px; gap: 6px; }
+body.hud-compact #hud-left .xp-row .lvl { font-size: 11px; min-width: auto; }
+body.hud-compact #hud-left .xpbar { height: 4px; }
+body.hud-compact #hud-left .skill-row { gap: 8px; }
+body.hud-compact #hud-left .ring { width: 26px; height: 26px; }
+body.hud-compact #hud-left .ring .ico { width: 15px; height: 15px; }
+body.hud-compact #hud-left .skill .keycap { height: 18px; font-size: 10px; padding: 0 5px; }
+body.hud-compact #hud-left .skill small { font-size: 11px; }
+body.hud-compact #hud-left .ragebar { height: 12px; }
+body.hud-compact #hud-left .rage-row .keycap { height: 18px; font-size: 10px; }
+body.hud-compact #hud-left .fc-row.single { grid-template-columns: 1fr; }
+body.hud-compact #hud-left .fc-bar { height: 10px; }
+body.hud-compact #hud-left .fc-bar span { font-size: 9.5px; }
+body.hud-compact #flame-item.calm { opacity: .72; }
+
+body.hud-compact #relic-dock {
+  top: 164px; left: 12px; width: fit-content; max-width: 280px; pointer-events: none;
+}
+body.hud-compact .relic-summary {
+  display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 7px;
+  background: rgba(20, 12, 28, .84); border: 1px solid rgba(199, 125, 255, .45);
+  pointer-events: auto; cursor: default; box-shadow: 0 4px 12px rgba(0, 0, 0, .45);
+}
+body.hud-compact .relic-summary .rs-ico {
+  width: 20px; height: 20px; display: grid; place-items: center; border-radius: 4px; background: rgba(44, 24, 62, .9);
+}
+body.hud-compact .relic-summary .rs-ico .ico { width: 14px; height: 14px; color: #dfc0ff; }
+body.hud-compact .relic-summary .rs-ico.cursed { box-shadow: 0 0 0 1px rgba(255, 90, 106, .75); }
+body.hud-compact .relic-summary .rs-ico.cursed .ico { color: #ff9ab0; }
+body.hud-compact .relic-summary .rs-more { font: 700 11px var(--f-body); color: #e2c8ff; padding: 0 3px; }
+body.hud-compact .relic-summary .rs-sets {
+  font: 700 11px var(--f-label); color: var(--gold-hi); padding: 1px 6px; border-radius: 4px;
+  background: rgba(160, 105, 16, .3); border: 1px solid rgba(226, 184, 108, .5); margin-left: 2px;
+}
+body.hud-compact .relic-tray {
+  display: none; flex-direction: column; gap: 6px; padding: 8px; border-radius: 8px;
+  background: rgba(16, 10, 22, .95); border: 1px solid rgba(199, 125, 255, .5);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, .65); max-width: 320px; pointer-events: auto;
+}
+body.hud-compact #relic-dock:hover .relic-tray { display: flex; }
+
+body.hud-compact #hud-top .wave-panel.panel.slim { border-width: 9px; border-image-width: 9px; padding: 1px 8px; }
+body.hud-compact #hud-top .wave-label { font-size: 20px; }
+body.hud-compact #hud-top #timer { font-size: 13px; }
+body.hud-compact #hud-top #quest-chip { font-size: 11.5px; padding: 2px 8px; opacity: .82; }
+
+body.hud-compact #hud-right { border-width: 9px; border-image-width: 9px; padding: 2px 9px; gap: 11px; font-size: 15px; }
+body.hud-compact #hud-right .ico { width: 17px; height: 17px; }
+body.hud-compact:not(.hud-idle) #hud-right .res-extra { display: none; }
+body.hud-compact #toast {
+  top: 58px; right: 12px; max-width: 280px; padding: 6px 11px; gap: 8px;
+  background: rgba(18, 11, 8, .88); border-radius: 7px;
+}
+body.hud-compact #toast .ico { width: 22px; height: 22px; }
+body.hud-compact #toast b { font-size: 13px; }
+body.hud-compact #toast span { font-size: 11.5px; }
+
+body.hud-compact .slot {
+  pointer-events: auto; width: 220px; min-height: 58px; padding: 3px 8px 3px 4px;
+  border-width: 10px; border-image-width: 10px; gap: 7px;
+}
+body.hud-compact .slot .icon { width: 40px; height: 40px; }
+body.hud-compact .slot .name { font-size: 14px; }
+body.hud-compact .slot .meta { font-size: 11px; margin-top: 2px; gap: 3px; }
+body.hud-compact .slot .w-kind,
+body.hud-compact .slot .info > .awaken-tag,
+body.hud-compact .slot .info > .affixes { display: none; }
+body.hud-compact .slot .heat-bar { height: 5px; margin-top: 3px; }
+body.hud-compact .slot:not(.active) {
+  width: 158px; min-height: 46px; padding: 2px 6px 2px 3px;
+  border-width: 8px; border-image-width: 8px; opacity: .72; transform: none;
+}
+body.hud-compact .slot:not(.active) .icon { width: 30px; height: 30px; }
+body.hud-compact .slot:not(.active) .name { font-size: 12.5px; }
+body.hud-compact .slot:not(.active) .dur,
+body.hud-compact .slot:not(.active) .rune-dots { display: none; }
+body.hud-compact .slot:not(.active) .heat-bar { height: 3px; margin-top: 2px; }
+body.hud-compact .slot.empty { width: 112px; min-height: 44px; }
+body.hud-compact .slot.empty .empty-hint { display: none; }
+body.hud-compact .swap-hint { padding-bottom: 10px; gap: 2px; }
+body.hud-compact .swap-hint .keycap { height: 20px; min-width: 20px; font-size: 11px; }
+
+body.hud-compact .slot:not(.empty):hover .slot-tip { display: block; }
+body.hud-compact .slot-tip {
+  display: none; position: absolute; left: 0; bottom: calc(100% + 10px); width: 272px;
+  padding: 9px 11px; border-radius: 8px; background: rgba(18, 12, 9, .96);
+  border: 1px solid rgba(226, 184, 108, .6); box-shadow: 0 10px 26px rgba(0, 0, 0, .7);
+  pointer-events: none; z-index: 30; text-align: left;
+}
+body.hud-compact .slot-tip .st-head { font: 700 15px var(--f-label); line-height: 1.2; }
+body.hud-compact .slot-tip .st-sub { font-size: 11.5px; color: var(--muted); margin: 2px 0 4px; }
+body.hud-compact .slot-tip .affixes { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+body.hud-compact .slot-tip .affixes span { font-size: 10.5px; padding: 1px 5px; border-radius: 3px; background: rgba(90, 168, 255, .15); color: #b8d8ff; }
+body.hud-compact .slot-tip .st-runes { font-size: 11px; color: #9fe8ff; margin-top: 5px; line-height: 1.3; }
+
+@media (pointer: coarse) and (orientation: landscape) {
+  body.hud-compact .relic-summary { display: none; }
+  body.hud-compact .relic-tray { display: flex; position: static; padding: 0; background: none; border: none; box-shadow: none; }
+  body.hud-compact #relic-dock { top: calc(var(--top-edge) + 128px); left: var(--left-edge); max-width: min(26vw, 200px); }
+  body.hud-compact #hud-left { width: min(26vw, 200px); padding: 3px 6px; border-width: 6px; border-image-width: 6px; }
+  body.hud-compact .slot.active { width: min(26vw, 200px); border-width: 5px; border-image-width: 5px; }
+  body.hud-compact .slot:not(.active),
+  body.hud-compact .slot-tip { display: none !important; }
+}

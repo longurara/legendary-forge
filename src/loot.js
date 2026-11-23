@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { buildWeaponMesh, weaponName, weaponIcons, RARITY } from './weapons.js';
-import { burst, addShake, addHitStop, spawnRing } from './fx.js';
+import { burst, addShake, addHitStop, spawnRing, glowSprite, lightPulse } from './fx.js';
 import { models, fitModel } from './models.js';
 import { play } from './audio.js';
 
@@ -66,6 +66,18 @@ export class Loot {
 
   // ---------- Bình máu / Hồn Thép ----------
   spawnPickup(kind, x, z, value = 1) {
+    if (kind === 'gold' || kind === 'soul' || kind === 'scrap') {
+      let near = null, nearD = 2.4, sameCount = 0, anySame = null, anyD = Infinity;
+      for (const p of this.pickups) {
+        if (p.kind !== kind || p.flying) continue;
+        sameCount++;
+        const d = Math.hypot(p.pos.x - x, p.pos.z - z);
+        if (d < nearD) { nearD = d; near = p; }
+        if (d < anyD) { anyD = d; anySame = p; }
+      }
+      const target = near || (sameCount >= 24 ? anySame : null);
+      if (target) { target.value += value; return; }
+    }
     const group = new THREE.Group();
     if (kind === 'potion') {
       if (models.prop_potion) group.add(fitModel(models.prop_potion, 0.75, 'ground'));
@@ -220,8 +232,8 @@ export class Loot {
       horn.rotation.z = Math.PI / 2;
       add(new THREE.BoxGeometry(1.0, 0.04, 0.4), hot, 0.15, 1.01, 0);
     }
-    const light = new THREE.PointLight(0xff7a2a, 14, 7, 1.6);
-    light.position.set(0, 1.8, 0);
+    const light = glowSprite(0xff8a30, 2.4);
+    light.position.set(0, 1.35, 0);
     g.add(light);
     const ringGeo = new THREE.RingGeometry(1.3, 1.45, 40).rotateX(-Math.PI / 2);
     const ringMat = new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, opacity: 0.6, depthWrite: false });
@@ -232,8 +244,9 @@ export class Loot {
     g.position.set(x, -1.2, z);
     this.scene.add(g);
     const label = makeLabel('<i class="ico ico-anvil"></i> Đe Rèn', 'anvil');
-    this.anvil = { group: g, light, ring, label, pos: new THREE.Vector3(x, 0, z), rise: 0, used: false, forging: null, owned };
+    this.anvil = { group: g, light: null, ring, label, pos: new THREE.Vector3(x, 0, z), rise: 0, used: false, forging: null, owned };
     spawnRing(this.scene, this.anvil.pos, 2.5, 0xffa040, 0.6);
+    lightPulse(new THREE.Vector3(x, 0.6, z), 0xff7a2a, 34, 8, 0.4);
     play('anvil');
     burst(new THREE.Vector3(x, 0.5, z), 0xffa040, 30, { speed: 7, size: 0.15 });
   }

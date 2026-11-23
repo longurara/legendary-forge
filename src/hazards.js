@@ -5,7 +5,7 @@ import { ctx, aoe, scheduleBomb, spawnFirePatch, spawnToxic, getFirePatches, get
 import { spawnRing, burst, addShake, spawnTelegraph, damageNumber, explosion, flame, flash, spawnBolt } from './fx.js';
 import { play } from './audio.js';
 import { isBlocked, ROOM_HALF, DS, pillars, currentBiome } from './world.js';
-import { emit, F, smoke as fxSmoke, liquidMaterial, blobGeometry } from './fx.js';
+import { emit, F, smoke as fxSmoke, liquidMaterial, blobGeometry, glowSprite } from './fx.js';
 
 let group = null;
 const spikes = [];
@@ -112,7 +112,7 @@ class Spike {
 }
 
 function disposeLiquidMat(m) {
-  if (!m) return;
+  if (!m || m.userData?.shared) return;
   if (m.userData) m.userData.disposed = true;
   m.dispose?.();
 }
@@ -218,11 +218,13 @@ export function buildHazards(scene, floor, rand = Math.random) {
       m.position.set(p[0], 0.04, p[1]);
       m.renderOrder = 1;
       group.add(m);
-      const L = new THREE.PointLight(0xff5a1a, 6, r * 3.5, 1.8); L.position.set(p[0], 0.8, p[1]); group.add(L);
+      const glow = glowSprite(0xff6a20, r * 1.4);
+      glow.position.set(p[0], 0.25, p[1]);
+      group.add(glow);
       // vài tảng đá quanh mép
       const R = geo.userData.radiusAt;
       for (let k = 0; k < 3; k++) { const th = rand() * Math.PI * 2; rock(p[0] + Math.cos(th) * R(th) * 1.05, p[1] + Math.sin(th) * R(th) * 1.05, 0.14 + rand() * 0.12); }
-      lavaPools.push({ x: p[0], z: p[1], r: r * 0.85, light: L, tick: 0, seed: rand() * 10, mesh: m, lavaMat: m.material, obsidianT: 0 });
+      lavaPools.push({ x: p[0], z: p[1], r: r * 0.85, glow, light: null, tick: 0, seed: rand() * 10, mesh: m, lavaMat: m.material, obsidianT: 0 });
     }
     // Vết nứt nóng trên sàn (texture tia điện Kenney tô màu cam)
     for (let i = 0; i < 10; i++) {
@@ -258,10 +260,10 @@ export function buildHazards(scene, floor, rand = Math.random) {
       const p = free(col ? col + 0.6 : 0.6); if (!p) continue;
       const o = m.scene.clone(true);
       o.scale.setScalar(sc); o.position.set(p[0], 0, p[1]); o.rotation.y = rand() * Math.PI * 2;
-      o.traverse((c) => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; } });
+      o.traverse((c) => { if (c.isMesh) { c.castShadow = !!col; c.receiveShadow = true; } });
       group.add(o);
       if (col) pillars.push({ x: p[0], z: p[1], r: col });
-      if (name.includes('candle')) { const l = new THREE.PointLight(0x9fffb0, 3, 4, 1.8); l.position.set(p[0], 0.8, p[1]); group.add(l); }
+      if (name.includes('candle')) { const g = glowSprite(0x9fffb0, 1.1); g.position.set(p[0], 0.75, p[1]); group.add(g); }
     }
   } else if (biome === 'swamp') {
     // Đầm Lầy Độc: vũng độc tự nhiên + nấm phát sáng (gặp Lửa sẽ nổ dây chuyền cả đầm!)
@@ -285,7 +287,7 @@ export function buildHazards(scene, floor, rand = Math.random) {
         g.add(stem, cap);
       }
       g.position.set(p[0], 0, p[1]); group.add(g);
-      const l = new THREE.PointLight(0x8fe83a, 3.5, 6, 1.8); l.position.set(p[0], 1.2, p[1]); group.add(l);
+      const l = glowSprite(0x8fe83a, 1.5); l.position.set(p[0], 1.1, p[1]); group.add(l);
       pillars.push({ x: p[0], z: p[1], r: 0.65 });
     }
   } else if (biome === 'sanctum') {
@@ -530,7 +532,8 @@ export function reactSurface(pos, radius, element, dir = null, baseDmg = 18) {
           L.obsidianT = 8.5;
           if (!L.obsMat) L.obsMat = liquidMaterial('obsidian');
           if (L.mesh) L.mesh.material = L.obsMat;
-          L.light.intensity = 1.2;
+          if (L.light) L.light.intensity = 1.2;
+          if (L.glow) L.glow.visible = false;
           spawnRing(ctx.scene, new THREE.Vector3(L.x, 0, L.z), L.r, 0xa080ff, 0.45);
           spawnSteamCloud(new THREE.Vector3(L.x, 0, L.z), L.r * 0.85, 2.5);
           damageNumber(new THREE.Vector3(L.x, 0.4, L.z), 'Đá Obsidian!', 'react shatter');
@@ -762,11 +765,12 @@ export function updateHazards(dt, rain) {
       L.obsidianT -= dt;
       if (L.obsidianT <= 0) {
         if (L.mesh && L.lavaMat) L.mesh.material = L.lavaMat;
-        L.light.intensity = 6;
+        if (L.light) L.light.intensity = 6;
+        if (L.glow) L.glow.visible = true;
       }
       continue;
     }
-    L.light.intensity = 6 + Math.sin(performance.now() / 260 + L.seed) * 1.5;
+    if (L.light) L.light.intensity = 6 + Math.sin(performance.now() / 260 + L.seed) * 1.5;
     if (Math.random() < dt * 3) emit(new THREE.Vector3(L.x + (Math.random() - 0.5) * L.r, 0.1, L.z + (Math.random() - 0.5) * L.r), { frame: F.glow, color: 0xffc060, color2: 0xff3a00, size: 0.3, size2: 0, life: 0.8, vel: new THREE.Vector3(0, 2, 0), hdr: 2 });
     L.tick -= dt;
     if (L.tick > 0) continue;

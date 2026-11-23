@@ -1,7 +1,7 @@
 // Bệ chọn phần thưởng (kiểu cửa phòng của Hades), thương nhân, rương di vật
 import * as THREE from 'three';
 import { models, fitModel, Animator } from './models.js';
-import { burst, spawnRing, emit, F, glowSprite, runeDecal } from './fx.js';
+import { burst, spawnRing, emit, F, glowSprite, runeDecal, lightPulse } from './fx.js';
 import { play } from './audio.js';
 
 export const REWARDS = {
@@ -124,8 +124,8 @@ export class Rewards {
       anim = new Animator(npc);
       anim.play('Idle');
     }
-    const light = new THREE.PointLight(0xffc070, 10, 8, 1.6);
-    light.position.set(0, 2.5, 1.5);
+    const light = glowSprite(0xffc070, 2.4);
+    light.position.set(0, 1.8, 1.2);
     g.add(light);
     g.position.set(x, 0, z);
     this.scene.add(g);
@@ -160,8 +160,8 @@ export class Rewards {
       owned.push(geo, mat);
       g.add(new THREE.Mesh(geo, mat));
     }
-    const light = new THREE.PointLight(0xc77dff, 8, 5, 1.6);
-    light.position.y = 1.4;
+    const light = glowSprite(0xc77dff, 2.0);
+    light.position.y = 1.2;
     g.add(light);
     g.position.set(x, 0, z);
     g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -172,6 +172,7 @@ export class Rewards {
     labelLayer().appendChild(label);
     this.chests.push({ group: g, lid, label, pos: new THREE.Vector3(x, 0, z), opened: false, t: 0, owned });
     burst(new THREE.Vector3(x, 1, z), 0xc77dff, 24, { speed: 6, size: 0.14 });
+    lightPulse(new THREE.Vector3(x, 1, z), 0xc77dff, 28, 7, 0.35);
     play('dropRare', { at: { x, z } });
   }
 

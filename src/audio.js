@@ -54,9 +54,11 @@ let volume = Number(localStorage.getItem('lorenh_volume') ?? 0.8);
 let musicVol = Number(localStorage.getItem('lorenh_music_vol') ?? 0.75);
 let muted = localStorage.getItem('lorenh_muted') === '1';
 let active = 0;
+let _burstAt = -1;
+let _burstCount = 0;
 export const sfxStats = {};          // đếm số lần phát (để kiểm tra)
 window.__sfx = { stats: sfxStats, buffers, get state() { return ctx && ctx.state; } };
-const MAX_VOICES = 20;
+const MAX_VOICES = 16;
 
 function ensureContext() {
   if (ctx) return;
@@ -119,7 +121,13 @@ export function play(name, opts = {}) {
   if (!s || !ctx || muted || ctx.state !== 'running') return;
   if (active >= MAX_VOICES && !s.prio) return;            // âm quan trọng luôn được phát
   const now = ctx.currentTime;
-  if (s.gap && lastPlayed[name] && now - lastPlayed[name] < s.gap) return;   // tránh chồng âm
+  const gap = s.gap ?? 0.04;
+  if (gap && lastPlayed[name] && now - lastPlayed[name] < gap) return;   // tránh chồng âm
+  if (!s.prio) {
+    if (now - _burstAt > 0.016) { _burstAt = now; _burstCount = 0; }
+    if (_burstCount >= 4) return;
+    _burstCount++;
+  }
   lastPlayed[name] = now;
   const buf = buffers[s.files[Math.floor(Math.random() * s.files.length)]];
   if (!buf) return;

@@ -82,8 +82,13 @@ export function renderPauseBuildHtml(player, refs = {}) {
     }).join('')
     : '<span class="muted small">Chưa có di vật</span>';
 
+  const runLine = refs?.runStats
+    ? `<div class="pb-line">Hạ gục: <b>${refs.runStats.kills ?? 0}</b> · Kỷ lục: <b>${refs.runStats.best ?? 0}</b> · Hồn Thép: <b>${refs.runStats.souls ?? 0}</b></div>`
+    : '';
+
   return `
     <div class="pb-stats">${statRows.map(([k, v]) => `<div class="pb-stat"><span>${k}</span><b>${v}</b></div>`).join('')}</div>
+    ${runLine}
     ${god ? `<div class="pb-line"><b>Thần Hộ Mệnh:</b> <span style="color:${god.color}">${god.name}</span></div>` : ''}
     ${circuit ? `<div class="pb-line"><b>Mạch Cổ Ngữ:</b> <span class="muted">${circuit}</span></div>` : ''}
     ${sets.length ? `<div class="pb-line"><b>Bộ Di Vật:</b> ${sets.map((st) => `<span style="color:${st.color}">${st.name} (${st.count}/3)</span>`).join(' · ')}</div>` : ''}

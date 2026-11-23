@@ -9,7 +9,15 @@ export const ctx = { scene: null, player: null, enemies: [], barrels: [], onHit:
 const NONE = { element: 'none', element2: null };
 const _tmpP = new THREE.Vector3();
 const _tmpV = new THREE.Vector3();
+const _tmpD = new THREE.Vector3();
 let _dmgDepth = 0;
+const frameCombat = { aoeChains: 0, fireBursts: 0, surfaces: 0, surfaceSet: new Set() };
+export function resetCombatFrame() {
+  frameCombat.aoeChains = 0;
+  frameCombat.fireBursts = 0;
+  frameCombat.surfaces = 0;
+  frameCombat.surfaceSet.clear();
+}
 
 function react(enemy, text, color, dmg = 16) {
   damageNumber(enemy.pos, text, 'react ' + color);
@@ -51,7 +59,8 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
       mult *= (stP.thermalShock ? 2.6 : 2) * (stP.stormSet3 ? 1.25 : 1);
       enemy.frozenT = 0; enemy.slowT = 0; enemy.iceStacks = 0;
       react(enemy, 'Tan Chảy!', 'melt', dmg * reactBoost); play('freeze', { at: enemy.pos, rate: 0.7 });
-      if (stP.thermalShock && allowChain) {
+      if (stP.thermalShock && allowChain && frameCombat.aoeChains < 10) {
+        frameCombat.aoeChains++;
         spawnRing(ctx.scene, enemy.pos, 3.2, 0xd8f4ff, 0.4);
         aoe(enemy.pos, 3.2, Math.round(dmg * 0.75 * reactBoost), NONE, 8, { exclude: enemy });
       }
@@ -62,16 +71,22 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
     } else if (el === 'lightning' && (enemy.frozenT > 0 || (stP.magStorm && enemy.slowT > 0)) && allowChain) {
       enemy.frozenT = stP.magStorm ? Math.max(enemy.frozenT, 1.2) : 0;
       react(enemy, 'Vỡ Băng!', 'shatter', dmg * reactBoost);
-      burst(enemy.pos.clone().setY(0.8), 0xaeeaff, 26, { speed: 9, size: 0.18 });
+      burst(enemy.pos.clone().setY(0.8), 0xaeeaff, 20, { speed: 9, size: 0.18 });
       play('freeze', { at: enemy.pos, rate: 1.3 });
-      aoe(enemy.pos, 2.8, Math.round((dmg * 1.2 + 10) * reactBoost), NONE, 6, { exclude: enemy });
+      if (frameCombat.aoeChains < 10) {
+        frameCombat.aoeChains++;
+        aoe(enemy.pos, 2.8, Math.round((dmg * 1.2 + 10) * reactBoost), NONE, 6, { exclude: enemy });
+      }
     } else if (((el === 'fire' && enemy.shockT > 0) || (el === 'lightning' && enemy.burnT > 0)) && allowChain) {
       enemy.shockT = 0;
       react(enemy, 'Quá Tải!', 'overload', dmg * reactBoost);
       spawnRing(ctx.scene, enemy.pos, 2.6, 0xffb040, 0.35);
-      burst(enemy.pos.clone().setY(0.6), 0xffd060, 24, { speed: 9, size: 0.16 });
+      burst(enemy.pos.clone().setY(0.6), 0xffd060, 18, { speed: 9, size: 0.16 });
       play('explode', { at: enemy.pos, vol: 0.6, rate: 1.2 });
-      aoe(enemy.pos, 2.6, Math.round((dmg * 0.8 + 8) * reactBoost), NONE, 12, { exclude: enemy });
+      if (frameCombat.aoeChains < 10) {
+        frameCombat.aoeChains++;
+        aoe(enemy.pos, 2.6, Math.round((dmg * 0.8 + 8) * reactBoost), NONE, 12, { exclude: enemy });
+      }
     } else if (el === 'blood' && (enemy.burnT > 0 || enemy.frozenT > 0 || enemy.shockT > 0)) {
       mult *= 1.3;
       react(enemy, 'Huyết Tế!', 'blood', dmg * reactBoost);
@@ -86,7 +101,10 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
       react(enemy, 'Khí Nổ!', 'overload', dmg);
       explosion(enemy.pos, 2.8, 0x9fff5a, { smoke: true, scorch: false, core: 0xe0ffb0 });
       play('explode', { at: enemy.pos, vol: 0.7 });
-      aoe(enemy.pos, 2.8, Math.round(dmg * 0.6 + st * 7), NONE, 10, { exclude: enemy });
+      if (frameCombat.aoeChains < 10) {
+        frameCombat.aoeChains++;
+        aoe(enemy.pos, 2.8, Math.round(dmg * 0.6 + st * 7), NONE, 10, { exclude: enemy });
+      }
     } else if (allowChain && ((el === 'wind' && enemy.burnT > 0) || (el === 'fire' && enemy.gustT > 0))) {
       enemy.gustT = 0;
       react(enemy, 'Lốc Lửa!', 'melt', dmg);
@@ -102,10 +120,20 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
       react(enemy, 'Phán Xét!', 'ult', dmg);
       spawnBolt(ctx.scene, enemy.pos.clone().setY(9), enemy.pos.clone().setY(0.5), 0xfff6d0);
       play('zap', { at: enemy.pos, rate: 0.7 });
-      aoe(enemy.pos, 2.4, Math.round(dmg + 12), NONE, 6, {});
+      if (frameCombat.aoeChains < 10) {
+        frameCombat.aoeChains++;
+        aoe(enemy.pos, 2.4, Math.round(dmg + 12), NONE, 6, {});
+      }
     }
     if (el === 'holy' && !enemy.slimy) mult *= 1.5;              // Thánh khắc chế quái xương
-    if (allowChain && ctx.reactSurface) ctx.reactSurface(enemy.pos, 2.2, el, dir, dmg);
+    if (allowChain && ctx.reactSurface && frameCombat.surfaces < 8) {
+      const sk = `${Math.round(enemy.pos.x * 0.5)},${Math.round(enemy.pos.z * 0.5)},${el}`;
+      if (!frameCombat.surfaceSet.has(sk)) {
+        frameCombat.surfaceSet.add(sk);
+        frameCombat.surfaces++;
+        ctx.reactSurface(enemy.pos, 2.2, el, dir, dmg);
+      }
+    }
   }
   if (enemy.isBoss && ctx.bossBane) mult *= 1 + ctx.bossBane;
   // Kháng / yếu theo vùng
@@ -157,18 +185,24 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
     } else if (el === 'lightning') {
       enemy.shockT = 2;
       if (allowChain) {
-        const targets = ctx.enemies
-          .filter((e) => e !== enemy && e.alive && !e.spawning && e.pos.distanceTo(enemy.pos) < 4)
-          .sort((a, b) => a.pos.distanceTo(enemy.pos) - b.pos.distanceTo(enemy.pos))
-          .slice(0, 2);
-        if (targets.length) play('zap', { at: enemy.pos });
-        let from = enemy.pos.clone().setY(0.7);
-        for (const t of targets) {
-          const to = t.pos.clone().setY(0.7);
-          spawnBolt(ctx.scene, from, to, ELEMENTS.lightning.glow);
-          if (stP.voltVenom) { t.poisonStacks = Math.min(8, (t.poisonStacks || 0) + 2); t.poisonT = 4.5; t.poisonDps = Math.max(t.poisonDps || 0, dmg * 0.14); }
-          dealDamage(t, Math.max(1, Math.round(dmg * 0.5)), weapon, null, 0, false, false);
-          from = to;
+        let b1 = null, d1 = 4, b2 = null, d2 = 4;
+        for (const e of ctx.enemies) {
+          if (e === enemy || !e.alive || e.spawning) continue;
+          const dist = Math.hypot(e.pos.x - enemy.pos.x, e.pos.z - enemy.pos.z);
+          if (dist >= 4) continue;
+          if (dist < d1) { b2 = b1; d2 = d1; b1 = e; d1 = dist; }
+          else if (dist < d2) { b2 = e; d2 = dist; }
+        }
+        if (b1) {
+          play('zap', { at: enemy.pos });
+          const from = _tmpP.copy(enemy.pos).setY(0.7);
+          for (const t of b2 ? [b1, b2] : [b1]) {
+            const to = _tmpD.copy(t.pos).setY(0.7);
+            spawnBolt(ctx.scene, from, to, ELEMENTS.lightning.glow);
+            if (stP.voltVenom) { t.poisonStacks = Math.min(8, (t.poisonStacks || 0) + 2); t.poisonT = 4.5; t.poisonDps = Math.max(t.poisonDps || 0, dmg * 0.14); }
+            dealDamage(t, Math.max(1, Math.round(dmg * 0.5)), weapon, null, 0, false, false);
+            from.copy(to);
+          }
         }
       }
     } else if (el === 'blood') {
@@ -189,7 +223,8 @@ export function aoe(pos, radius, dmg, weapon = NONE, kb = 6, opts = {}) {
     if (e === opts.exclude || !e.alive || e.spawning) continue;
     const dx = e.pos.x - pos.x, dz = e.pos.z - pos.z;
     if (Math.hypot(dx, dz) < radius + e.radius) {
-      dealDamage(e, dmg, weapon, new THREE.Vector3(dx, 0, dz).normalize(), kb, false, false);
+      _tmpV.set(dx, 0, dz).normalize();
+      dealDamage(e, dmg, weapon, _tmpV, kb, false, false);
     }
   }
   if (opts.barrels !== false) {
@@ -206,7 +241,7 @@ export function aoe(pos, radius, dmg, weapon = NONE, kb = 6, opts = {}) {
 
 // ---------- Bom hẹn giờ (tinh anh "Nổ Khi Chết", mưa lửa...) ----------
 const bombs = [];
-const MAX_BOMBS = 24;
+const MAX_BOMBS = 18;
 export function scheduleBomb(pos, delay, radius, dmgEnemies, dmgPlayer, color = 0xff5a1a) {
   if (bombs.length >= MAX_BOMBS) return;
   spawnTelegraph(ctx.scene, { shape: 'circle', pos, radius, duration: delay, color: 0xff3020 });
@@ -227,7 +262,7 @@ function updateBombs(dt) {
 
 // ---------- Vùng lửa (di vật Nhẫn Than Hồng, mưa lửa) ----------
 const patches = [];
-const MAX_PATCHES = 18;
+const MAX_PATCHES = 14;
 const patchGeo = new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2);
 export function spawnFirePatch(pos, radius, dur, dps, hurtsPlayer = false) {
   for (const f of patches) {
@@ -273,7 +308,7 @@ function updatePatches(dt) {
 
 // ---------- Vũng độc (tinh anh "Rỉ Độc"): chỉ hại người chơi, gây trúng độc ----------
 const toxics = [];
-const MAX_TOXICS = 18;
+const MAX_TOXICS = 14;
 export function spawnToxic(pos, radius = 1.3, dur = 4) {
   for (const f of toxics) {
     if (Math.hypot(f.pos.x - pos.x, f.pos.z - pos.z) < 1.1) {
@@ -430,6 +465,7 @@ function explodeBig(p) {
 }
 
 export function updateProjectiles(dt) {
+  resetCombatFrame();
   const player = ctx.player;
   updateBombs(dt);
   updatePatches(dt);
@@ -560,8 +596,12 @@ export function updateProjectiles(dt) {
 
 // Thẻ "Lửa Lan": nổ lửa đốt quái xung quanh
 export function fireBurst(pos, dmg) {
-  explosion(pos, 2.4, 0xff7a2a, { smoke: false, scorch: false });
-  play('ignite', { at: pos });
+  if (frameCombat.fireBursts >= 10) return;
+  const idx = frameCombat.fireBursts++;
+  if (idx < 6) {
+    explosion(pos, 2.4, 0xff7a2a, { smoke: false, scorch: false });
+    play('ignite', { at: pos });
+  }
   aoe(pos, 2.4, dmg, { element: 'fire', element2: null }, 4);
 }
 
@@ -585,6 +625,7 @@ export function removeToxic(i) {
 export const debugProjectiles = () => projectiles.length;
 
 export function clearProjectiles() {
+  resetCombatFrame();
   for (let i = projectiles.length - 1; i >= 0; i--) removeProjectile(i);
   bombs.length = 0;
   for (const f of patches) { ctx.scene.remove(f.mesh); f.mesh.material?.dispose(); }

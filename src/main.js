@@ -22,7 +22,7 @@ import { CompanionManager } from './companions.js';
 import { SandboxManager, DefenseManager, TURRET_TYPES, DEFENSE_MAX_WAVES } from './modes.js';
 import { enemyBestiaryId, renderBestiaryHtml, renderRunSummaryHtml } from './bestiary.js';
 import { Minion, Boss, Assassin, Archer, KingSlime, ArchMage } from './enemies_extra.js';
-import { initFx, updateFx, shake, hitStop, clearFx, damageNumber, fxQuality, setFxQuality, fxSettings, setFxSettings, fxStats, dmgScale, explosion, spawnRing as fxRing, flash as fxFlash, smoke, burst, addShake } from './fx.js';
+import { initFx, updateFx, shake, hitStop, clearFx, damageNumber, fxQuality, setFxQuality, fxSettings, setFxSettings, fxStats, dmgScale, explosion, spawnRing as fxRing, flash as fxFlash, smoke, burst, addShake, liquidMaterial } from './fx.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -69,9 +69,13 @@ const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerW
 composer.setPixelRatio(renderer.getPixelRatio());
 composer.setSize(innerWidth, innerHeight);
 composer.addPass(new RenderPass(scene, camera));
-const bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.55, 0.45, 0.92);
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(Math.max(1, Math.floor(innerWidth / 2)), Math.max(1, Math.floor(innerHeight / 2))), 0.55, 0.45, 0.92);
 composer.addPass(bloomPass);
 composer.addPass(new OutputPass());
+function syncBloomSize() {
+  bloomPass.setSize(Math.max(1, Math.floor(innerWidth / 2)), Math.max(1, Math.floor(innerHeight / 2)));
+}
+syncBloomSize();
 function applyFxQuality() {
   bloomPass.enabled = fxQuality.high;
   const b = document.getElementById('btn-fx');
@@ -84,8 +88,12 @@ function syncExtraSettingsUI() {
   if (dm) dm.textContent = 'Số sát thương: ' + (fxSettings.showDmg ? 'Bật' : 'Tắt');
   const fp = $('btn-fps');
   if (fp) fp.textContent = 'Hiện FPS: ' + (fxSettings.showFps ? 'Bật' : 'Tắt');
+  const hm = $('btn-hudmode');
+  if (hm) hm.textContent = 'HUD: ' + (fxSettings.compactHud ? 'Gọn (H)' : 'Đầy đủ (H)');
   const meter = $('fps-meter');
   if (meter) meter.classList.toggle('hidden', !fxSettings.showFps);
+  document.body?.classList?.toggle('hud-compact', !!fxSettings.compactHud);
+  if (document.getElementById('corr-item')) renderFlameHud();
 }
 let _lastPromptHtml = '';
 let _lastBossName = '';
@@ -105,6 +113,7 @@ renderer.domElement.addEventListener('webglcontextlost', (e) => {
 renderer.domElement.addEventListener('webglcontextrestored', () => {
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
+  syncBloomSize();
   applyFxQuality();
 });
 
@@ -113,6 +122,7 @@ addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
+  syncBloomSize();
 });
 
 // ================= Ngẫu nhiên có hạt giống (thử thách hằng ngày) =================
@@ -160,7 +170,7 @@ function updateToasts(dt) {
       const t = toastQueue.shift();
       el.innerHTML = `<i class="ico" style="--i:url('/ui/icons/${t.icon}.svg')"></i><div><b>${t.title}</b><span>${t.text}</span></div>`;
       el.classList.add('show');
-      toastT = 3.2;
+      toastT = fxSettings.compactHud ? 2.2 : 3.0;
       play('forged', { vol: 0.6 });
     }
   }
@@ -181,7 +191,7 @@ function renderSlots() {
     const w = player.weapons[i];
     el.className = 'slot' + (i === player.slot ? ' active' : '') + (w ? ' r' + w.rarity : ' empty') + (i === player.slot && player.temperedT > 0 ? ' tempered' : '');
     if (!w) {
-      el.innerHTML = `<span class="num">${i + 1}</span><div class="icon"></div><div class="info"><div class="name">Trống</div><div class="meta">Nhặt thêm vũ khí bằng phím E</div></div>`;
+      el.innerHTML = `<span class="num">${i + 1}</span><div class="icon"></div><div class="info"><div class="name">Trống</div><div class="meta empty-hint">Nhặt thêm vũ khí bằng phím E</div></div>`;
       continue;
     }
     const r = RARITY[w.rarity];
@@ -197,10 +207,17 @@ function renderSlots() {
     el.innerHTML = `<span class="num">${i + 1}</span>
       <div class="icon"><img src="${weaponIcon(w)}" alt=""></div>
       <div class="info"><div class="name" style="color:${r.css}">${weaponName(w)}</div>
-      <div class="meta">${weaponIcons(w)}<span>${r.name} · ${TYPE_LABEL(w)}</span><span class="dur${(w.dur ?? 100) <= 0 ? ' broken' : (w.dur ?? 100) < 30 ? ' low' : ''}">${Math.ceil(w.dur ?? 100)}%</span>${runeDots}</div>
+      <div class="meta">${weaponIcons(w)}<span class="w-kind">${r.name} · ${TYPE_LABEL(w)}</span><span class="dur${(w.dur ?? 100) <= 0 ? ' broken' : (w.dur ?? 100) < 30 ? ' low' : ''}">${Math.ceil(w.dur ?? 100)}%</span>${runeDots}</div>
       <div class="heat-bar" id="heat-bar-${i}"><div class="heat-fill" id="heat-fill-${i}" style="width:${Math.round(w.heat || 0)}%"></div></div>
       ${awTag}
-      ${aff.length ? `<div class="affixes">${aff.slice(0, 4).map((a) => `<span>${a}</span>`).join('')}</div>` : ''}</div>`;
+      ${aff.length ? `<div class="affixes">${aff.slice(0, 4).map((a) => `<span>${a}</span>`).join('')}</div>` : ''}</div>
+      <div class="slot-tip">
+        <div class="st-head" style="color:${r.css}">${weaponName(w)}</div>
+        <div class="st-sub">${r.name} · ${TYPE_LABEL(w)} · Độ bền ${Math.ceil(w.dur ?? 100)}%</div>
+        ${awTag}
+        ${aff.length ? `<div class="affixes">${aff.map((a) => `<span>${a}</span>`).join('')}</div>` : ''}
+        ${runes.length ? `<div class="st-runes">Mạch Cổ Ngữ: ${describeCircuit(runes)}</div>` : ''}
+      </div>`;
   }
   const sp = SPECIALS[player.activeSpecialType] || SPECIALS.sword;
   $('special-ico').style.setProperty('--i', `url('/ui/icons/${sp.icon}.svg')`);
@@ -220,18 +237,29 @@ function renderSlots() {
 }
 
 function renderRelics() {
-  $('relics').innerHTML = player.relics.map((id) => {
-    const r = relicById(id);
-    if (!r) return '';
-    return `<div class="relic${r.cursed ? ' cursed' : ''}" title="${r.name}: ${r.desc}"><i class="ico" style="--i:url('/ui/icons/${r.icon}.svg')"></i></div>`;
-  }).join('');
+  const validRelics = player.relics.map((id) => relicById(id)).filter(Boolean);
+  $('relics').innerHTML = validRelics.map((r) => `<div class="relic${r.cursed ? ' cursed' : ''}" title="${r.name}: ${r.desc}"><i class="ico" style="--i:url('/ui/icons/${r.icon}.svg')"></i></div>`).join('');
+  const sets = activeRelicSets(player.relics);
   const rsEl = $('relic-sets');
   if (rsEl) {
-    const sets = activeRelicSets(player.relics);
     rsEl.innerHTML = sets.map((s) => {
       const tip = `(2) ${s.b2}${s.count >= 3 ? ` · (3) ${s.b3}` : ''}`;
       return `<span class="set-pill" style="border-color:${s.color};color:${s.color}" title="${tip}">${s.name} ${s.count}/3</span>`;
     }).join('');
+  }
+  const sumEl = $('relic-summary');
+  if (sumEl) {
+    if (!validRelics.length) {
+      sumEl.classList.add('hidden');
+      sumEl.innerHTML = '';
+    } else {
+      sumEl.classList.remove('hidden');
+      const shown = validRelics.slice(-5);
+      const extra = validRelics.length - shown.length;
+      sumEl.innerHTML = shown.map((r) => `<span class="rs-ico${r.cursed ? ' cursed' : ''}"><i class="ico" style="--i:url('/ui/icons/${r.icon}.svg')"></i></span>`).join('')
+        + (extra > 0 ? `<span class="rs-more">+${extra}</span>` : '')
+        + (sets.length > 0 ? `<span class="rs-sets">${sets.length} Bộ</span>` : '');
+    }
   }
 }
 
@@ -1079,6 +1107,7 @@ function restart() {
   minimapDirty = true;
   if (run.mode !== 'sandbox') buildHazards(scene, 1, rngFor(4));
   else clearHazards(scene);
+  try { renderer.compile(scene, camera); } catch {}
   if (!isSpecialMode) { maybeSecret(); maybeSpawnEchoGrave(); }
   // Khởi tạo Bạn Đồng Hành (Pet)
   if (started && run.pet && run.pet !== 'none') companions?.setPet(run.pet, player.pos);
@@ -1131,7 +1160,7 @@ function setPaused(p) {
     syncExtraSettingsUI();
     syncSoundUI();
     const pb = $('pause-build');
-    if (pb) pb.innerHTML = renderPauseBuildHtml(player, { PERKS, EVOLUTIONS, BOONS, DUOS, GODS, RELICS, activeRelicSets, RUNES, describeCircuit });
+    if (pb) pb.innerHTML = renderPauseBuildHtml(player, { PERKS, EVOLUTIONS, BOONS, DUOS, GODS, RELICS, activeRelicSets, RUNES, describeCircuit, runStats: { kills, best, souls: meta.souls } });
   }
   show('pause', p);
   play(p ? 'uiOpen' : 'uiClose');
@@ -1172,6 +1201,7 @@ function descend() {
     const theme = buildWorld(scene, floor);
     minimapDirty = true;
     buildHazards(scene, floor, rngFor(4));
+    try { renderer.compile(scene, camera); } catch {}
     maybeSecret();
     maybeSpawnEchoGrave();
     addFlame(30);
@@ -1240,6 +1270,7 @@ function updateArrows() {
 let minimapCtx = null;
 let minimapBg = null;
 let minimapDirty = true;
+let _minimapT = 0;
 function rebuildMinimapBg(W, H, pad, span, sc) {
   if (!minimapBg) {
     minimapBg = document.createElement('canvas');
@@ -1276,6 +1307,9 @@ function drawMinimap() {
   const visible = started && !player.dead;
   wrap.classList.toggle('hidden', !visible);
   if (!visible) return;
+  const nowMs = performance.now();
+  if (!minimapDirty && minimapBg && nowMs - _minimapT < 50) return;
+  _minimapT = nowMs;
   if (!minimapCtx) minimapCtx = cv.getContext('2d');
   const g = minimapCtx;
   const W = cv.width, H = cv.height;
@@ -1362,7 +1396,7 @@ function drawMinimap() {
 }
 
 // ================= Khi hạ quái =================
-function onKill(e) {
+function onKill(e, opts = {}) {
   if (e.noReward) return;
   const st = player.stats;
   recordBestiary(e, true);
@@ -1405,7 +1439,7 @@ function onKill(e) {
     if (e.empoweredAnchors) rewards.spawnChest(e.pos.x - 2, e.pos.z);
   }
   // Lời nguyền Hồn Nổ (volatile_soul): quái chết nổ bóng tối
-  if (hasDynCurse('volatile_soul') && !e.isBoss) {
+  if (opts.allowVolatile !== false && hasDynCurse('volatile_soul') && !e.isBoss) {
     explosion(e.pos, 2.5, 0x9a40ff, { smoke: false, scorch: false, core: 0xe0b0ff });
     combat.aoe(e.pos, 2.5, Math.round(18 * player.stats.dmg), { element: 'none', element2: null }, 8, { player: 10, surface: false });
   }
@@ -1913,6 +1947,12 @@ function update(realDt, render = true) {
   updateAim();
   setListener(player.pos);
   if (pressed.has('KeyM')) toggleMute();
+  if (pressed.has('KeyH') && started && !player.dead && !choosing && !inShopOpen()) {
+    setFxSettings({ compactHud: !fxSettings.compactHud });
+    syncExtraSettingsUI();
+    toast('x_scroll', fxSettings.compactHud ? 'HUD: Gọn' : 'HUD: Đầy đủ', 'Nhấn H để chuyển nhanh');
+    play('uiClick');
+  }
   if (pressed.has('Tab') && started && !player.dead && !choosing) toggleMap();
   if (pressed.has('Escape')) {
     if (inShopOpen()) leaveShopPanel();
@@ -1920,6 +1960,7 @@ function update(realDt, render = true) {
   }
 
   if (started && !paused && !choosing && !inShopOpen()) {
+    combat.resetCombatFrame?.();
     player.update(dt, aim, enemies, time);
     if (player2) updateP2(dt, time);
     if (player.dead) {
@@ -1997,10 +2038,12 @@ function update(realDt, render = true) {
     }
 
     const born = [];
+    let killBursts = 0;
     enemies = enemies.filter((e) => {
       if (!e.dead) return true;
       kills++;
-      onKill(e);
+      onKill(e, { allowVolatile: killBursts < 4 });
+      if (hasDynCurse('volatile_soul') && !e.isBoss) killBursts++;
       if (e.type === 'big') {
         for (const side of [-1, 1]) {
           const s = new Slime(scene, e.pos.x + side * 0.5, e.pos.z, 'small');
@@ -2151,7 +2194,10 @@ function update(realDt, render = true) {
     }
   }
 
-  if (render) composer.render();
+  if (render) {
+    if (fxQuality.high && !fxStats().autoLowBloom) composer.render();
+    else renderer.render(scene, camera);
+  }
   camera.position.copy(base);
   endFrame();
 }
@@ -2287,6 +2333,9 @@ function updateHud(realDt) {
   hud.lowhp.style.opacity = low ? 0.35 + Math.sin(time * 6) * 0.25 : 0;
   $('slowmo').style.opacity = player.slowmoT > 0 ? 1 : 0;
   const idle = started && !player.dead && enemies.length === 0 && wave > 0;
+  document.body?.classList?.toggle('hud-idle', idle || inShop || exitOpen);
+  $('hint')?.classList?.toggle('hint-auto-hide', !!fxSettings.compactHud && wave >= 2);
+  $('quest-chip')?.classList?.toggle('quest-quiet', !!fxSettings.compactHud && (choosingReward || inShop || exitOpen || !!boss));
   const creepLimit = deep(10) ? 40 : 60;
   const objHud = !idle && started ? objectives?.hudText?.() : '';
   const baseT = creeping ? '<i class="ico ico-hourglass"></i> <span style="color:#b89aff">Bóng Tối Lan!</span>'
@@ -2452,6 +2501,7 @@ function continueSavedRun() {
     buildWorld(scene, floor);
     minimapDirty = true;
     buildHazards(scene, floor, rngFor(4));
+    try { renderer.compile(scene, camera); } catch {}
     echoMgr?.clear();
     maybeSecret();
     maybeSpawnEchoGrave();
@@ -2565,6 +2615,11 @@ async function init() {
   buildWorld(scene);
   initFx(scene, renderer);
   applyFxQuality();
+  for (const k of ['lava', 'ice', 'water', 'elec', 'obsidian', 'void', 'mist']) {
+    liquidMaterial(k);
+    liquidMaterial(k, { scale: 0.35, opaque: true });
+  }
+  try { renderer.compile(scene, camera); } catch {}
   $('btn-fx').onclick = () => { setFxQuality(!fxQuality.high); applyFxQuality(); play('uiClick'); };
   syncExtraSettingsUI();
   if ($('btn-shake')) $('btn-shake').onclick = () => {
@@ -2580,6 +2635,11 @@ async function init() {
   };
   if ($('btn-fps')) $('btn-fps').onclick = () => {
     setFxSettings({ showFps: !fxSettings.showFps });
+    syncExtraSettingsUI();
+    play('uiClick');
+  };
+  if ($('btn-hudmode')) $('btn-hudmode').onclick = () => {
+    setFxSettings({ compactHud: !fxSettings.compactHud });
     syncExtraSettingsUI();
     play('uiClick');
   };
@@ -3238,6 +3298,10 @@ function renderFlameHud() {
     if (cf) cf.style.width = cInt + '%';
     if (cv) cv.textContent = cInt;
   }
+  const hideCorr = !!fxSettings.compactHud && cInt <= 0 && flameState.curses.length === 0;
+  $('corr-item')?.classList?.toggle('hidden', hideCorr);
+  $('fc-row')?.classList?.toggle('single', hideCorr);
+  $('flame-item')?.classList?.toggle('calm', !!fxSettings.compactHud && fInt > 50 && flameTier() !== 'ember');
   if (dc) {
     const dcHtml = flameState.curses.map((id) => {
       const c = dynCurseById(id);
@@ -3257,10 +3321,10 @@ function pickRune(id) {
   if (w.runes.length < weaponsMod.socketsOf(w)) {
     w.runes.push(id);
     renderSlots();
-    toast(r.icon, `Khảm ${r.name}`, `${r.desc} · Vào Xưởng Đe để sắp xếp mạch`);
+    toast(r.icon, `Khảm ${r.name}`, r.desc);
   } else {
     runeBag.push(id);
-    toast(r.icon, `Nhặt ${r.name}`, `Đã cất vào Túi Cổ Ngữ (${runeBag.length}) · Sắp xếp tại Xưởng Đe`);
+    toast(r.icon, `Nhặt ${r.name}`, `Túi Cổ Ngữ (${runeBag.length}) · Đe Rèn`);
   }
 }
 

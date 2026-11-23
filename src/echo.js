@@ -257,9 +257,7 @@ export class EchoManager {
     halo.position.y = 1.2;
     const ring = new THREE.Mesh(new THREE.RingGeometry(1.1, 1.28, 32), new THREE.MeshBasicMaterial({ color: 0x70e0ff, transparent: true, opacity: 0.65, depthWrite: false, side: THREE.DoubleSide }));
     ring.rotation.x = -Math.PI / 2; ring.position.y = 0.04;
-    const light = new THREE.PointLight(0x70e0ff, 10, 7, 1.6);
-    light.position.y = 1.6;
-    g.add(halo, ring, light);
+    g.add(halo, ring);
     g.position.set(x, 0, z);
     this.scene.add(g);
 

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { models } from './models.js';
-import { emit, F, rectLiquid, disposeLiquids, setFxBiome } from './fx.js';
+import { emit, F, rectLiquid, disposeLiquids, setFxBiome, glowSprite } from './fx.js';
 import { buildDungeonFloor } from './floor_art.js';
 
 // ================== Kích thước phòng (mở rộng 18x18: diện tích gấp 2.25 lần!) ==================
@@ -77,6 +77,7 @@ let hemi = null;
 let darkHook = null;
 let isDark = false;
 const torches = [];
+let staticLights = 0;
 let seed = 1;
 const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
 
@@ -96,12 +97,20 @@ function piece(name, x, z, rotY = 0, y = 0, s = DS) {
 
 function wallTorch(x, z, rotY, color, y = 2.1, light = true) {
   piece('torch_mounted', x, z, rotY, y);
-  if (!light) return;
   const out = new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY));
-  const l = new THREE.PointLight(color, 10, 11, 1.8);
-  l.position.set(x + out.x * 0.6, y + 0.7, z + out.z * 0.6);
-  worldGroup.add(l);
-  torches.push({ light: l, base: 10, seed: rand() * 100, color, flame: new THREE.Vector3(x + out.x * 0.42, y + 0.55, z + out.z * 0.42) });
+  const flamePos = new THREE.Vector3(x + out.x * 0.42, y + 0.55, z + out.z * 0.42);
+  let l = null;
+  if (light && staticLights < 6) {
+    staticLights++;
+    l = new THREE.PointLight(color, 10, 11, 1.8);
+    l.position.set(x + out.x * 0.6, y + 0.7, z + out.z * 0.6);
+    worldGroup.add(l);
+  } else {
+    const g = glowSprite(color, 1.35);
+    g.position.copy(flamePos);
+    worldGroup.add(g);
+  }
+  torches.push({ light: l, base: 10, seed: rand() * 100, color, flame: flamePos });
 }
 
 // Đồ vật có va chạm tròn
@@ -191,7 +200,7 @@ export function buildWorld(scene, floor = 1) {
     scene.add(hemi);
     moon = new THREE.DirectionalLight(0xc8d4ff, 1.3);
     moon.castShadow = true;
-    moon.shadow.mapSize.set(2048, 2048);
+    moon.shadow.mapSize.set(1024, 1024);
     const sc = moon.shadow.camera;
     sc.left = sc.bottom = -26; sc.right = sc.top = 26; sc.near = 1; sc.far = 70;
     moon.shadow.bias = -0.0005;
@@ -211,6 +220,7 @@ export function buildWorld(scene, floor = 1) {
   pits.length = 0;
   pitFx.length = 0;
   torches.length = 0;
+  staticLights = 0;
   seed = floor * 7919 + 17;
   const theme = floorTheme(floor);
   const B = theme.biome;
@@ -239,7 +249,6 @@ export function buildWorld(scene, floor = 1) {
     const rim = new THREE.Mesh(rimGeo, rimMat);
     rim.position.set(b.x, -0.6, b.z);
     worldGroup.add(rim);
-    if (B.id === 'lava') { const l = new THREE.PointLight(0xff5a1a, 18, 9, 1.6); l.position.set(b.x, 0.5, b.z); worldGroup.add(l); torches.push({ light: l, base: 18, seed: rand() * 100, color: 0xff5a1a }); }
     pitFx.push(r);
     // Đá vỡ lởm chởm dọc mép hố (che cạnh thẳng tắp)
     const rub = models['dungeon/rubble_large'];
@@ -249,7 +258,7 @@ export function buildWorld(scene, floor = 1) {
         const o = rub.scene.clone(true);
         o.scale.set(DS * (0.12 + rand() * 0.16), DS * (0.08 + rand() * 0.12), DS * (0.12 + rand() * 0.16));
         o.position.set(x, -0.05, z); o.rotation.y = rand() * Math.PI * 2;
-        o.traverse((c) => { if (c.isMesh) { c.receiveShadow = true; c.castShadow = true; } });
+        o.traverse((c) => { if (c.isMesh) { c.receiveShadow = true; c.castShadow = false; } });
         tintObject(o, B.tint);
         worldGroup.add(o);
       };
@@ -286,9 +295,13 @@ export function buildWorld(scene, floor = 1) {
   }
   for (let i = 0; i <= N; i += 2) piece('column', -H + i * TILE, H + 0.4, 0);
 
-  // Đuốc (có đèn) và cờ trải đều theo tường phòng 18x18
-  for (const x of [-21, -11, 0, 11, 21]) wallTorch(x, -H, 0, theme.torch);
-  for (const z of [-18, -5, 8, 20]) { wallTorch(-H, z, Math.PI / 2, theme.torch); wallTorch(H, z, -Math.PI / 2, theme.torch); }
+  // Đuốc (tối đa 6 đèn PointLight trải đều 3 vách tường + glow sprite cho các đuốc còn lại)
+  for (const x of [-21, -11, 0, 11, 21]) wallTorch(x, -H, 0, theme.torch, 2.1, x === -11 || x === 11);
+  for (const z of [-18, -5, 8, 20]) {
+    const lit = z === -18 || z === 8;
+    wallTorch(-H, z, Math.PI / 2, theme.torch, 2.1, lit);
+    wallTorch(H, z, -Math.PI / 2, theme.torch, 2.1, lit);
+  }
   for (const x of [-16, -6, 6, 16]) piece('banner_patternA_red', x, -W, 0);
   for (const x of [-25, 25]) piece('banner_shield_red', x, -W, 0);
   piece('banner_patternA_red', -W, -11, Math.PI / 2);
@@ -332,11 +345,11 @@ export function spawnExit(x, z) {
   const beamMat = new THREE.MeshBasicMaterial({ color: 0x7fd8ff, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
   const beam = new THREE.Mesh(beamGeo, beamMat);
   beam.position.y = 3;
-  const light = new THREE.PointLight(0x7fd8ff, 14, 9, 1.6);
-  light.position.y = 1.5;
-  exitObj.add(beam, light);
+  const halo = glowSprite(0x7fd8ff, 2.8);
+  halo.position.y = 1.4;
+  exitObj.add(beam, halo);
   exitObj.position.set(x, 0, z);
-  exitObj.userData = { beam, light, pos: new THREE.Vector3(x, 0, z), owned: [beamGeo, beamMat] };
+  exitObj.userData = { beam, halo, light: null, pos: new THREE.Vector3(x, 0, z), owned: [beamGeo, beamMat] };
   worldGroup.add(exitObj);
   return exitObj.userData.pos;
 }
@@ -371,7 +384,7 @@ function ambientFx(focus) {
 export function updateWorld(time, focus) {
   for (const t of torches) {
     const f = Math.sin(time * 11 + t.seed) * 0.5 + Math.sin(time * 23 + t.seed * 2) * 0.3;
-    t.light.intensity = t.base + f * 3;
+    if (t.light) t.light.intensity = t.base + f * 3;
     // Lửa đuốc
     if (t.flame && Math.random() < 0.55) {
       emit(t.flame, { frame: Math.random() < 0.5 ? F.flame : F.tongue, color: 0xffe8a0, color2: t.color, size: 0.42 + Math.random() * 0.2, size2: 0.08,
@@ -382,7 +395,8 @@ export function updateWorld(time, focus) {
   ambientFx(focus);
   if (exitObj) {
     exitObj.userData.beam.material.opacity = 0.18 + Math.sin(time * 3) * 0.08;
-    exitObj.userData.light.intensity = 12 + Math.sin(time * 5) * 3;
+    if (exitObj.userData.light) exitObj.userData.light.intensity = 12 + Math.sin(time * 5) * 3;
+    else if (exitObj.userData.halo) exitObj.userData.halo.scale.setScalar(2.6 + Math.sin(time * 5) * 0.25);
   }
   // Vùng bóng đổ đi theo nhân vật (phòng lớn hơn vùng bóng)
   if (moon && focus) {
