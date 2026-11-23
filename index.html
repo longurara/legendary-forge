@@ -181,36 +181,60 @@
 
     <!-- ===== Màn hình bắt đầu ===== -->
     <div id="start" class="overlay loading">
-      <div class="title-block">
-        <div class="kicker">Rèn vũ khí · Diệt quái · Sống sót</div>
-        <h1>Lò Rèn<br />Huyền Thoại</h1>
-        <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
+      <div class="menu-embers" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="menu-top-bar">
+        <div class="menu-crest"><i class="ico ico-best"></i><span id="start-best">Chưa có kỷ lục</span></div>
+        <div class="menu-crest crest-souls"><span id="menu-souls-top" class="soul-count"></span></div>
       </div>
-      <div class="menu-panel panel">
-        <button id="btn-continue" class="btn primary hidden">Tiếp tục lượt <small id="continue-info"></small></button>
-        <button id="btn-play" class="btn primary">Bắt đầu</button>
-        <button id="btn-daily" class="btn">Thử thách hằng ngày <small id="daily-best" class="muted"></small></button>
-        <div class="btn-row">
-          <button id="btn-bossrush" class="btn">Boss Rush</button>
-          <button id="btn-defense" class="btn">Thủ Thành</button>
+      <div class="menu-rail">
+        <div class="title-block">
+          <div class="kicker">Rèn vũ khí · Diệt quái · Sống sót</div>
+          <h1>Lò Rèn<br />Huyền Thoại</h1>
+          <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
         </div>
-        <div class="btn-row">
-          <button id="btn-sandbox" class="btn">Phòng Tập</button>
-          <button id="btn-coop" class="btn">2 Người <small class="muted">P2</small></button>
+        <div class="menu-panel panel">
+          <div class="menu-primary">
+            <button id="btn-continue" class="btn primary save-card hidden"><span class="save-ico"><i class="ico m-ico" style="--i:url('/ui/icons/x_energy-sword.svg')"></i></span><span class="m-txt"><b>Tiếp tục lượt</b><small id="continue-info"></small></span></button>
+            <button id="btn-play" class="btn primary"><i class="ico m-ico" style="--i:url('/ui/icons/sword.svg')"></i><span id="btn-play-label">Bắt đầu</span></button>
+          </div>
+          <div class="menu-group menu-modes">
+            <div class="menu-sec">Chế Độ Chơi</div>
+            <div class="menu-grid modes">
+              <button id="btn-daily" class="btn m-wide" style="--accent:#7fd8ff"><i class="ico m-ico" style="--i:url('/ui/icons/x_calendar.svg')"></i><span class="m-txt"><b>Thử thách hằng ngày</b><small id="daily-best" class="muted"></small></span></button>
+              <button id="btn-bossrush" class="btn" style="--accent:#ff6a4a"><i class="ico m-ico" style="--i:url('/ui/icons/boss.svg')"></i><span>Boss Rush</span></button>
+              <button id="btn-defense" class="btn" style="--accent:#ff9a3c"><i class="ico m-ico" style="--i:url('/ui/icons/x_shield.svg')"></i><span>Thủ Thành</span></button>
+              <button id="btn-sandbox" class="btn" style="--accent:#8ab8ff"><i class="ico m-ico" style="--i:url('/ui/icons/x_swords-emblem.svg')"></i><span>Phòng Tập</span></button>
+              <button id="btn-coop" class="btn" style="--accent:#7ce8d8"><i class="ico m-ico" style="--i:url('/ui/icons/x_gamepad.svg')"></i><span>2 Người <small class="p2-tag">P2</small></span></button>
+            </div>
+          </div>
+          <div class="menu-group menu-sanctum">
+            <div class="menu-sec">Lò Rèn &amp; Thư Viện</div>
+            <div class="menu-grid sanctum">
+              <button id="btn-forge" class="btn m-forge" style="--accent:#7fd8ff"><i class="ico m-ico" style="--i:url('/ui/icons/anvil.svg')"></i><span>Lò Rèn</span><span id="menu-souls" class="soul-count"></span></button>
+              <button id="btn-village" class="btn" style="--accent:#f0b860"><i class="ico m-ico" style="--i:url('/ui/icons/x_shop.svg')"></i><span>Làng Thợ Rèn</span></button>
+              <div class="menu-mini-row">
+                <button id="btn-codex" class="btn m-tile" style="--accent:#e2b86c"><i class="ico m-ico" style="--i:url('/ui/icons/x_book.svg')"></i><span>Sổ Rèn</span></button>
+                <button id="btn-bestiary" class="btn m-tile" style="--accent:#ff8a6a"><i class="ico m-ico" style="--i:url('/ui/icons/x_dragon.svg')"></i><span>Quái Vật</span></button>
+                <button id="btn-ach" class="btn m-tile" style="--accent:#ffd466"><i class="ico m-ico" style="--i:url('/ui/icons/x_achievement.svg')"></i><span>Thành Tựu</span></button>
+                <button id="btn-board" class="btn m-tile" style="--accent:#a6e2ff"><i class="ico m-ico" style="--i:url('/ui/icons/x_trophy.svg')"></i><span>Xếp Hạng</span></button>
+              </div>
+            </div>
+          </div>
         </div>
-        <button id="btn-forge" class="btn">Lò Rèn <span id="menu-souls" class="soul-count"></span></button>
-        <div class="btn-row"><button id="btn-village" class="btn">Làng Thợ Rèn</button><button id="btn-board" class="btn">Bảng Xếp Hạng</button></div>
-        <div class="btn-row"><button id="btn-codex" class="btn">Sổ Rèn</button><button id="btn-bestiary" class="btn">Sổ Quái Vật</button></div>
-        <div class="btn-row"><button id="btn-ach" class="btn">Thành tựu</button><button id="btn-save" class="btn">Chuyển Save</button></div>
-        <button id="btn-howto" class="btn">Hướng dẫn</button>
+        <div class="loading-text">
+          <span id="load-label">Đang tải tài nguyên... 0%</span>
+          <div class="load-track"><div id="load-fill"></div></div>
+        </div>
+      </div>
+      <div class="menu-footer-dock">
         <div class="sound-row"><button class="mute-btn" title="Tắt tiếng (M)"><i class="ico ico-speaker"></i><i class="ico ico-speaker-off"></i></button><input class="vol-slider" type="range" min="0" max="100" title="Âm lượng hiệu ứng (SFX)" /></div>
-        <p id="start-best" class="muted"></p>
+        <button id="btn-howto" class="btn m-util" style="--accent:#e2b86c"><i class="ico m-ico" style="--i:url('/ui/icons/x_scroll.svg')"></i><span>Hướng dẫn</span></button>
+        <button id="btn-save" class="btn m-util" style="--accent:#9fd4ff"><i class="ico m-ico" style="--i:url('/ui/icons/x_locked-chest.svg')"></i><span>Save</span></button>
+        <div class="credits-wrap">
+          <button id="btn-credits" class="btn m-util m-info" type="button" title="Tác giả &amp; Tài nguyên">ⓘ</button>
+          <div id="credits-pop" class="credits-pop"><p class="credits">Model: KayKit (Kay Lousberg), Quaternius · Giao diện, âm thanh: Kenney, rubberduck · Nhạc: yd, CleytonRX, Juhani Junkala · Icon: Lorc, Delapouite, sbed, Skoll, Willdabeast, Zeromancer – game-icons.net (CC BY 3.0) · Font: Grenze Gotisch, Alegreya SC, Signika (OFL)</p></div>
+        </div>
       </div>
-      <div class="loading-text">
-        <span id="load-label">Đang tải tài nguyên... 0%</span>
-        <div class="load-track"><div id="load-fill"></div></div>
-      </div>
-      <p class="credits">Model: KayKit (Kay Lousberg), Quaternius · Giao diện, âm thanh: Kenney, rubberduck · Nhạc: yd, CleytonRX, Juhani Junkala · Icon: Lorc, Delapouite, sbed, Skoll, Willdabeast, Zeromancer – game-icons.net (CC BY 3.0) · Font: Grenze Gotisch, Alegreya SC, Signika (OFL)</p>
     </div>
 
     <!-- ===== Hướng dẫn ===== -->

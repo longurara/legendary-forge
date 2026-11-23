@@ -22,7 +22,7 @@ import { CompanionManager } from './companions.js';
 import { SandboxManager, DefenseManager, TURRET_TYPES, DEFENSE_MAX_WAVES } from './modes.js';
 import { enemyBestiaryId, renderBestiaryHtml, renderRunSummaryHtml } from './bestiary.js';
 import { Minion, Boss, Assassin, Archer, KingSlime, ArchMage } from './enemies_extra.js';
-import { initFx, updateFx, shake, hitStop, clearFx, damageNumber, fxQuality, setFxQuality, fxSettings, setFxSettings, fxStats, dmgScale, explosion, spawnRing as fxRing, flash as fxFlash, smoke, burst, addShake, liquidMaterial } from './fx.js';
+import { initFx, updateFx, shake, hitStop, clearFx, damageNumber, fxQuality, setFxQuality, fxSettings, setFxSettings, fxStats, dmgScale, explosion, spawnRing as fxRing, flash as fxFlash, smoke, burst, addShake, liquidMaterial, emit, F, glowSprite } from './fx.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -31,7 +31,7 @@ import * as combat from './combat.js';
 import { ctx, updateProjectiles, clearProjectiles } from './combat.js';
 import * as weaponsMod from './weapons.js';
 import { Loot } from './loot.js';
-import { loadModels } from './models.js';
+import { loadModels, models, fitModel } from './models.js';
 import { randomWeapon, forgeWeapons, weaponName, weaponIcons, makeWeapon, rollAffixes, affixById, codexKey, RARITY, TYPES, ELEMENTS, scrapValue, MAX_PLUS, enhanceCost, weaponScore } from './weapons.js';
 import { weaponIcon, $, show } from './ui.js';
 import { PERKS, EVOLUTIONS, baseStats, rollPerks, xpForLevel, META, loadMeta, saveMeta } from './perks.js';
@@ -287,6 +287,78 @@ let victoryShown = false;
 let bestiaryTab = 'mobs';
 let runDmg = { basic: 0, special: 0, react: 0, rune: 0, ult: 0, pet: 0 };
 let menuT = 0;
+let menuAnvil = null;
+let menuEmberT = 0;
+let menuTransitionT = 0;
+const camLook = new THREE.Vector3(-1.45, 1.05, -0.2);
+const camLookTarget = new THREE.Vector3();
+const _menuPos = new THREE.Vector3();
+const _menuVel = new THREE.Vector3();
+
+function ensureMenuAnvil() {
+  if (menuAnvil) return menuAnvil;
+  const g = new THREE.Group();
+  if (models.anvil) {
+    g.add(fitModel(models.anvil, 1.38, 'ground'));
+  } else {
+    const iron = new THREE.MeshStandardMaterial({ color: 0x3a3d44, metalness: 0.8, roughness: 0.38 });
+    const hot = new THREE.MeshStandardMaterial({ color: 0x7a4a3a, emissive: 0xff6a20, emissiveIntensity: 0.75 });
+    const add = (geo, mat, px, py, pz) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(px, py, pz); m.castShadow = true; m.receiveShadow = true;
+      g.add(m); return m;
+    };
+    add(new THREE.BoxGeometry(1.0, 0.32, 0.78), iron, 0, 0.16, 0);
+    add(new THREE.BoxGeometry(0.5, 0.5, 0.44), iron, 0, 0.55, 0);
+    add(new THREE.BoxGeometry(1.5, 0.32, 0.62), iron, 0.1, 0.94, 0);
+    add(new THREE.BoxGeometry(1.08, 0.045, 0.44), hot, 0.15, 1.12, 0);
+  }
+  const glow = glowSprite(0xff8a30, 1.95);
+  glow.position.set(0, 1.15, 0);
+  const glow2 = glowSprite(0xffd070, 0.95);
+  glow2.position.set(0, 0.98, 0);
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(1.45, 1.62, 48).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0xffb84d, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }),
+  );
+  ring.position.y = 0.03;
+  g.add(glow, glow2, ring);
+  g.position.set(0.2, 0, -0.35);
+  g.rotation.y = 0.35;
+  g.userData = { ring, glow, glow2 };
+  scene.add(g);
+  menuAnvil = g;
+  return g;
+}
+
+function syncMenuStage() {
+  if (!player) return;
+  if (started) {
+    if (menuAnvil) menuAnvil.visible = false;
+    if (player.footRing) player.footRing.visible = true;
+    if (player.footArrow) player.footArrow.visible = true;
+    if (darkLight) darkLight.color.set(0xffd8a0);
+    return;
+  }
+  ensureMenuAnvil().visible = true;
+  const saved = loadRunState();
+  const showChar = saved?.run?.char || run.char || meta.char || 'knight';
+  player.setCharacter(showChar);
+  if (saved?.player?.weapons?.length) {
+    player.setWeapons(saved.player.weapons, saved.player.slot || 0);
+  } else {
+    player.weapons = [makeWeapon(player.char.weapon, 'fire', 2)];
+    player.equip(0);
+  }
+  player.pos.set(1.65, 0, 0.75);
+  player.root.visible = true;
+  player.model.visible = true;
+  player.root.position.copy(player.pos);
+  player.root.rotation.y = -0.45;
+  if (player.footRing) player.footRing.visible = false;
+  if (player.footArrow) player.footArrow.visible = false;
+  player.anim?.play('Idle', { fade: 0 });
+}
 let hurtFlash = 0;
 let lastHp = 100;
 let best = Number(localStorage.getItem('lorenh_best') || 0);
@@ -1015,6 +1087,7 @@ function autoSaveRun() {
 function syncContinueBtn() {
   const btn = $('btn-continue');
   const playBtn = $('btn-play');
+  const playLbl = $('btn-play-label');
   const s = loadRunState();
   if (!btn) return;
   if (s) {
@@ -1022,9 +1095,11 @@ function syncContinueBtn() {
     const info = $('continue-info');
     if (info) info.textContent = describeSavedRun(s);
     playBtn?.classList.remove('primary');
+    if (playLbl) playLbl.textContent = 'Lượt mới';
   } else {
     btn.classList.add('hidden');
     playBtn?.classList.add('primary');
+    if (playLbl) playLbl.textContent = 'Bắt đầu';
   }
 }
 
@@ -1221,6 +1296,8 @@ function descend() {
       setTimeout(() => pickRune(randomRune()), 700);
     }
     camera.position.copy(player.pos).add(CAM_OFFSET);
+    camLook.set(player.pos.x, 0, player.pos.z);
+    menuTransitionT = 0;
     intermission = 2.5;
     showBanner(`Tầng ${floor}`, theme.name, 2.8, '#ffe2a0');
     newQuest();
@@ -1613,8 +1690,11 @@ const isUnlocked = (c) => !c.unlock || meta.ach[c.unlock];
 
 // ================= Menu: Lò Rèn, chuẩn bị lượt, thành tựu, Sổ Rèn =================
 function updateMenuSouls() {
+  const html = `<i class="ico ico-soul"></i>${meta.souls}`;
   const el = $('menu-souls');
-  if (el) el.innerHTML = `<i class="ico ico-soul"></i>${meta.souls}`;
+  if (el) el.innerHTML = html;
+  const topEl = $('menu-souls-top');
+  if (topEl) topEl.innerHTML = html;
 }
 
 function renderForge() {
@@ -1659,7 +1739,7 @@ function renderPrep() {
       <div class="muted small">${open ? `${c.hp} máu · ${TYPES[c.weapon].name}` : 'Khóa'}</div>
       <p>${open ? c.passive : `Mở khóa: ${req?.desc || 'Hoàn thành thành tựu'}`}</p></button>`;
   }).join('');
-  for (const b of $('char-list').querySelectorAll('.char-card')) b.onclick = () => { run.char = b.dataset.id; meta.char = run.char; saveMeta(meta); play('uiClick'); renderPrep(); };
+  for (const b of $('char-list').querySelectorAll('.char-card')) b.onclick = () => { run.char = b.dataset.id; meta.char = run.char; saveMeta(meta); if (!started) syncMenuStage(); play('uiClick'); renderPrep(); };
   const petEl = $('pet-list');
   if (petEl) {
     run.pet = run.pet || meta.pet || 'none';
@@ -2143,9 +2223,41 @@ function update(realDt, render = true) {
   }
 
   updateWorld(time, player.pos);
-  if (darkLight) darkLight.position.set(player.pos.x, 3, player.pos.z);
+  if (!started) {
+    player?.anim?.update(realDt);
+    if (darkLight) {
+      darkLight.color.set(0xff9238);
+      darkLight.position.set(0.3, 2.6, 0.2);
+      darkLight.intensity = 16 + Math.sin(time * 4.2) * 3.0 + Math.sin(time * 10.7) * 1.2;
+    }
+    if (menuAnvil?.visible) {
+      const pulse = 0.85 + Math.sin(time * 3.1) * 0.15;
+      menuAnvil.userData.ring.material.opacity = 0.35 + pulse * 0.22;
+      menuAnvil.userData.glow.scale.setScalar(1.75 + pulse * 0.28);
+      menuAnvil.userData.glow2.scale.setScalar(0.85 + pulse * 0.16);
+    }
+    menuEmberT -= realDt;
+    if (menuEmberT <= 0) {
+      menuEmberT = 0.085;
+      _menuPos.set(0.2 + (Math.random() - 0.5) * 2.4, 0.85 + Math.random() * 0.35, -0.35 + (Math.random() - 0.5) * 2.0);
+      _menuVel.set((Math.random() - 0.5) * 0.65, 1.3 + Math.random() * 1.4, (Math.random() - 0.5) * 0.65);
+      emit(_menuPos, {
+        frame: F.flame,
+        color: Math.random() < 0.35 ? 0xffe08a : 0xff7a2a,
+        color2: 0xff3a10,
+        size: 0.22 + Math.random() * 0.16,
+        size2: 0.04,
+        life: 1.1 + Math.random() * 0.8,
+        vel: _menuVel,
+        drag: 0.5,
+        hdr: 1.9,
+      });
+    }
+  } else if (darkLight) {
+    darkLight.position.set(player.pos.x, 3, player.pos.z);
+  }
   updateFade(realDt);
-  updateFx(dt, realDt, camera);
+  updateFx(started ? dt : realDt, realDt, camera);
   updateToasts(realDt);
 
   // Nhạc nền theo trạng thái
@@ -2153,14 +2265,15 @@ function update(realDt, render = true) {
   setMusic(!started ? 'calm' : bossAlive ? 'boss' : enemies.length ? 'battle' : 'calm');
   updateMusic(realDt);
 
-  // Camera (zoom gần khi hạ boss)
+  // Camera (zoom gần khi hạ boss, hoặc lướt mượt từ góc Lò Rèn menu)
   slowmoReal = Math.max(0, slowmoReal - realDt);
   camZoom += ((slowmoReal > 0 ? 0.62 : 1) - camZoom) * Math.min(1, realDt * 3);
   if (!started) {
-    menuT += realDt * 0.12;
-    camTarget.set(Math.sin(menuT) * 9, 13, Math.cos(menuT) * 9 + 4);
-    camera.position.lerp(camTarget, 1 - Math.pow(0.2, realDt));
+    menuT += realDt * 0.16;
+    camTarget.set(-1.55 + Math.sin(menuT) * 1.0, 4.45 + Math.sin(menuT * 0.7) * 0.2, 9.0 + Math.cos(menuT) * 0.55);
+    camera.position.lerp(camTarget, 1 - Math.pow(0.08, realDt));
   } else {
+    if (menuTransitionT > 0) menuTransitionT = Math.max(0, menuTransitionT - realDt);
     // 2 người: camera nhìn vào giữa hai người, lùi xa khi hai người cách xa
     const focus = player2 && !player2.dead && !player.dead ? player.pos.clone().lerp(player2.pos, 0.5) : player2 && player.dead ? player2.pos : player.pos;
     const spread = player2 ? Math.min(0.55, Math.max(0, player.pos.distanceTo(player2.pos) - 8) * 0.03) : 0;
@@ -2173,8 +2286,16 @@ function update(realDt, render = true) {
   camera.position.x += (Math.random() * 2 - 1) * s;
   camera.position.y += (Math.random() * 2 - 1) * s;
   camera.position.z += (Math.random() * 2 - 1) * s;
-  if (!started) camera.lookAt(0, 0, -1);
-  else camera.lookAt(camera.position.x - CAM_OFFSET.x * camZoom, 0, camera.position.z - CAM_OFFSET.z * camZoom);
+  if (!started) {
+    camLookTarget.set(-1.45, 1.05, -0.2);
+    camLook.lerp(camLookTarget, 1 - Math.pow(0.04, realDt));
+    camera.lookAt(camLook);
+  } else {
+    camLookTarget.set(camera.position.x - CAM_OFFSET.x * camZoom, 0, camera.position.z - CAM_OFFSET.z * camZoom);
+    if (menuTransitionT > 0) camLook.lerp(camLookTarget, 1 - Math.pow(0.0005, realDt));
+    else camLook.copy(camLookTarget);
+    camera.lookAt(camLook);
+  }
 
   updateHud(realDt);
   if (fxSettings.showFps) {
@@ -2450,9 +2571,11 @@ function startGame(opts = {}) {
   if (run.mode === 'normal' && !run.bossrush && !run.coop) { clearRunState(); syncContinueBtn(); }
   setSeed(run.daily ? daySeed() : null);
   started = true;
+  menuTransitionT = 0.65;
+  if (darkLight) { darkLight.color.set(0xffd8a0); darkLight.intensity = 0; }
   for (const id of ['start', 'howto', 'prep', 'bestiary', 'save-modal', 'victory']) show(id, false);
   restart();
-  camera.position.copy(player.pos).add(CAM_OFFSET);
+  syncMenuStage();
   setMode('playing');
 }
 
@@ -2467,6 +2590,7 @@ function continueSavedRun() {
   coop.on = false;
   setSeed(run.daily ? daySeed() : null);
   started = true;
+  if (darkLight) { darkLight.color.set(0xffd8a0); darkLight.intensity = 0; }
   for (const id of ['start', 'howto', 'prep', 'bestiary', 'save-modal', 'victory']) show(id, false);
   restart();
   clearTimeout(patronTimer);
@@ -2536,7 +2660,8 @@ function continueSavedRun() {
   renderNextReward();
   renderFlameHud();
   setFlameLevel(flameState.flame);
-  camera.position.copy(player.pos).add(CAM_OFFSET);
+  menuTransitionT = 0.65;
+  syncMenuStage();
   setMode('playing');
   showBanner(`Tiếp tục: Tầng ${floor}`, `Đợt ${wave}${exitOpen ? ' · Lối xuống đang mở' : choosingReward ? ' · Chọn phần thưởng' : ''}`, 2.6, '#7fd8ff');
 }
@@ -2550,6 +2675,8 @@ function toMenu() {
   run.mode = 'normal';
   run.endless = false;
   restart();
+  menuT = 0;
+  syncMenuStage();
   hud.startBest.textContent = best ? `Kỷ lục: đợt ${best}` : 'Chưa có kỷ lục';
   renderDaily();
   syncContinueBtn();
@@ -2797,15 +2924,26 @@ async function init() {
   ctx.enemies = enemies;
   player.onWeaponsChanged = renderSlots;
   restart();
-  camera.position.set(0, 13, 13);
-  camera.lookAt(0, 0, -1);
+  camera.position.set(-1.55, 4.45, 9.0);
+  camLook.set(-1.45, 1.05, -0.2);
+  camera.lookAt(camLook);
   darkLight = new THREE.PointLight(0xffd8a0, 0, 18, 1.35);
   scene.add(darkLight);
   setDarkHook((k) => { darkLight.intensity = typeof k === 'number' ? k * 22 : k ? 22 : 0; });
+  syncMenuStage();
 
   hud.startBest.textContent = best ? `Kỷ lục: đợt ${best}` : 'Chưa có kỷ lục';
   renderDaily();
   for (const el of document.querySelectorAll('.overlay')) el.addEventListener('mousedown', (e) => e.stopPropagation());
+  if ($('btn-credits')) {
+    $('btn-credits').onclick = (e) => {
+      e.stopPropagation();
+      $('btn-credits').closest('.credits-wrap')?.classList.toggle('open');
+    };
+    $('start')?.addEventListener('click', (e) => {
+      if (!e.target.closest('.credits-wrap')) document.querySelector('.credits-wrap')?.classList.remove('open');
+    });
+  }
   $('btn-play').onclick = () => { renderPrep(); show('prep', true); play('uiOpen'); };
   if ($('btn-continue')) $('btn-continue').onclick = () => continueSavedRun();
   syncContinueBtn();

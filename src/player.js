@@ -59,6 +59,8 @@ export class Player {
     );
     arrow.rotation.x = Math.PI / 2;
     arrow.position.set(0, 0.03, 0.85);
+    this.footRing = ring;
+    this.footArrow = arrow;
     this.root.add(ring, arrow);
 
     // Quả cầu hộ mệnh (di vật)
