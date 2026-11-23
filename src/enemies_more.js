@@ -7,6 +7,7 @@ import { ctx } from './combat.js';
 import { play } from './audio.js';
 import { Enemy } from './enemies.js';
 import { Walker, tintMats, hurtPlayer } from './enemies_new.js';
+import { steerMove, leadPos, canStartMelee, claimMeleeToken } from './ai.js';
 
 // ---------- Hiệp Sĩ Giáp: phải phá giáp bằng chí mạng / đòn nặng / đâm lướt ----------
 export class Armored extends Walker {
@@ -40,13 +41,14 @@ export class Armored extends Walker {
     this.cd -= bdt;
     if (this.state === 'chase') {
       this.facing = Math.atan2(dx, dz);
-      if (d < 3 && this.cd <= 0 && !player.dead) {
-        this.state = 'wind'; this.timer = 0.75;
-        this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3, duration: 0.75 });
-        if (this.anim) this.anim.play('2H_Melee_Attack_Spin', { once: true, fade: 0.1, speed: 0.75 });
+      if (d < 3 && this.cd <= 0 && !player.dead && canStartMelee(this)) {
+        claimMeleeToken(this);
+        this.state = 'wind'; this.timer = 0.65;
+        this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3, duration: 0.65 });
+        if (this.anim) this.anim.play('2H_Melee_Attack_Spin', { once: true, fade: 0.1, speed: 0.85 });
         return null;
       }
-      if (d > 1.6) { this.move(dx / d, dz / d, 2.2, bdt); return 'Walking_D_Skeletons'; }
+      if (d > 1.6) { this.move(dx / d, dz / d, 2.75, bdt); return 'Walking_D_Skeletons'; }
       return 'Idle_Combat';
     }
     if (this.state === 'wind') {
@@ -54,12 +56,12 @@ export class Armored extends Walker {
       if (this.timer <= 0) {
         if (!player.dead && d < 3 + player.radius) hurtPlayer(player, 18);
         play('swing', { at: this.pos, rate: 0.6 }); addShake(0.25);
-        this.state = 'recover'; this.timer = 0.7;
+        this.state = 'recover'; this.timer = 0.6;
       }
       return null;
     }
     this.timer -= bdt;
-    if (this.timer <= 0) { this.state = 'chase'; this.cd = 1.6 + Math.random(); }
+    if (this.timer <= 0) { this.state = 'chase'; this.cd = 1.4 + Math.random(); }
     return 'Idle_Combat';
   }
   die() { if (this.tele) this.tele.done = true; super.die(); }
@@ -92,18 +94,21 @@ export class Burrower extends Enemy {
       const dx = player.pos.x - this.pos.x, dz = player.pos.z - this.pos.z, d = Math.hypot(dx, dz) || 0.001;
       this.timer -= bdt;
       if (this.state === 'up') {
-        this.pos.x += (dx / d) * 1.8 * bdt; this.pos.z += (dz / d) * 1.8 * bdt;
+        steerMove(this, dx, dz, 2.2, bdt);
         if (this.timer <= 0) { this.state = 'dive'; this.timer = 0.4; burst(this.pos.clone().setY(0.2), 0x6a5a4a, 10, { speed: 3, up: 3, size: 0.2 }); play('slimeLand', { at: this.pos }); }
       } else if (this.state === 'dive') {
         this.under = Math.min(1, this.under + bdt * 3);
-        if (this.timer <= 0) { this.state = 'under'; this.timer = 1.4; }
+        if (this.timer <= 0) { this.state = 'under'; this.timer = 1.3; }
       } else if (this.state === 'under') {
-        this.pos.x += (dx / d) * Math.min(d, 7 * bdt); this.pos.z += (dz / d) * Math.min(d, 7 * bdt);
+        const spd = Math.min(7.5, d / Math.max(bdt, 0.001));
+        steerMove(this, dx, dz, spd, bdt, { ignoreHazards: true });
         if (Math.random() < 0.6) emit(this.pos.clone().setY(0.1), { smoke: true, frame: F.dust, color: 0x6a5a4a, size: 0.6, size2: 1, life: 0.6, alpha: 0.5 });
-        if (this.timer <= 0 || d < 0.6) {
-          this.state = 'rise'; this.timer = 0.7;
-          this.pos.copy(player.pos);
-          this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos.clone(), radius: 1.8, duration: 0.7 });
+        if (this.timer <= 0 || d < 0.8) {
+          this.state = 'rise'; this.timer = 0.55;
+          const lp = leadPos(this.pos, player, 12, 0.55);
+          this.pos.set(lp.x, 0, lp.z);
+          collide(this.pos, this.radius);
+          this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos.clone(), radius: 1.8, duration: 0.55 });
         }
       } else if (this.state === 'rise') {
         if (this.timer <= 0) {

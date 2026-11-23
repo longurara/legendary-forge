@@ -6,6 +6,7 @@ import { models, fitModel, Animator } from './models.js';
 import { ctx, enemyShot, scheduleBomb } from './combat.js';
 import { play } from './audio.js';
 import { Enemy, Slime } from './enemies.js';
+import { steerMove, rangedStrafeVec, hasLineOfSight, leadPos, leadAngle, pickBossMove, canStartMelee, claimMeleeToken } from './ai.js';
 
 // Vũ khí gắn tay cho quái xương (đúng vị trí bản gốc KayKit)
 function attachProp(fitted, propName, bone = 'handslotr') {
@@ -86,20 +87,19 @@ export class Minion extends Enemy {
       this.cd -= bdt;
       if (this.state === 'chase') {
         this.facing = Math.atan2(dx, dz);
-        if (d < 2.0 && this.cd <= 0 && !player.dead) {
+        if (d < 2.0 && this.cd <= 0 && !player.dead && canStartMelee(this)) {
           // Vung kiếm: khóa hướng, hiện vùng cảnh báo hình quạt
+          claimMeleeToken(this);
           this.state = 'windup';
-          this.timer = 0.55;
-          this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 2.4, arc: 1.9, facing: this.facing, duration: 0.55 });
+          this.timer = 0.5;
+          this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 2.4, arc: 1.9, facing: this.facing, duration: 0.5 });
           if (this.anim) this.anim.play('1H_Melee_Attack_Chop', { once: true, fade: 0.05, speed: 1.25 });
         } else if (d > 1.3 && this.busy <= 0) {
-          // Bao vây: mỗi con nhắm một góc quanh người chơi rồi mới áp sát
-          if (this.flankA == null) this.flankA = Math.random() * Math.PI * 2;
+          // Bao vây theo góc chia từ updateTactics để không chụm thành 1 cục
+          const flank = this._slotA ?? (this.flankA ?? (this.flankA = Math.random() * Math.PI * 2));
           let tx = dx, tz = dz;
-          if (d > 3.2) { tx = player.pos.x + Math.cos(this.flankA) * 2.4 - this.pos.x; tz = player.pos.z + Math.sin(this.flankA) * 2.4 - this.pos.z; }
-          const td = Math.hypot(tx, tz) || 1;
-          this.pos.x += (tx / td) * 3.1 * bdt;
-          this.pos.z += (tz / td) * 3.1 * bdt;
+          if (d > 3.0) { tx = player.pos.x + Math.cos(flank) * 2.4 - this.pos.x; tz = player.pos.z + Math.sin(flank) * 2.4 - this.pos.z; }
+          steerMove(this, tx, tz, 3.3, bdt);
           anim = 'Running_C';
         } else if (this.busy <= 0) anim = 'Idle_Combat';
       } else if (this.state === 'windup') {
@@ -219,7 +219,7 @@ export class Boss extends Enemy {
       case 'chase':
         this.facing = Math.atan2(dx, dz);
         this.timer -= bdt;
-        if (d > 2.2) { this.pos.x += (dx / d) * 2.5 * bdt; this.pos.z += (dz / d) * 2.5 * bdt; anim = 'Walking_D_Skeletons'; }
+        if (d > 2.2) { steerMove(this, dx / d, dz / d, 2.9 * speed, bdt); anim = 'Walking_D_Skeletons'; }
         else anim = 'Idle_Combat';
         if (this.timer <= 0 && !player.dead) this.chooseAttack(player, d);
         break;
@@ -233,7 +233,8 @@ export class Boss extends Enemy {
           addShake(0.8);
           play('explode', { at: this.pos });
           if (!player.dead && d < R + player.radius) { if (player.hurt(24)) damageNumber(player.pos, 24, 'player'); }
-          this.state = 'recover'; this.timer = 0.9;
+          this.comboed = false;
+          this.state = 'recover'; this.timer = 0.7;
         }
         break;
       case 'chargeWind':
@@ -261,7 +262,14 @@ export class Boss extends Enemy {
         if (this.chargeLeft <= 0 || before.distanceTo(this.pos) > 0.01) {
           this.teleKind = null;
           addShake(0.4); play('hitHeavy', { at: this.pos });
-          this.state = 'recover'; this.timer = 1.0;
+          if (this.enraged && !this.comboed && !player.dead && Math.hypot(player.pos.x - this.pos.x, player.pos.z - this.pos.z) < 7) {
+            this.comboed = true;
+            this.slamR = 4.2 * (this.isPartBroken('axe') ? 0.65 : 1);
+            this.state = 'slam'; this.timer = 0.6 / speed;
+            this.teleKind = 'interrupt';
+            this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: this.slamR, duration: this.timer, kind: 'interrupt' });
+            if (this.anim) this.anim.play('2H_Melee_Attack_Chop', { once: true, fade: 0.08, speed: 1.2 });
+          } else { this.comboed = false; this.state = 'recover'; this.timer = 0.75; }
         }
         break;
       }
@@ -307,27 +315,28 @@ export class Boss extends Enemy {
 
   chooseAttack(player, d) {
     const minions = ctx.enemies.filter((e) => e instanceof Minion && !e.dead).length;
-    const options = ['slam', 'charge'];
-    if (minions < 3) options.push('summon');
-    let pick = options[this.next++ % options.length];
-    if (pick === 'slam' && d > 6) pick = 'charge';       // ở xa thì lao tới
+    const pick = pickBossMove(this, [
+      { id: 'slam', weight: d < 5 ? 3.2 : 0.4 },
+      { id: 'charge', weight: d > 5.5 ? 3.0 : 1.2 },
+      { id: 'summon', weight: minions < 3 ? 1.5 : 0 },
+    ]);
     const sp = this.enraged ? 1.3 : 1;
     if (pick === 'slam') {
       this.slamR = (this.enraged ? 4.2 : 3.6) * (this.isPartBroken('axe') ? 0.65 : 1);
-      this.state = 'slam'; this.timer = 1.0;
+      this.state = 'slam'; this.timer = 0.9;
       this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: this.slamR, duration: 1.0 / sp, kind: 'interrupt' });
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: this.slamR, duration: 0.9 / sp, kind: 'interrupt' });
       if (this.anim) this.anim.play('2H_Melee_Attack_Chop', { once: true, fade: 0.1, speed: 0.9 });
     } else if (pick === 'charge') {
-      this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
-      this.state = 'chargeWind'; this.timer = 0.8;
+      this.facing = leadAngle(this.pos, player, 19 * sp, 0.55);
+      this.state = 'chargeWind'; this.timer = 0.72;
       this.teleKind = 'pierce';
-      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: this.isPartBroken('shield') ? 1.6 : 2.4, length: 11, facing: this.facing, duration: 0.8 / sp, kind: 'pierce' });
+      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: this.isPartBroken('shield') ? 1.6 : 2.4, length: 11, facing: this.facing, duration: 0.72 / sp, kind: 'pierce' });
       if (this.anim) this.anim.play('Taunt', { once: true, fade: 0.1, speed: 1.6 });
     } else {
-      this.state = 'summon'; this.timer = 1.1;
+      this.state = 'summon'; this.timer = 1.0;
       this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 2.8, duration: 1.1 / sp, kind: 'interrupt' });
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 2.8, duration: 1.0 / sp, kind: 'interrupt' });
       if (this.anim) this.anim.play('Spellcast_Summon', { once: true, fade: 0.1 });
       play('mageCast', { at: this.pos, rate: 0.7 });
     }
@@ -335,7 +344,7 @@ export class Boss extends Enemy {
   die() { if (this.tele) this.tele.done = true; super.die(); }
 }
 
-// ---------- Sát thủ xương: áp sát rồi lướt chém xuyên qua ----------
+// ---------- Sát thủ xương: áp sát rồi lướt chém xuyên qua (đón đầu + trừng phạt lướt) ----------
 export class Assassin extends Enemy {
   constructor(scene, x, z) {
     super(scene, x, z);
@@ -366,17 +375,23 @@ export class Assassin extends Enemy {
     } else {
       const dx = player.pos.x - this.pos.x, dz = player.pos.z - this.pos.z, d = Math.hypot(dx, dz) || 0.001;
       this.cd -= bdt;
+      this._dashReactCd = Math.max(0, (this._dashReactCd || 0) - dt);
       if (this.state === 'chase') {
         this.facing = Math.atan2(dx, dz);
+        if (player.dashTime > 0 && this._dashReactCd <= 0 && d < 9) {
+          this._dashReactCd = 1.6;
+          this.cd *= 0.45;
+        }
         if ((player.charging || (player.attack && d < 3)) && d < 6) {
-          this.pos.x -= (dx / d) * 5 * bdt; this.pos.z -= (dz / d) * 5 * bdt; anim = 'Running_C';
-        } else if (d < 7.5 && this.cd <= 0 && !player.dead) {
-          this.state = 'aim'; this.timer = 0.6;
+          steerMove(this, -dx, -dz, 5.2, bdt); anim = 'Running_C';
+        } else if (d < 8.2 && this.cd <= 0 && !player.dead && hasLineOfSight(this.pos.x, this.pos.z, player.pos.x, player.pos.z)) {
+          this.facing = leadAngle(this.pos, player, 24, 0.55);
+          this.state = 'aim'; this.timer = 0.5;
           this.teleKind = 'pierce';
-          this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 1.2, length: 9, facing: this.facing, duration: 0.6, kind: 'pierce' });
-          if (this.anim) this.anim.play('1H_Melee_Attack_Stab', { once: true, fade: 0.1, speed: 0.6 });
-        } else if (d > 4) { this.pos.x += (dx / d) * 4.2 * bdt; this.pos.z += (dz / d) * 4.2 * bdt; anim = 'Running_C'; }
-        else { const sx = -dz / d, sz = dx / d; this.pos.x += sx * 3 * bdt; this.pos.z += sz * 3 * bdt; anim = 'Running_C'; }
+          this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 1.2, length: 9, facing: this.facing, duration: 0.5, kind: 'pierce' });
+          if (this.anim) this.anim.play('1H_Melee_Attack_Stab', { once: true, fade: 0.1, speed: 0.7 });
+        } else if (d > 4) { steerMove(this, dx, dz, 4.5, bdt); anim = 'Running_C'; }
+        else { steerMove(this, -dz, dx, 3.2, bdt); anim = 'Running_C'; }
       } else if (this.state === 'aim') {
         this.timer -= bdt;
         if (this.timer <= 0) { this.state = 'dash'; this.left = 9; this.hitDone = false; this.teleKind = 'pierce'; play('dash', { at: this.pos }); }
@@ -388,11 +403,11 @@ export class Assassin extends Enemy {
           this.hitDone = true; if (player.hurt(14)) damageNumber(player.pos, 14, 'player');
         }
         const before = this.pos.clone(); collide(this.pos, this.radius);
-        if (this.left <= 0 || before.distanceTo(this.pos) > 0.01) { this.teleKind = null; this.state = 'recover'; this.timer = 0.6; }
+        if (this.left <= 0 || before.distanceTo(this.pos) > 0.01) { this.teleKind = null; this.state = 'recover'; this.timer = 0.55; }
       } else if (this.state === 'recover') {
         this.teleKind = null;
         this.timer -= bdt; anim = 'Idle_Combat';
-        if (this.timer <= 0) { this.state = 'chase'; this.cd = 2 + Math.random(); }
+        if (this.timer <= 0) { this.state = 'chase'; this.cd = 1.6 + Math.random(); }
       }
     }
     if (this.anim) { if (anim && this.state !== 'aim') this.anim.play(anim, { speed: 1.2 }); this.anim.update(bdt); }
@@ -406,10 +421,11 @@ export class Assassin extends Enemy {
   }
 }
 
-// ---------- Cung thủ xương: giữ khoảng cách, nhắm rồi bắn nỏ ----------
+// ---------- Cung thủ xương: kiểm tra đường ngắm, né góc kẹt & bắn đón đầu ----------
 export class Archer extends Enemy {
   constructor(scene, x, z) {
     super(scene, x, z);
+    this._isRanged = true;
     this.hp = 22; this.color = 0xd8d0c0; this.mass = 0.8; this.contactDmg = 0; this.dropChance = 0.18; this.xp = 3;
     this.hurtSound = 'mageHurt'; this.dieSound = 'mageDie';
     this.state = 'move'; this.timer = 0; this.cd = 1.5 + Math.random(); this.facing = 0; this.strafe = Math.random() < 0.5 ? 1 : -1;
@@ -439,13 +455,12 @@ export class Archer extends Enemy {
       this.cd -= bdt;
       if (this.state === 'move') {
         this.facing = Math.atan2(dx, dz);
-        const radial = d > 11 ? 1 : d < 7 ? -1 : 0;
-        this.pos.x += ((dx / d) * radial * 3 + (-dz / d) * this.strafe * 1.6) * bdt;
-        this.pos.z += ((dz / d) * radial * 3 + (dx / d) * this.strafe * 1.6) * bdt;
+        rangedStrafeVec(this, player, d, dx, dz, 7.2, 11.5, 3.3, 1.9, bdt);
         anim = 'Walking_D_Skeletons';
-        if (this.cd <= 0 && d < 16 && !player.dead) {
-          this.state = 'aim'; this.timer = 0.85;
-          this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 0.35, length: 16, facing: this.facing, duration: 0.85, color: 0xffb040 });
+        if (this.cd <= 0 && d < 17 && !player.dead && hasLineOfSight(this.pos.x, this.pos.z, player.pos.x, player.pos.z)) {
+          this.facing = leadAngle(this.pos, player, 20, 0.65);
+          this.state = 'aim'; this.timer = 0.72;
+          this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 0.35, length: 16, facing: this.facing, duration: 0.72, color: 0xffb040 });
           if (this.anim) this.anim.play('2H_Ranged_Aiming', { fade: 0.1 });
         }
       } else if (this.state === 'aim') {
@@ -456,7 +471,7 @@ export class Archer extends Enemy {
           enemyShot(this.pos.clone().setY(1.1).addScaledVector(dir, 0.6), dir, 10, 'arrow');
           play('swing', { at: this.pos, rate: 1.6 });
           if (this.anim) this.anim.play('2H_Ranged_Shoot', { once: true, fade: 0.05 });
-          this.state = 'move'; this.cd = 2.4 + Math.random(); this.strafe *= -1;
+          this.state = 'move'; this.cd = 2.0 + Math.random() * 0.8; this.strafe *= -1;
         }
       }
     }
@@ -527,8 +542,10 @@ export class KingSlime extends Enemy {
       this.teleKind = this.timer < 0.65 ? 'interrupt' : null;
       if (this.timer <= 0 && !player.dead) {
         this.teleKind = null;
-        this.state = 'jump'; this.t = 0; this.dur = this.enraged ? 1.0 : 1.25;
-        this.from = this.pos.clone(); this.to = player.pos.clone();
+        this.state = 'jump'; this.t = 0; this.dur = this.enraged ? 0.85 : 1.05;
+        this.from = this.pos.clone();
+        const lp = leadPos(this.pos, player, 11, 0.6);
+        this.to = new THREE.Vector3(lp.x, 0, lp.z);
         this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.to, radius: 3.6, duration: this.dur / (this.enraged ? 1.25 : 1) });
         if (this.anim) this.anim.play('Slime_Walk', { speed: 0.8 });
       }
@@ -538,7 +555,7 @@ export class KingSlime extends Enemy {
       this.pos.lerpVectors(this.from, this.to, k);
       this.height = Math.sin(k * Math.PI) * 7;
       if (k >= 1) {
-        this.height = 0; this.state = 'wait'; this.timer = this.enraged ? 0.7 : 1.2;
+        this.height = 0;
         spawnRing(this.scene, this.pos, 3.6, 0xb070ff, 0.45);
         burst(this.pos.clone().setY(0.3), 0xb070ff, 40, { speed: 11, size: 0.22 });
         addShake(0.8); play('explode', { at: this.pos, rate: 0.7 });
@@ -549,6 +566,20 @@ export class KingSlime extends Enemy {
           s.spawning = false; s.height = 0; s.timer = 0.5;
           if (ctx.spawnEnemy) ctx.spawnEnemy(s);
         }
+        if (this.enraged) {
+          for (let i = 0; i < 8; i++) {
+            const a = (i / 8) * Math.PI * 2;
+            enemyShot(this.pos.clone().setY(1.2), new THREE.Vector3(Math.sin(a), 0, Math.cos(a)), 10, 'orb');
+          }
+        }
+        if (this.enraged && !this.comboed && !player.dead) {
+          this.comboed = true;
+          this.t = 0; this.dur = 0.75;
+          this.from = this.pos.clone();
+          const lp2 = leadPos(this.pos, player, 12, 0.55);
+          this.to = new THREE.Vector3(lp2.x, 0, lp2.z);
+          this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.to, radius: 3.6, duration: this.dur / 1.25 });
+        } else { this.comboed = false; this.state = 'wait'; this.timer = this.enraged ? 0.55 : 0.95; }
       }
     }
     if (this.anim) this.anim.update(bdt);
@@ -608,27 +639,38 @@ export class ArchMage extends Enemy {
     if (this.dead) return false;
     const bdt = dt * this.speedMul * (this.enraged ? 1.3 : 1);
     if (this.spawning) { this.spawnT += dt; if (this.spawnT >= 0) { this.spawning = false; play('anvil'); } }
-    const dx = player.pos.x - this.pos.x, dz = player.pos.z - this.pos.z;
+    const dx = player.pos.x - this.pos.x, dz = player.pos.z - this.pos.z, d = Math.hypot(dx, dz) || 0.001;
     this.facing = Math.atan2(dx, dz);
     this.timer -= bdt;
     if (this.state === 'idle' && this.timer <= 0 && !player.dead) {
-      const pattern = ['ring', 'teleport', 'spiral', 'storm', 'teleport', 'summon'][this.next++ % 6];
+      const pattern = this.chainNext || pickBossMove(this, [
+        { id: 'ring', weight: d < 5.5 ? 3.2 : 1.3 },
+        { id: 'teleport', weight: d < 5.5 ? 2.5 : 1.2 },
+        { id: 'spiral', weight: d >= 4.5 ? 2.2 : 1.0 },
+        { id: 'storm', weight: 2.0 },
+        { id: 'summon', weight: ctx.enemies.length < 10 ? 1.3 : 0 },
+      ]);
+      this.chainNext = null;
       this.state = pattern;
       if (pattern === 'ring') {
-        this.timer = 0.7; this.teleKind = 'interrupt';
-        this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.0, duration: 0.7, kind: 'interrupt' });
+        this.timer = 0.65; this.teleKind = 'interrupt';
+        this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.0, duration: 0.65, kind: 'interrupt' });
         if (this.anim) this.anim.play('Spellcast_Shoot', { once: true, fade: 0.1 });
       } else if (pattern === 'spiral') {
-        this.timer = 1.6; this.spiralA = 0; this.spiralT = 0; this.teleKind = 'interrupt';
+        this.timer = 1.5; this.spiralA = 0; this.spiralT = 0; this.teleKind = 'interrupt';
         if (this.anim) this.anim.play('Spellcasting', { fade: 0.1 });
       } else if (pattern === 'storm') {
         this.timer = 0.4; if (this.anim) this.anim.play('Spellcast_Raise', { once: true, fade: 0.1 });
-        for (let i = 0; i < (this.enraged ? 5 : 3); i++) {
-          const at = player.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 6, 0, (Math.random() - 0.5) * 6));
-          scheduleBomb(at, 1.0 + i * 0.15, 1.8, 0, 14, 0xc06bff);
+        const lp = leadPos(this.pos, player, 10, 0.65);
+        const offsets = [[0, 0], [3.2, 0], [-3.2, 0], [0, 3.2], [0, -3.2]];
+        const cnt = this.enraged ? 5 : 3;
+        for (let i = 0; i < cnt; i++) {
+          const at = new THREE.Vector3(lp.x + offsets[i][0], 0, lp.z + offsets[i][1]);
+          scheduleBomb(at, 0.95 + i * 0.14, 1.9, 0, 14, 0xc06bff);
         }
       } else if (pattern === 'teleport') {
-        this.timer = 0.3;
+        this.timer = 0.35;
+        this.chainNext = d < 6 ? 'ring' : 'storm';
         burst(this.pos.clone().setY(1.5), 0xc06bff, 30, { speed: 8, size: 0.2 });
         for (let k = 0; k < 20; k++) {
           const a = Math.random() * Math.PI * 2, r = 7 + Math.random() * 3;
@@ -638,8 +680,8 @@ export class ArchMage extends Enemy {
         burst(this.pos.clone().setY(1.5), 0xc06bff, 30, { speed: 8, size: 0.2 });
         play('mageCast', { at: this.pos, rate: 1.4 });
       } else {
-        this.timer = 1.0; this.teleKind = 'interrupt';
-        this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 2.8, duration: 1.0, kind: 'interrupt' });
+        this.timer = 0.9; this.teleKind = 'interrupt';
+        this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 2.8, duration: 0.9, kind: 'interrupt' });
         if (this.anim) this.anim.play('Spellcast_Summon', { once: true, fade: 0.1 });
         const cnt = this.anchorHorde ? 3 : 2;
         for (let i = 0; i < cnt; i++) {
@@ -647,12 +689,15 @@ export class ArchMage extends Enemy {
           m.spawnT = 0; if (ctx.spawnEnemy) ctx.spawnEnemy(m);
         }
       }
+    } else if (this.state === 'idle' && !player.dead) {
+      this.strafe = this.strafe || 1;
+      rangedStrafeVec(this, player, d, dx, dz, 6.5, 12.5, 2.8, 1.8, bdt);
     }
     if (this.crystalsGroup && this.crystalsGroup.visible) this.crystalsGroup.rotation.y += dt * 2.2;
     if (this.state === 'spiral') {
       this.spiralT -= bdt;
       if (this.spiralT <= 0) {
-        this.spiralT = this.isPartBroken('crystals') ? 0.16 : 0.09;
+        this.spiralT = this.isPartBroken('crystals') ? 0.15 : 0.085;
         this.spiralA += 0.5;
         const offs = this.isPartBroken('crystals') ? [0] : [0, Math.PI];
         for (const off of offs) {
@@ -669,7 +714,8 @@ export class ArchMage extends Enemy {
         play('mageCast', { at: this.pos, rate: 0.7 });
       }
       this.teleKind = null;
-      this.state = 'idle'; this.timer = this.enraged ? 1.0 : 1.6;
+      this.state = 'idle';
+      this.timer = this.chainNext ? 0.12 : (this.enraged ? 0.75 : 1.15);
       if (this.anim) this.anim.play('Idle_Combat', { fade: 0.2 });
     }
     if (this.anim) this.anim.update(bdt);

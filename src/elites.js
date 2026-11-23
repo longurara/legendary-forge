@@ -24,12 +24,26 @@ export const AFFIX_DEFS = {
 function eliteTick(e, dt) {
   const p = ctx.player;
   if (!p || p.dead || e.spawning) return;
+  if (e.frostPending) {
+    e.frostPending.t -= dt;
+    if (e.frostPending.t <= 0) {
+      const at = e.frostPending.at;
+      e.frostPending = null;
+      if (!e.dead) {
+        spawnRing(e.scene, at, 3, 0x9fe8ff, 0.5);
+        play('freeze', { at });
+        for (let i = 0; i < 14; i++) emit(at.clone().setY(0.4), { frame: F.cross, color: 0xdff8ff, color2: 0x6fc3ff, size: 0.6, size2: 0, life: 0.6, vel: new THREE.Vector3((Math.random() - 0.5) * 9, 1, (Math.random() - 0.5) * 9) });
+        if (Math.hypot(p.pos.x - at.x, p.pos.z - at.z) < 3 + p.radius) { p.slowT = 2.5; if (p.hurt(12)) damageNumber(p.pos, 12, 'player'); }
+      }
+    }
+  }
   const d = Math.hypot(p.pos.x - e.pos.x, p.pos.z - e.pos.z);
   if (e.blinkT != null) {
     e.blinkT -= dt;
-    if (e.blinkT <= 0 && d > 3) {
+    if (e.blinkT <= 0 && !e.tele && d > 3) {
       e.blinkT = 4.5 + Math.random() * 2;
-      const a = Math.random() * Math.PI * 2, r = 3 + Math.random() * 1.5;
+      const a = Math.random() * Math.PI * 2;
+      const r = e._isRanged ? 7 + Math.random() * 2 : 3 + Math.random() * 1.5;
       const x = p.pos.x + Math.cos(a) * r, z = p.pos.z + Math.sin(a) * r;
       if (!isBlocked(x, z, 0.8)) {
         smoke(e.pos.clone().setY(0.8), { count: 5, color: 0x3a2050, size: 0.9, life: 0.7, alpha: 0.6 });
@@ -41,17 +55,11 @@ function eliteTick(e, dt) {
   }
   if (e.frostT != null) {
     e.frostT -= dt;
-    if (e.frostT <= 0 && d < 7) {
+    if (e.frostT <= 0 && !e.frostPending && d < 7) {
       e.frostT = 5 + Math.random() * 2;
       const at = e.pos.clone();
       spawnTelegraph(e.scene, { shape: 'circle', pos: at, radius: 3, duration: 0.9, color: 0x6fc3ff });
-      setTimeout(() => {
-        if (e.dead) return;
-        spawnRing(e.scene, at, 3, 0x9fe8ff, 0.5);
-        play('freeze', { at });
-        for (let i = 0; i < 14; i++) emit(at.clone().setY(0.4), { frame: F.cross, color: 0xdff8ff, color2: 0x6fc3ff, size: 0.6, size2: 0, life: 0.6, vel: new THREE.Vector3((Math.random() - 0.5) * 9, 1, (Math.random() - 0.5) * 9) });
-        if (!p.dead && Math.hypot(p.pos.x - at.x, p.pos.z - at.z) < 3 + p.radius) { p.slowT = 2.5; if (p.hurt(12)) damageNumber(p.pos, 12, 'player'); }
-      }, 900);
+      e.frostPending = { t: 0.9, at };
     }
   }
   if (e.mender) {
@@ -77,7 +85,15 @@ const ringGeo = new THREE.RingGeometry(0.85, 1.05, 32);
 export function makeElite(e, count = null, r = Math.random) {
   if (e.isBoss) return e;
   if (count == null) count = 1 + (r() < 0.35 ? 1 : 0);
-  const pool = [...KEYS];
+  const cname = e.constructor?.name || '';
+  const isRanged = ['Mage', 'Archer', 'Healer', 'PyroMage', 'Necromancer', 'FireImp', 'AcidGlub', 'Viper'].includes(cname) || !!e._isRanged;
+  const isBomber = cname === 'Bomber';
+  e._isRanged = isRanged;
+  const pool = KEYS.filter((k) => {
+    if (isBomber && (k === 'explode' || k === 'thorns' || k === 'regen')) return false;
+    if (isRanged && (k === 'thorns' || k === 'frost')) return false;
+    return true;
+  });
   const affixes = [];
   while (affixes.length < count && pool.length) affixes.push(pool.splice(Math.floor(r() * pool.length), 1)[0]);
   e.elite = affixes;

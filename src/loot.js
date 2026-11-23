@@ -178,7 +178,7 @@ export class Loot {
       `${weaponIcons(weapon)}<span style="color:${RARITY[weapon.rarity].css}">${weaponName(weapon)}</span>`,
       'drop',
     );
-    const d = { weapon, group, spinner, label, pos: new THREE.Vector3(x, 0, z), t: Math.random() * 10, age: 0, life: DROP_LIFE[weapon.rarity] };
+    const d = { weapon, group, spinner, label, pos: new THREE.Vector3(x, 0, z), t: Math.random() * 10, spawnAge: 0, age: 0, life: DROP_LIFE[weapon.rarity] };
     this.drops.push(d);
     burst(new THREE.Vector3(x, 1, z), rc.getHex(), 14, { speed: 4, size: 0.12 });
     play(weapon.rarity >= 2 ? 'dropRare' : 'drop', { at: d.pos });
@@ -195,7 +195,7 @@ export class Loot {
   nearest(pos, maxDist = 1.6) {
     let best = null, bd = maxDist;
     for (const d of this.drops) {
-      if (d.age < 0.3) continue;
+      if (d.spawnAge < 0.3) continue;
       const dist = Math.hypot(d.pos.x - pos.x, d.pos.z - pos.z);
       if (dist < bd) { bd = dist; best = d; }
     }
@@ -260,6 +260,7 @@ export class Loot {
     for (let i = this.drops.length - 1; i >= 0; i--) {
       const d = this.drops[i];
       d.t += dt;
+      d.spawnAge = (d.spawnAge || 0) + dt;
       // Bảo vệ vũ khí Hiếm+ khỏi hết hạn trong lúc nghỉ giữa đợt
       if (combatActive || (d.weapon?.rarity || 0) === 0) d.age += dt;
       // Sắp hết hạn: nhấp nháy nhanh dần; hết hạn thì tan biến

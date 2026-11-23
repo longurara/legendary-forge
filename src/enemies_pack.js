@@ -11,6 +11,7 @@ import { play } from './audio.js';
 import { Enemy } from './enemies.js';
 import { Walker, tintMats, hurtPlayer } from './enemies_new.js';
 import { Minion } from './enemies_extra.js';
+import { steerMove, rangedStrafeVec, hasLineOfSight, leadPos, leadAngle, canStartMelee, claimMeleeToken } from './ai.js';
 
 const inSector = (from, facing, target, range, arc) => {
   const dx = target.x - from.x, dz = target.z - from.z;
@@ -50,7 +51,7 @@ export class Creature extends Enemy {
   }
   get radius() { return this._radius || 0.55; }
   get grounded() { return !this.spawning && this.hoverY <= 0.1 && (this.height || 0) < 0.5; }
-  move(dirX, dirZ, speed, bdt) { this.pos.x += dirX * speed * bdt; this.pos.z += dirZ * speed * bdt; }
+  move(dirX, dirZ, speed, bdt, opts) { steerMove(this, dirX, dirZ, speed, bdt, opts); }
   update(dt, player, time) {
     if (this.dead) return false;
     this.updateStatus(dt);
@@ -96,6 +97,7 @@ export class Creature extends Enemy {
 export class PyroMage extends Walker {
   constructor(scene, x, z) {
     super(scene, x, z);
+    this._isRanged = true;
     this.hp = 36; this.color = 0xff6a2a; this.mass = 0.9; this.contactDmg = 0; this.dropChance = 0.24; this.xp = 5;
     this.hurtSound = 'mageHurt'; this.dieSound = 'mageDie';
     this.state = 'move'; this.timer = 0; this.cd = 1.8 + Math.random() * 1.2;
@@ -107,17 +109,20 @@ export class PyroMage extends Walker {
     this.facing = Math.atan2(dx, dz);
     this.cd -= bdt;
     if (this.state === 'move') {
-      const radial = d > 11.5 ? 1 : d < 7 ? -1 : 0;
-      this.move((dx / d) * radial * 2.5 + (-dz / d) * this.strafe * 1.5, (dz / d) * radial * 2.5 + (dx / d) * this.strafe * 1.5, 1, bdt);
+      rangedStrafeVec(this, player, d, dx, dz, 7.0, 11.5, 2.7, 1.7, bdt);
+      const los = hasLineOfSight(this.pos.x, this.pos.z, player.pos.x, player.pos.z);
       if (this.cd <= 0 && d < 18 && !player.dead) {
-        if (this.alt++ % 2 === 0) {
-          this.state = 'meteor'; this.timer = 0.95;
+        if (this.alt % 2 === 0) {
+          this.alt++;
+          this.state = 'meteor'; this.timer = 0.85;
           this.teleKind = 'interrupt';
-          this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 2.2, duration: 0.95, kind: 'interrupt' });
+          this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 2.2, duration: 0.85, kind: 'interrupt' });
           play('mageCast', { at: this.pos, rate: 0.85 });
           if (this.anim) this.anim.play('Spellcast_Raise', { once: true, fade: 0.1 });
-        } else {
-          this.state = 'volley'; this.timer = 0.6;
+        } else if (los) {
+          this.alt++;
+          this.facing = leadAngle(this.pos, player, 10.5, 0.65);
+          this.state = 'volley'; this.timer = 0.55;
           this.teleKind = 'interrupt';
           play('mageCast', { at: this.pos, rate: 1.2 });
           if (this.anim) this.anim.play('Spellcast_Shoot', { once: true, fade: 0.1 });
@@ -132,13 +137,14 @@ export class PyroMage extends Walker {
       if (this.timer <= 0) {
         this.teleKind = null;
         const count = (ctx.floor || 1) >= 2 ? 3 : 2;
+        const lp = leadPos(this.pos, player, 10, 0.65);
         for (let i = 0; i < count; i++) {
-          const scatter = this.blindT > 0 ? 7.5 : 3.2;
-          const at = player.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * scatter * 2, 0, (Math.random() - 0.5) * scatter * 2));
-          scheduleBomb(at, 0.9 + i * 0.2, 2.0, 0, 14, 0xff5a1a);
+          const scatter = this.blindT > 0 ? 7.5 : 2.6;
+          const at = new THREE.Vector3(lp.x + (Math.random() - 0.5) * scatter * 2, 0, lp.z + (Math.random() - 0.5) * scatter * 2);
+          scheduleBomb(at, 0.85 + i * 0.18, 2.0, 0, 14, 0xff5a1a);
           spawnFirePatch(at, 1.6, 3.8, 12, true);
         }
-        this.state = 'move'; this.cd = 3.2 + Math.random() * 1.2; this.strafe *= -1;
+        this.state = 'move'; this.cd = 3.0 + Math.random() * 1.1; this.strafe *= -1;
       }
       return null;
     }
@@ -146,18 +152,18 @@ export class PyroMage extends Walker {
       this.timer -= bdt;
       if (this.timer <= 0) {
         this.teleKind = null;
-        const base = this.facing + (this.blindT > 0 ? (Math.random() - 0.5) * 1.4 : 0);
+        const base = leadAngle(this.pos, player, 10.5, 0.65) + (this.blindT > 0 ? (Math.random() - 0.5) * 1.4 : 0);
         for (const off of [-0.24, 0, 0.24]) {
           const a = base + off;
           const dir = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
           enemyShot(this.pos.clone().setY(1.25).addScaledVector(dir, 0.7), dir, 9, 'orb');
         }
-        this.state = 'move'; this.cd = 2.4 + Math.random(); this.strafe *= -1;
+        this.state = 'move'; this.cd = 2.2 + Math.random() * 0.9; this.strafe *= -1;
       }
       return null;
     }
     this.timer -= bdt;
-    if (this.timer <= 0) { this.state = 'move'; this.cd = 2.0; }
+    if (this.timer <= 0) { this.state = 'move'; this.cd = 1.8; }
     return 'Idle_Combat';
   }
   die() { if (this.tele) this.tele.done = true; super.die(); }
@@ -180,21 +186,22 @@ export class FrostGuard extends Walker {
     this.cd -= bdt;
     if (this.state === 'chase') {
       this.facing = Math.atan2(dx, dz);
-      if (d < 3.4 && this.cd <= 0 && !player.dead) {
+      if (d < 3.4 && this.cd <= 0 && !player.dead && canStartMelee(this)) {
+        claimMeleeToken(this);
         if (this.alt++ % 2 === 0) {
-          this.state = 'cleave'; this.timer = 0.72;
-          this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 3.5, arc: 2.3, facing: this.facing, duration: 0.72, color: 0x7fdcff });
-          if (this.anim) this.anim.play('2H_Melee_Attack_Slice', { once: true, fade: 0.1, speed: 0.85 });
+          this.state = 'cleave'; this.timer = 0.62;
+          this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 3.5, arc: 2.3, facing: this.facing, duration: 0.62, color: 0x7fdcff });
+          if (this.anim) this.anim.play('2H_Melee_Attack_Slice', { once: true, fade: 0.1, speed: 0.95 });
         } else {
-          this.state = 'slam'; this.timer = 0.95;
+          this.state = 'slam'; this.timer = 0.8;
           this.teleKind = 'interrupt';
-          this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.3, duration: 0.95, kind: 'interrupt' });
-          if (this.anim) this.anim.play('2H_Melee_Attack_Chop', { once: true, fade: 0.1, speed: 0.75 });
+          this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.3, duration: 0.8, kind: 'interrupt' });
+          if (this.anim) this.anim.play('2H_Melee_Attack_Chop', { once: true, fade: 0.1, speed: 0.85 });
           play('freeze', { at: this.pos, rate: 0.7, vol: 0.5 });
         }
         return null;
       }
-      if (d > 1.8) { this.move(dx / d, dz / d, 2.25, bdt); return { name: 'Walking_D_Skeletons', opts: { speed: 0.95 } }; }
+      if (d > 1.8) { this.move(dx / d, dz / d, 2.75, bdt); return { name: 'Walking_D_Skeletons', opts: { speed: 1.05 } }; }
       return 'Idle_Combat';
     }
     if (this.state === 'cleave') {
@@ -206,7 +213,7 @@ export class FrostGuard extends Walker {
           hurtPlayer(player, 16);
           player.slowT = Math.max(player.slowT, 2.5);
         }
-        this.state = 'recover'; this.timer = 0.65;
+        this.state = 'recover'; this.timer = 0.55;
       }
       return null;
     }
@@ -223,18 +230,18 @@ export class FrostGuard extends Walker {
           player.slowT = Math.max(player.slowT, 3.2);
         }
         ctx.reactSurface?.(this.pos, 4.3, 'ice', null, 15);
-        this.state = 'recover'; this.timer = 0.85;
+        this.state = 'recover'; this.timer = 0.72;
       }
       return null;
     }
     this.timer -= bdt;
-    if (this.timer <= 0) { this.state = 'chase'; this.cd = 1.6 + Math.random(); }
+    if (this.timer <= 0) { this.state = 'chase'; this.cd = 1.4 + Math.random() * 0.9; }
     return 'Idle_Combat';
   }
   die() { if (this.tele) this.tele.done = true; super.die(); }
 }
 
-// ---------- 3. Kỵ Binh Xương: cầm Thương 3D lao xuyên tầm xa (đòn Xuyên) ----------
+// ---------- 3. Kỵ Binh Xương: cầm Thương 3D lao xuyên tầm xa (đón đầu + tránh cột) ----------
 export class Lancer extends Walker {
   constructor(scene, x, z) {
     super(scene, x, z);
@@ -252,13 +259,13 @@ export class Lancer extends Walker {
     this.cd -= bdt;
     if (this.state === 'stalk') {
       this.facing = Math.atan2(dx, dz);
-      const radial = d > 11 ? 1 : d < 6 ? -0.6 : 0;
-      this.move((dx / d) * radial * 3.8 + (-dz / d) * this.strafe * 2.6, (dz / d) * radial * 3.8 + (dx / d) * this.strafe * 2.6, 1, bdt);
-      if (this.cd <= 0 && d < 13.5 && !player.dead) {
-        this.state = 'aim'; this.timer = 0.68;
+      rangedStrafeVec(this, player, d, dx, dz, 6.0, 11.0, 4.0, 2.7, bdt);
+      if (this.cd <= 0 && d < 13.5 && !player.dead && hasLineOfSight(this.pos.x, this.pos.z, player.pos.x, player.pos.z)) {
+        this.facing = leadAngle(this.pos, player, 25, 0.55);
+        this.state = 'aim'; this.timer = 0.58;
         this.teleKind = 'pierce';
-        this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 1.5, length: 13.5, facing: this.facing, duration: 0.68, kind: 'pierce' });
-        if (this.anim) this.anim.play('2H_Melee_Attack_Stab', { once: true, fade: 0.08, speed: 0.65 });
+        this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 1.5, length: 13.5, facing: this.facing, duration: 0.58, kind: 'pierce' });
+        if (this.anim) this.anim.play('2H_Melee_Attack_Stab', { once: true, fade: 0.08, speed: 0.75 });
         return null;
       }
       return { name: 'Running_C', opts: { speed: 1.15 } };
@@ -292,13 +299,13 @@ export class Lancer extends Walker {
           burst(this.pos.clone().setY(0.9), 0xc8b89a, 12, { speed: 6, size: 0.16 });
           this.stunT = Math.max(this.stunT, 0.85);
         }
-        this.state = 'recover'; this.timer = 0.75;
+        this.state = 'recover'; this.timer = 0.65;
       }
       return { name: 'Running_C', opts: { speed: 1.9 } };
     }
     this.teleKind = null;
     this.timer -= bdt;
-    if (this.timer <= 0) { this.state = 'stalk'; this.cd = 2.0 + Math.random() * 1.2; this.strafe *= -1; }
+    if (this.timer <= 0) { this.state = 'stalk'; this.cd = 1.8 + Math.random() * 1.1; this.strafe *= -1; }
     return 'Idle_Combat';
   }
   die() { if (this.tele) this.tele.done = true; super.die(); }
@@ -308,6 +315,7 @@ export class Lancer extends Walker {
 export class Necromancer extends Walker {
   constructor(scene, x, z) {
     super(scene, x, z);
+    this._isRanged = true;
     this.hp = 44; this.color = 0x5ae88a; this.mass = 1.0; this.contactDmg = 0; this.dropChance = 0.28; this.xp = 7;
     this.hurtSound = 'mageHurt'; this.dieSound = 'mageDie';
     this.poiseMax = 45;
@@ -329,18 +337,18 @@ export class Necromancer extends Walker {
     this.summonCd -= bdt;
     this.minions = this.minions.filter((m) => !m.dead);
     if (this.state === 'move') {
-      const radial = d > 13.5 ? 1 : d < 8.5 ? -1 : 0;
-      this.move((dx / d) * radial * 2.4 + (-dz / d) * this.strafe * 1.4, (dz / d) * radial * 2.4 + (dx / d) * this.strafe * 1.4, 1, bdt);
+      rangedStrafeVec(this, player, d, dx, dz, 8.5, 13.5, 2.7, 1.6, bdt);
       if (this.summonCd <= 0 && this.minions.length < 3 && (ctx.enemies?.length || 0) < 48 && !player.dead) {
-        this.state = 'summon'; this.timer = 1.15;
+        this.state = 'summon'; this.timer = 1.05;
         this.teleKind = 'interrupt';
-        this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.4, duration: 1.15, kind: 'interrupt' });
+        this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.4, duration: 1.05, kind: 'interrupt' });
         play('mageCast', { at: this.pos, rate: 0.65 });
         if (this.anim) this.anim.play('Spellcast_Summon', { once: true, fade: 0.1 });
         return null;
       }
-      if (this.cd <= 0 && d < 20 && !player.dead) {
-        this.state = 'bolt'; this.timer = 0.6;
+      if (this.cd <= 0 && d < 20 && !player.dead && hasLineOfSight(this.pos.x, this.pos.z, player.pos.x, player.pos.z)) {
+        this.facing = leadAngle(this.pos, player, 10.5, 0.65);
+        this.state = 'bolt'; this.timer = 0.55;
         this.teleKind = 'interrupt';
         play('mageCast', { at: this.pos, rate: 1.1 });
         if (this.anim) this.anim.play('Spellcast_Shoot', { once: true, fade: 0.1 });
@@ -363,7 +371,7 @@ export class Necromancer extends Walker {
           this.minions.push(m);
           ctx.spawnEnemy?.(m);
         }
-        this.state = 'move'; this.summonCd = 7.5 + Math.random() * 2; this.cd = 1.5;
+        this.state = 'move'; this.summonCd = 7.5 + Math.random() * 2; this.cd = 1.3;
       }
       return null;
     }
@@ -371,18 +379,18 @@ export class Necromancer extends Walker {
       this.timer -= bdt;
       if (this.timer <= 0) {
         this.teleKind = null;
-        const base = this.facing + (this.blindT > 0 ? (Math.random() - 0.5) * 1.4 : 0);
+        const base = leadAngle(this.pos, player, 10.5, 0.65) + (this.blindT > 0 ? (Math.random() - 0.5) * 1.4 : 0);
         for (const off of [-0.12, 0.12]) {
           const a = base + off;
           const dir = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
           enemyShot(this.pos.clone().setY(1.3).addScaledVector(dir, 0.7), dir, 10, 'orb');
         }
-        this.state = 'move'; this.cd = 2.4 + Math.random(); this.strafe *= -1;
+        this.state = 'move'; this.cd = 2.1 + Math.random(); this.strafe *= -1;
       }
       return null;
     }
     this.timer -= bdt;
-    if (this.timer <= 0) { this.state = 'move'; this.cd = 1.6; this.summonCd = Math.max(this.summonCd, 3.0); }
+    if (this.timer <= 0) { this.state = 'move'; this.cd = 1.4; this.summonCd = Math.max(this.summonCd, 3.0); }
     return 'Idle_Combat';
   }
   after(dt) { if (this.skullPivot) this.skullPivot.rotation.y += dt * 3.2; }
@@ -409,14 +417,15 @@ export class Berserker extends Walker {
     this.cd -= fdt;
     if (this.state === 'chase') {
       this.facing = Math.atan2(dx, dz);
-      if (d < 4.2 && this.cd <= 0 && !player.dead) {
-        this.state = 'wind'; this.timer = 0.52 / rageMul;
+      if (d < 4.2 && this.cd <= 0 && !player.dead && canStartMelee(this)) {
+        claimMeleeToken(this);
+        this.state = 'wind'; this.timer = 0.48 / rageMul;
         this.teleKind = 'pierce';
         this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 2.5, duration: this.timer, kind: 'pierce' });
         if (this.anim) this.anim.play('Taunt', { once: true, fade: 0.08, speed: 1.8 });
         return null;
       }
-      if (d > 1.4) { this.move(dx / d, dz / d, 3.7 * rageMul, bdt); return { name: 'Running_C', opts: { speed: 1.35 * rageMul } }; }
+      if (d > 1.4) { this.move(dx / d, dz / d, 4.0 * rageMul, bdt); return { name: 'Running_C', opts: { speed: 1.35 * rageMul } }; }
       return 'Idle_Combat';
     }
     if (this.state === 'wind') {
@@ -431,19 +440,20 @@ export class Berserker extends Walker {
       this.timer -= bdt;
       this.spinTick -= bdt;
       this.facing += bdt * 14 * rageMul;
-      this.move(dx / d, dz / d, 4.3 * rageMul, bdt);
+      const lp = leadPos(this.pos, player, 5 * rageMul, 0.4);
+      this.move(lp.x - this.pos.x, lp.z - this.pos.z, 4.5 * rageMul, bdt);
       if (Math.random() < 0.6) emit(this.pos.clone().setY(0.9), { frame: F.streak, color: 0xff6a4a, color2: 0xa01010, size: 0.7, size2: 0.1, life: 0.25, streak: true, vel: new THREE.Vector3(-Math.sin(this.facing) * 6, 0.5, -Math.cos(this.facing) * 6) });
       if (this.spinTick <= 0) {
         this.spinTick = 0.32;
         play('swing', { at: this.pos, rate: 1.2, vol: 0.45 });
         if (!player.dead && d < 2.35 + player.radius) hurtPlayer(player, 9);
       }
-      if (this.timer <= 0) { this.teleKind = null; this.state = 'recover'; this.timer = 0.85; }
+      if (this.timer <= 0) { this.teleKind = null; this.state = 'recover'; this.timer = 0.75; }
       return { name: '2H_Melee_Attack_Spin', opts: { speed: 1.6 * rageMul } };
     }
     this.teleKind = null;
     this.timer -= bdt;
-    if (this.timer <= 0) { this.state = 'chase'; this.cd = 1.8 + Math.random(); }
+    if (this.timer <= 0) { this.state = 'chase'; this.cd = 1.6 + Math.random(); }
     return 'Idle_Combat';
   }
   after(dt) {
@@ -473,20 +483,21 @@ export class OrcBrute extends Creature {
     this.cd -= bdt;
     if (this.state === 'chase') {
       this.facing = Math.atan2(dx, dz);
-      if (d < 3.4 && this.cd <= 0 && !player.dead) {
+      if (d < 3.4 && this.cd <= 0 && !player.dead && canStartMelee(this)) {
+        claimMeleeToken(this);
         if (this.alt++ % 2 === 0) {
-          this.state = 'swing'; this.timer = 0.65;
-          this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 3.4, arc: 2.2, facing: this.facing, duration: 0.65, color: 0xff9040 });
-          if (this.anim) this.anim.play('Weapon', { once: true, fade: 0.08, speed: 0.9 });
+          this.state = 'swing'; this.timer = 0.58;
+          this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 3.4, arc: 2.2, facing: this.facing, duration: 0.58, color: 0xff9040 });
+          if (this.anim) this.anim.play('Weapon', { once: true, fade: 0.08, speed: 1.0 });
         } else {
-          this.state = 'smash'; this.timer = 0.9;
+          this.state = 'smash'; this.timer = 0.78;
           this.teleKind = 'interrupt';
-          this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.0, duration: 0.9, kind: 'interrupt' });
-          if (this.anim) this.anim.play('Punch', { once: true, fade: 0.08, speed: 0.75 });
+          this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.0, duration: 0.78, kind: 'interrupt' });
+          if (this.anim) this.anim.play('Punch', { once: true, fade: 0.08, speed: 0.85 });
         }
         return null;
       }
-      if (d > 1.8) { this.move(dx / d, dz / d, 2.75, bdt); return { name: 'Run', opts: { speed: 1.0 } }; }
+      if (d > 1.8) { this.move(dx / d, dz / d, 3.25, bdt); return { name: 'Run', opts: { speed: 1.15 } }; }
       return 'Idle';
     }
     if (this.state === 'swing') {
@@ -494,7 +505,7 @@ export class OrcBrute extends Creature {
       if (this.timer <= 0) {
         play('hitHeavy', { at: this.pos, rate: 0.85 });
         if (!player.dead && inSector(this.pos, this.facing, player.pos, 3.4 + player.radius, 2.2)) hurtPlayer(player, 18);
-        this.state = 'recover'; this.timer = 0.65;
+        this.state = 'recover'; this.timer = 0.55;
       }
       return null;
     }
@@ -506,17 +517,17 @@ export class OrcBrute extends Creature {
         burst(this.pos.clone().setY(0.3), 0x8a7a5a, 24, { speed: 9, size: 0.2 });
         addShake(0.45); play('explode', { at: this.pos, rate: 0.8, vol: 0.7 });
         if (!player.dead && d < 4.0 + player.radius) hurtPlayer(player, 20);
-        this.state = 'recover'; this.timer = 0.85;
+        this.state = 'recover'; this.timer = 0.72;
       }
       return null;
     }
     this.timer -= bdt;
-    if (this.timer <= 0) { this.state = 'chase'; this.cd = 1.4 + Math.random(); }
+    if (this.timer <= 0) { this.state = 'chase'; this.cd = 1.3 + Math.random(); }
     return 'Idle';
   }
 }
 
-// ---------- 7. Yêu Tinh Đạo Tặc (mon_goblin.glb): đánh bầy nhanh nhẹn, nhảy cắn ----------
+// ---------- 7. Yêu Tinh Đạo Tặc (mon_goblin.glb): bao vây theo góc chia & nhảy cắn đón đầu ----------
 export class GoblinRaider extends Creature {
   constructor(scene, x, z) {
     super(scene, x, z);
@@ -531,42 +542,45 @@ export class GoblinRaider extends Creature {
     this.cd -= bdt;
     if (this.state === 'chase') {
       this.facing = Math.atan2(dx, dz);
-      if (d < 3.6 && this.cd <= 0 && !player.dead) {
-        this.state = 'leap'; this.timer = 0.42; this.hitDone = false;
-        this.lungeDir = new THREE.Vector3(dx / d, 0, dz / d);
-        this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 1.0, length: 3.6, facing: this.facing, duration: 0.42, color: 0x90e84a });
-        if (this.anim) this.anim.play('Jump', { once: true, fade: 0.05, speed: 1.4 });
+      if (d < 3.8 && this.cd <= 0 && !player.dead && canStartMelee(this) && hasLineOfSight(this.pos.x, this.pos.z, player.pos.x, player.pos.z)) {
+        claimMeleeToken(this);
+        this.facing = leadAngle(this.pos, player, 9.5, 0.55);
+        this.state = 'leap'; this.timer = 0.38; this.hitDone = false;
+        this.lungeDir = new THREE.Vector3(Math.sin(this.facing), 0, Math.cos(this.facing));
+        this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 1.0, length: 3.8, facing: this.facing, duration: 0.38, color: 0x90e84a });
+        if (this.anim) this.anim.play('Jump', { once: true, fade: 0.05, speed: 1.5 });
         return null;
       }
+      const flank = this._slotA ?? this.flankA;
       let tx = dx, tz = dz;
-      if (d > 3.5) { tx = player.pos.x + Math.cos(this.flankA) * 2.5 - this.pos.x; tz = player.pos.z + Math.sin(this.flankA) * 2.5 - this.pos.z; }
-      const td = Math.hypot(tx, tz) || 1;
-      this.move(tx / td, tz / td, 4.6, bdt);
+      if (d > 3.2) { tx = player.pos.x + Math.cos(flank) * 2.5 - this.pos.x; tz = player.pos.z + Math.sin(flank) * 2.5 - this.pos.z; }
+      this.move(tx, tz, 4.9, bdt);
       return { name: 'Walk', opts: { speed: 1.8 } };
     }
     if (this.state === 'leap') {
       this.timer -= bdt;
-      this.height = Math.sin(Math.max(0, this.timer / 0.42) * Math.PI) * 1.1;
-      this.move(this.lungeDir.x, this.lungeDir.z, 8.8, bdt);
+      this.height = Math.sin(Math.max(0, this.timer / 0.38) * Math.PI) * 1.1;
+      this.move(this.lungeDir.x, this.lungeDir.z, 9.5, bdt);
       if (!this.hitDone && !player.dead && d < 1.3) {
         this.hitDone = true;
         if (this.anim) this.anim.play('Bite_Front', { once: true, fade: 0.04, speed: 1.5 });
         hurtPlayer(player, 11);
         play('swing', { at: this.pos, rate: 1.5 });
       }
-      if (this.timer <= 0) { this.height = 0; this.state = 'recover'; this.timer = 0.45; }
+      if (this.timer <= 0) { this.height = 0; this.state = 'recover'; this.timer = 0.42; }
       return null;
     }
     this.timer -= bdt;
-    if (this.timer <= 0) { this.state = 'chase'; this.cd = 1.1 + Math.random() * 0.7; this.flankA += 1.2; }
+    if (this.timer <= 0) { this.state = 'chase'; this.cd = 1.0 + Math.random() * 0.6; this.flankA += 1.2; }
     return 'Idle';
   }
 }
 
-// ---------- 8. Tiểu Quỷ Lửa (mon_imp.glb): ác quỷ bay bắn cầu lửa & đốt mặt sàn ----------
+// ---------- 8. Tiểu Quỷ Lửa (mon_imp.glb): ác quỷ bay bắn cầu lửa đón đầu & đốt mặt sàn ----------
 export class FireImp extends Creature {
   constructor(scene, x, z) {
     super(scene, x, z);
+    this._isRanged = true;
     this.hp = 32; this.color = 0xff4a2a; this.mass = 0.8; this.contactDmg = 0; this.dropChance = 0.2; this.xp = 4;
     this.hurtSound = 'mageHurt'; this.dieSound = 'mageDie';
     this._radius = 0.5; this.shadowScale = 0.72;
@@ -578,10 +592,10 @@ export class FireImp extends Creature {
     this.facing = Math.atan2(dx, dz);
     this.cd -= bdt;
     if (this.state === 'fly') {
-      const radial = d > 10 ? 1 : d < 6 ? -1 : 0;
-      this.move((dx / d) * radial * 3.8 + (-dz / d) * this.strafe * 2.5, (dz / d) * radial * 3.8 + (dx / d) * this.strafe * 2.5, 1, bdt);
-      if (this.cd <= 0 && d < 16 && !player.dead) {
-        this.state = 'cast'; this.timer = 0.58;
+      rangedStrafeVec(this, player, d, dx, dz, 6.0, 10.5, 4.0, 2.6, bdt);
+      if (this.cd <= 0 && d < 16 && !player.dead && hasLineOfSight(this.pos.x, this.pos.z, player.pos.x, player.pos.z)) {
+        this.facing = leadAngle(this.pos, player, 10.5, 0.65);
+        this.state = 'cast'; this.timer = 0.52;
         this.teleKind = 'interrupt';
         play('ignite', { at: this.pos, rate: 1.4, vol: 0.5 });
         if (this.anim) this.anim.play('Headbutt', { once: true, fade: 0.08, speed: 1.2 });
@@ -594,24 +608,26 @@ export class FireImp extends Creature {
       if (Math.random() < 0.5) flame(this.pos.clone().setY(1.3), { count: 1, size: 0.45, spread: 0.25 });
       if (this.timer <= 0) {
         this.teleKind = null;
-        const ang = this.facing + (this.blindT > 0 ? (Math.random() - 0.5) * 1.4 : 0);
+        const ang = leadAngle(this.pos, player, 10.5, 0.65) + (this.blindT > 0 ? (Math.random() - 0.5) * 1.4 : 0);
         const dir = new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang));
         enemyShot(this.pos.clone().setY(1.25).addScaledVector(dir, 0.7), dir, 10, 'orb');
-        if (Math.random() < 0.55) spawnFirePatch(player.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 2, 0, (Math.random() - 0.5) * 2)), 1.35, 3.2, 10, true);
-        this.state = 'fly'; this.cd = 2.0 + Math.random(); this.strafe *= -1;
+        const lp = leadPos(this.pos, player, 10, 0.5);
+        if (Math.random() < 0.55) spawnFirePatch(new THREE.Vector3(lp.x + (Math.random() - 0.5) * 1.5, 0, lp.z + (Math.random() - 0.5) * 1.5), 1.35, 3.2, 10, true);
+        this.state = 'fly'; this.cd = 1.9 + Math.random(); this.strafe *= -1;
       }
       return null;
     }
     this.timer -= bdt;
-    if (this.timer <= 0) { this.state = 'fly'; this.cd = 1.5; }
+    if (this.timer <= 0) { this.state = 'fly'; this.cd = 1.4; }
     return 'Flying_Idle';
   }
 }
 
-// ---------- 9. Ấu Long Băng (mon_drake.glb): rồng con bay phóng mảnh băng & sà cánh ----------
+// ---------- 9. Ấu Long Băng (mon_drake.glb): rồng con bay phóng mảnh băng & sà cánh đón đầu ----------
 export class FrostDrake extends Creature {
   constructor(scene, x, z) {
     super(scene, x, z);
+    this._isRanged = true;
     this.hp = 46; this.color = 0x7fdcff; this.mass = 1.1; this.contactDmg = 0; this.dropChance = 0.22; this.xp = 6;
     this.hurtSound = 'mageHurt'; this.dieSound = 'mageDie';
     this._radius = 0.6; this.shadowScale = 0.85;
@@ -624,16 +640,17 @@ export class FrostDrake extends Creature {
     this.cd -= bdt;
     if (this.state === 'fly') {
       this.facing = Math.atan2(dx, dz);
-      const radial = d > 11 ? 1 : d < 6.5 ? -0.7 : 0;
-      this.move((dx / d) * radial * 3.6 + (-dz / d) * this.strafe * 2.4, (dz / d) * radial * 3.6 + (dx / d) * this.strafe * 2.4, 1, bdt);
-      if (this.cd <= 0 && d < 15 && !player.dead) {
+      rangedStrafeVec(this, player, d, dx, dz, 6.5, 11.0, 3.8, 2.5, bdt);
+      if (this.cd <= 0 && d < 15 && !player.dead && hasLineOfSight(this.pos.x, this.pos.z, player.pos.x, player.pos.z)) {
         if (this.alt++ % 2 === 0) {
-          this.state = 'spit'; this.timer = 0.65; this.teleKind = 'interrupt';
+          this.facing = leadAngle(this.pos, player, 10.5, 0.65);
+          this.state = 'spit'; this.timer = 0.55; this.teleKind = 'interrupt';
           if (this.anim) this.anim.play('Headbutt', { once: true, fade: 0.08 });
           play('freeze', { at: this.pos, rate: 1.2, vol: 0.5 });
         } else {
-          this.state = 'swoopAim'; this.timer = 0.6; this.teleKind = 'pierce';
-          this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 1.5, length: 11, facing: this.facing, duration: 0.6, kind: 'pierce' });
+          this.facing = leadAngle(this.pos, player, 21, 0.55);
+          this.state = 'swoopAim'; this.timer = 0.52; this.teleKind = 'pierce';
+          this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 1.5, length: 11, facing: this.facing, duration: 0.52, kind: 'pierce' });
         }
         return null;
       }
@@ -643,13 +660,13 @@ export class FrostDrake extends Creature {
       this.timer -= bdt;
       if (this.timer <= 0) {
         this.teleKind = null;
-        const base = this.facing + (this.blindT > 0 ? (Math.random() - 0.5) * 1.4 : 0);
+        const base = leadAngle(this.pos, player, 10.5, 0.65) + (this.blindT > 0 ? (Math.random() - 0.5) * 1.4 : 0);
         for (const off of [-0.18, 0.18]) {
           const a = base + off;
           const dir = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
           enemyShot(this.pos.clone().setY(1.3).addScaledVector(dir, 0.7), dir, 10, 'orb');
         }
-        this.state = 'fly'; this.cd = 2.2 + Math.random(); this.strafe *= -1;
+        this.state = 'fly'; this.cd = 2.0 + Math.random(); this.strafe *= -1;
       }
       return null;
     }
@@ -660,18 +677,18 @@ export class FrostDrake extends Creature {
     }
     if (this.state === 'swoop') {
       const step = 21 * bdt;
-      this.move(Math.sin(this.facing), Math.cos(this.facing), 21, bdt);
+      this.move(Math.sin(this.facing), Math.cos(this.facing), 21, bdt, { ignoreObstacles: true, ignoreHazards: true });
       this.left -= step;
       if (!this.hitDone && !player.dead && d < 1.35) {
         this.hitDone = true; hurtPlayer(player, 15); player.slowT = Math.max(player.slowT, 2.2);
       }
       const before = this.pos.clone(); collide(this.pos, this.radius);
-      if (this.left <= 0 || before.distanceTo(this.pos) > 0.02) { this.teleKind = null; this.state = 'recover'; this.timer = 0.7; }
+      if (this.left <= 0 || before.distanceTo(this.pos) > 0.02) { this.teleKind = null; this.state = 'recover'; this.timer = 0.6; }
       return { name: 'Fast_Flying', opts: { speed: 1.6 } };
     }
     this.teleKind = null;
     this.timer -= bdt;
-    if (this.timer <= 0) { this.state = 'fly'; this.cd = 1.8 + Math.random(); }
+    if (this.timer <= 0) { this.state = 'fly'; this.cd = 1.6 + Math.random(); }
     return 'Flying_Idle';
   }
 }
@@ -692,12 +709,12 @@ export class AcidGlub extends Creature {
     this.facing = Math.atan2(dx, dz);
     this.cd -= bdt;
     if (this.state === 'float') {
-      const radial = d > 9.5 ? 1 : d < 5.5 ? -1 : 0;
-      this.move((dx / d) * radial * 2.6 + (-dz / d) * this.strafe * 1.8, (dz / d) * radial * 2.6 + (dx / d) * this.strafe * 1.8, 1, bdt);
+      rangedStrafeVec(this, player, d, dx, dz, 5.5, 9.5, 2.8, 1.9, bdt);
       if (this.cd <= 0 && d < 14 && !player.dead) {
-        this.state = 'glob'; this.timer = 0.75; this.teleKind = 'interrupt';
-        this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: player.pos.clone(), radius: 2.0, duration: 0.75, color: 0x6fd83a });
-        this.targetPos = player.pos.clone();
+        const lp = leadPos(this.pos, player, 10, 0.55);
+        this.targetPos = new THREE.Vector3(lp.x, 0, lp.z);
+        this.state = 'glob'; this.timer = 0.65; this.teleKind = 'interrupt';
+        this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.targetPos.clone(), radius: 2.0, duration: 0.65, color: 0x6fd83a });
         if (this.anim) this.anim.play('Punch', { once: true, fade: 0.08 });
         play('slimeLand', { at: this.pos, rate: 0.9 });
         return null;
@@ -713,17 +730,17 @@ export class AcidGlub extends Creature {
         spawnToxic(at, 1.9, 5.5);
         burst(at.clone().setY(0.3), 0x8fe83a, 14, { speed: 5, size: 0.16 });
         if (!player.dead && Math.hypot(player.pos.x - at.x, player.pos.z - at.z) < 2.0) hurtPlayer(player, 12);
-        this.state = 'float'; this.cd = 2.8 + Math.random(); this.strafe *= -1;
+        this.state = 'float'; this.cd = 2.5 + Math.random(); this.strafe *= -1;
       }
       return null;
     }
     this.timer -= bdt;
-    if (this.timer <= 0) { this.state = 'float'; this.cd = 1.8; }
+    if (this.timer <= 0) { this.state = 'float'; this.cd = 1.6; }
     return 'Flying_Idle';
   }
 }
 
-// ---------- 11. Nhện Độc Hầm Ngục (mon_spider.glb): bò nhanh & nhảy vồ độc (đòn Xuyên) ----------
+// ---------- 11. Nhện Độc Hầm Ngục (mon_spider.glb): bò nhanh & nhảy vồ độc đón đầu ----------
 export class VenomSpider extends Creature {
   constructor(scene, x, z) {
     super(scene, x, z);
@@ -737,14 +754,15 @@ export class VenomSpider extends Creature {
     this.cd -= bdt;
     if (this.state === 'stalk') {
       this.facing = Math.atan2(dx, dz);
-      if (d < 7.2 && this.cd <= 0 && !player.dead) {
-        this.state = 'aim'; this.timer = 0.55;
+      if (d < 7.5 && this.cd <= 0 && !player.dead && hasLineOfSight(this.pos.x, this.pos.z, player.pos.x, player.pos.z)) {
+        this.facing = leadAngle(this.pos, player, 17.5, 0.55);
+        this.state = 'aim'; this.timer = 0.48;
         this.teleKind = 'pierce';
-        this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 1.3, length: 7.5, facing: this.facing, duration: 0.55, kind: 'pierce' });
-        if (this.anim) this.anim.play('Spider_Attack', { once: true, fade: 0.06, speed: 0.8 });
+        this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 1.3, length: 7.5, facing: this.facing, duration: 0.48, kind: 'pierce' });
+        if (this.anim) this.anim.play('Spider_Attack', { once: true, fade: 0.06, speed: 0.9 });
         return null;
       }
-      this.move(dx / d, dz / d, 4.1, bdt);
+      this.move(dx / d, dz / d, 4.3, bdt);
       return { name: 'Spider_Walk', opts: { speed: 1.7 } };
     }
     if (this.state === 'aim') {
@@ -759,7 +777,7 @@ export class VenomSpider extends Creature {
     if (this.state === 'pounce') {
       this.timer -= bdt;
       this.height = Math.sin(Math.max(0, this.timer / 0.42) * Math.PI) * 1.5;
-      this.move(Math.sin(this.facing), Math.cos(this.facing), 17.5, bdt);
+      this.move(Math.sin(this.facing), Math.cos(this.facing), 17.5, bdt, { ignoreObstacles: true, ignoreHazards: true });
       if (!this.hitDone && !player.dead && d < 1.3) {
         this.hitDone = true;
         hurtPlayer(player, 13);
@@ -768,18 +786,19 @@ export class VenomSpider extends Creature {
       if (this.timer <= 0) {
         this.height = 0; this.teleKind = null;
         spawnToxic(this.pos.clone(), 1.4, 4.0);
-        this.state = 'recover'; this.timer = 0.65;
+        this.state = 'recover'; this.timer = 0.58;
       }
       return null;
     }
     this.teleKind = null;
+    this.height = 0;
     this.timer -= bdt;
-    if (this.timer <= 0) { this.state = 'stalk'; this.cd = 1.8 + Math.random(); }
+    if (this.timer <= 0) { this.state = 'stalk'; this.cd = 1.6 + Math.random(); }
     return 'Spider_Idle';
   }
 }
 
-// ---------- 12. Ong Độc Khổng Lồ (mon_wasp.glb): bay lượn chích thẳng (đòn Xuyên) ----------
+// ---------- 12. Ong Độc Khổng Lồ (mon_wasp.glb): bay lượn chích thẳng đón đầu (đòn Xuyên) ----------
 export class GiantWasp extends Creature {
   constructor(scene, x, z) {
     super(scene, x, z);
@@ -794,11 +813,11 @@ export class GiantWasp extends Creature {
     this.cd -= bdt;
     if (this.state === 'buzz') {
       this.facing = Math.atan2(dx, dz);
-      const radial = d > 9.5 ? 1 : d < 5.5 ? -0.8 : 0;
-      this.move((dx / d) * radial * 4.2 + (-dz / d) * this.strafe * 3.2, (dz / d) * radial * 4.2 + (dx / d) * this.strafe * 3.2, 1, bdt);
-      if (this.cd <= 0 && d < 10.5 && !player.dead) {
-        this.state = 'aim'; this.timer = 0.52; this.teleKind = 'pierce';
-        this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 1.1, length: 10.5, facing: this.facing, duration: 0.52, kind: 'pierce' });
+      rangedStrafeVec(this, player, d, dx, dz, 5.5, 9.5, 4.4, 3.3, bdt);
+      if (this.cd <= 0 && d < 10.5 && !player.dead && hasLineOfSight(this.pos.x, this.pos.z, player.pos.x, player.pos.z)) {
+        this.facing = leadAngle(this.pos, player, 24, 0.55);
+        this.state = 'aim'; this.timer = 0.46; this.teleKind = 'pierce';
+        this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 1.1, length: 10.5, facing: this.facing, duration: 0.46, kind: 'pierce' });
         if (this.anim) this.anim.play('Wasp_Attack', { once: true, fade: 0.05 });
         return null;
       }
@@ -811,26 +830,27 @@ export class GiantWasp extends Creature {
     }
     if (this.state === 'sting') {
       const step = 24 * bdt;
-      this.move(Math.sin(this.facing), Math.cos(this.facing), 24, bdt);
+      this.move(Math.sin(this.facing), Math.cos(this.facing), 24, bdt, { ignoreObstacles: true, ignoreHazards: true });
       this.left -= step;
       if (!this.hitDone && !player.dead && d < 1.15) {
         this.hitDone = true; hurtPlayer(player, 14); player.poisonT = Math.max(player.poisonT || 0, 3.2);
       }
       const before = this.pos.clone(); collide(this.pos, this.radius);
-      if (this.left <= 0 || before.distanceTo(this.pos) > 0.02) { this.teleKind = null; this.state = 'recover'; this.timer = 0.55; }
+      if (this.left <= 0 || before.distanceTo(this.pos) > 0.02) { this.teleKind = null; this.state = 'recover'; this.timer = 0.5; }
       return { name: 'Wasp_Flying', opts: { speed: 2.2 } };
     }
     this.teleKind = null;
     this.timer -= bdt;
-    if (this.timer <= 0) { this.state = 'buzz'; this.cd = 1.6 + Math.random(); this.strafe *= -1; }
+    if (this.timer <= 0) { this.state = 'buzz'; this.cd = 1.5 + Math.random(); this.strafe *= -1; }
     return 'Wasp_Flying';
   }
 }
 
-// ---------- 13. Mãng Xà Độc (mon_snake.glb): phun độc 3 tia & để lại vũng độc ----------
+// ---------- 13. Mãng Xà Độc (mon_snake.glb): phun độc 3 tia đón đầu & giữ góc thoáng ----------
 export class Viper extends Creature {
   constructor(scene, x, z) {
     super(scene, x, z);
+    this._isRanged = true;
     this.hp = 36; this.color = 0x4ad860; this.mass = 0.85; this.contactDmg = 0; this.dropChance = 0.18; this.xp = 4;
     this.hurtSound = 'slimeHit'; this.dieSound = 'slimeDie';
     this._radius = 0.5; this.shadowScale = 0.78;
@@ -842,11 +862,11 @@ export class Viper extends Creature {
     this.facing = Math.atan2(dx, dz);
     this.cd -= bdt;
     if (this.state === 'slither') {
-      const radial = d > 9.5 ? 1 : d < 5.5 ? -1 : 0;
-      this.move((dx / d) * radial * 3.1 + (-dz / d) * this.strafe * 2.1, (dz / d) * radial * 3.1 + (dx / d) * this.strafe * 2.1, 1, bdt);
-      if (this.cd <= 0 && d < 14 && !player.dead) {
-        this.state = 'spit'; this.timer = 0.65; this.teleKind = 'interrupt';
-        this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 6, arc: 0.8, facing: this.facing, duration: 0.65, kind: 'interrupt' });
+      rangedStrafeVec(this, player, d, dx, dz, 5.5, 9.5, 3.3, 2.2, bdt);
+      if (this.cd <= 0 && d < 14 && !player.dead && hasLineOfSight(this.pos.x, this.pos.z, player.pos.x, player.pos.z)) {
+        this.facing = leadAngle(this.pos, player, 10.5, 0.65);
+        this.state = 'spit'; this.timer = 0.58; this.teleKind = 'interrupt';
+        this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 6, arc: 0.8, facing: this.facing, duration: 0.58, kind: 'interrupt' });
         if (this.anim) this.anim.play('Snake_Attack', { once: true, fade: 0.08 });
         play('ignite', { at: this.pos, rate: 1.5, vol: 0.4 });
         return null;
@@ -857,24 +877,24 @@ export class Viper extends Creature {
       this.timer -= bdt;
       if (this.timer <= 0) {
         this.teleKind = null;
-        const base = this.facing + (this.blindT > 0 ? (Math.random() - 0.5) * 1.4 : 0);
+        const base = leadAngle(this.pos, player, 10.5, 0.65) + (this.blindT > 0 ? (Math.random() - 0.5) * 1.4 : 0);
         for (const off of [-0.22, 0, 0.22]) {
           const a = base + off;
           const dir = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
           enemyShot(this.pos.clone().setY(0.85).addScaledVector(dir, 0.6), dir, 9, 'orb');
         }
         spawnToxic(this.pos.clone().add(new THREE.Vector3(Math.sin(base) * 3, 0, Math.cos(base) * 3)), 1.4, 4.5);
-        this.state = 'slither'; this.cd = 2.4 + Math.random(); this.strafe *= -1;
+        this.state = 'slither'; this.cd = 2.1 + Math.random(); this.strafe *= -1;
       }
       return null;
     }
     this.timer -= bdt;
-    if (this.timer <= 0) { this.state = 'slither'; this.cd = 1.6; }
+    if (this.timer <= 0) { this.state = 'slither'; this.cd = 1.4; }
     return 'Snake_Idle';
   }
 }
 
-// ---------- 14. Cự Giải Thiết Giáp (mon_crab.glb): mai giáp cứng mặt trước, kẹp càng ----------
+// ---------- 14. Cự Giải Thiết Giáp (mon_crab.glb): mai giáp cứng, xoay vỏ 360 khi bị đánh sau lưng ----------
 export class StoneCrab extends Creature {
   constructor(scene, x, z) {
     super(scene, x, z);
@@ -882,19 +902,20 @@ export class StoneCrab extends Creature {
     this.hurtSound = 'hitHeavy'; this.dieSound = 'bigLand';
     this.poiseMax = 55; this._radius = 0.65; this.shadowScale = 1.0;
     this.state = 'scuttle'; this.timer = 0; this.cd = 1.4 + Math.random();
-    this.strafe = Math.random() < 0.5 ? 1 : -1;
+    this.strafe = Math.random() < 0.5 ? 1 : -1; this.backTime = 0;
     this.buildCreature('mon_crab', 1.4, { idleAnim: 'Idle' });
   }
   takeHit(dmg, dir, kb, crit, kind) {
-    // Mai cứng giảm 55% sát thương đánh từ chính diện (trừ chí mạng / đốt / độc / đang choáng)
-    if (dir && !crit && this.stunT <= 0 && !this.spawning && kind !== 'burn' && kind !== 'poison') {
+    if (dir && this.stunT <= 0 && !this.spawning) {
       const fx = Math.sin(this.facing), fz = Math.cos(this.facing);
-      if (-(dir.x * fx + dir.z * fz) > 0.4) {
+      const frontDot = -(dir.x * fx + dir.z * fz);
+      if (!crit && kind !== 'burn' && kind !== 'poison' && frontDot > 0.4) {
         hitSpark(this.pos.clone().setY(0.8), 0xffe0a0, false);
         play('hammer', { at: this.pos, rate: 1.5, vol: 0.45 });
         this.poise += dmg * 0.7;
         return super.takeHit(Math.max(1, Math.round(dmg * 0.45)), dir, kb * 0.35, false, kind);
       }
+      if (frontDot < -0.25) this.backTime = (this.backTime || 0) + 0.55;
     }
     return super.takeHit(dmg, dir, kb, crit, kind);
   }
@@ -903,34 +924,63 @@ export class StoneCrab extends Creature {
     if (this.state === 'scuttle') {
       const want = Math.atan2(dx, dz);
       let diff = Math.atan2(Math.sin(want - this.facing), Math.cos(want - this.facing));
-      this.facing += Math.sign(diff) * Math.min(Math.abs(diff), 2.8 * bdt);
-      if (d < 3.6 && this.cd <= 0 && !player.dead) {
-        this.state = 'clamp'; this.timer = 0.58; this.teleKind = 'pierce';
-        this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 1.8, length: 4.2, facing: this.facing, duration: 0.58, kind: 'pierce' });
+      this.facing += Math.sign(diff) * Math.min(Math.abs(diff), 3.1 * bdt);
+      const fx = Math.sin(this.facing), fz = Math.cos(this.facing);
+      const backDot = (dx * fx + dz * fz) / d;
+      if (d < 2.9 && backDot < -0.25) this.backTime = (this.backTime || 0) + bdt;
+      else this.backTime = Math.max(0, (this.backTime || 0) - bdt * 0.6);
+
+      if (this.backTime >= 0.45 && this.cd <= 0 && d < 3.1 && !player.dead) {
+        this.backTime = 0;
+        this.state = 'spin'; this.timer = 0.5;
+        this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 2.8, duration: 0.5, color: 0xffa040 });
+        if (this.anim) this.anim.play('Bite_Front', { once: true, fade: 0.08, speed: 1.1 });
+        return null;
+      }
+      if (d < 3.6 && this.cd <= 0 && !player.dead && canStartMelee(this)) {
+        claimMeleeToken(this);
+        this.state = 'clamp'; this.timer = 0.52; this.teleKind = 'pierce';
+        this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 1.8, length: 4.2, facing: this.facing, duration: 0.52, kind: 'pierce' });
         if (this.anim) this.anim.play('Bite_Front', { once: true, fade: 0.08, speed: 0.9 });
         return null;
       }
-      this.move((dx / d) * 2.1 + (-dz / d) * this.strafe * 1.6, (dz / d) * 2.1 + (dx / d) * this.strafe * 1.6, 1, bdt);
+      this.move((dx / d) * 2.3 + (-dz / d) * this.strafe * 1.6, (dz / d) * 2.3 + (dx / d) * this.strafe * 1.6, 2.8, bdt);
       return { name: 'Walk', opts: { speed: 1.3 } };
+    }
+    if (this.state === 'spin') {
+      this.timer -= bdt;
+      this.facing += bdt * 12;
+      if (this.timer <= 0) {
+        play('hitHeavy', { at: this.pos, rate: 1.1 });
+        spawnRing(this.scene, this.pos, 2.8, 0xffa040, 0.4);
+        if (!player.dead && d < 2.8 + player.radius) {
+          hurtPlayer(player, 14);
+          const pd = Math.hypot(player.pos.x - this.pos.x, player.pos.z - this.pos.z) || 1;
+          player.pos.x += ((player.pos.x - this.pos.x) / pd) * 2.2;
+          player.pos.z += ((player.pos.z - this.pos.z) / pd) * 2.2;
+        }
+        this.state = 'recover'; this.timer = 0.6; this.strafe *= -1;
+      }
+      return null;
     }
     if (this.state === 'clamp') {
       this.timer -= bdt;
       if (this.timer <= 0) {
         this.teleKind = null;
         const fx = Math.sin(this.facing), fz = Math.cos(this.facing);
-        this.move(fx, fz, 10, 0.25);
+        this.move(fx, fz, 10, 0.25, { ignoreHazards: true });
         play('hitHeavy', { at: this.pos, rate: 1.1 });
         if (!player.dead && inSector(this.pos, this.facing, player.pos, 3.6 + player.radius, 1.8)) {
           hurtPlayer(player, 16);
           player.pos.x += fx * 1.8; player.pos.z += fz * 1.8;
         }
-        this.state = 'recover'; this.timer = 0.7; this.strafe *= -1;
+        this.state = 'recover'; this.timer = 0.65; this.strafe *= -1;
       }
       return null;
     }
     this.teleKind = null;
     this.timer -= bdt;
-    if (this.timer <= 0) { this.state = 'scuttle'; this.cd = 1.8 + Math.random(); }
+    if (this.timer <= 0) { this.state = 'scuttle'; this.cd = 1.6 + Math.random(); }
     return 'Idle';
   }
 }

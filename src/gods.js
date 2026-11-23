@@ -93,6 +93,14 @@ export function pickTrialPair(rand = Math.random) {
 
 export function tickGodWrath(godId, dt, state, scene, player, enemies) {
   if (!godId || !player || player.dead) return;
+  state.pending = state.pending || [];
+  for (let i = state.pending.length - 1; i >= 0; i--) {
+    state.pending[i].t -= dt;
+    if (state.pending[i].t <= 0) {
+      const job = state.pending.splice(i, 1)[0];
+      job.fn();
+    }
+  }
   state.t = (state.t || 2.2) - dt;
   if (state.t > 0) return;
 
@@ -106,29 +114,33 @@ export function tickGodWrath(godId, dt, state, scene, player, enemies) {
     state.t = 2.4;
     const at = player.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 3, 0, (Math.random() - 0.5) * 3));
     spawnTelegraph(scene, { shape: 'circle', pos: at, radius: 2.1, duration: 0.9, color: 0xffe14a });
-    setTimeout(() => {
-      if (player.dead) return;
-      spawnBolt(scene, at.clone().setY(10), at.clone().setY(0.3), 0xffe14a);
-      spawnRing(scene, at, 2.1, 0xffe14a, 0.35);
-      play('zap', { at });
-      if (Math.hypot(player.pos.x - at.x, player.pos.z - at.z) < 2.1 + player.radius) {
-        if (player.hurt(15)) damageNumber(player.pos, 15, 'player');
-      }
-    }, 900);
+    state.pending.push({
+      t: 0.9,
+      fn: () => {
+        spawnBolt(scene, at.clone().setY(10), at.clone().setY(0.3), 0xffe14a);
+        spawnRing(scene, at, 2.1, 0xffe14a, 0.35);
+        play('zap', { at });
+        if (Math.hypot(player.pos.x - at.x, player.pos.z - at.z) < 2.1 + player.radius) {
+          if (player.hurt(15)) damageNumber(player.pos, 15, 'player');
+        }
+      },
+    });
   } else if (godId === 'shadow') {
     state.t = 3.0;
     const at = player.pos.clone();
     spawnTelegraph(scene, { shape: 'circle', pos: at, radius: 3.0, duration: 0.95, color: 0xb89aff });
-    setTimeout(() => {
-      if (player.dead) return;
-      smoke(at.clone().setY(0.8), { count: 8, color: 0x2a1040, size: 1.5, life: 0.9, alpha: 0.65 });
-      spawnRing(scene, at, 3.0, 0xb89aff, 0.4);
-      play('dash', { at, rate: 0.5 });
-      if (Math.hypot(player.pos.x - at.x, player.pos.z - at.z) < 3.0 + player.radius) {
-        player.slowT = Math.max(player.slowT, 2.2);
-        if (player.hurt(14)) damageNumber(player.pos, 14, 'player');
-      }
-    }, 950);
+    state.pending.push({
+      t: 0.95,
+      fn: () => {
+        smoke(at.clone().setY(0.8), { count: 8, color: 0x2a1040, size: 1.5, life: 0.9, alpha: 0.65 });
+        spawnRing(scene, at, 3.0, 0xb89aff, 0.4);
+        play('dash', { at, rate: 0.5 });
+        if (Math.hypot(player.pos.x - at.x, player.pos.z - at.z) < 3.0 + player.radius) {
+          player.slowT = Math.max(player.slowT, 2.2);
+          if (player.hurt(14)) damageNumber(player.pos, 14, 'player');
+        }
+      },
+    });
   } else if (godId === 'wind') {
     state.t = 2.8;
     const a = Math.random() * Math.PI * 2;
@@ -146,16 +158,18 @@ export function tickGodWrath(godId, dt, state, scene, player, enemies) {
     for (let i = 0; i < 2; i++) {
       const at = player.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 6, 0, (Math.random() - 0.5) * 6));
       spawnTelegraph(scene, { shape: 'circle', pos: at, radius: 2.3, duration: 0.95, color: 0x7fdcff });
-      setTimeout(() => {
-        if (player.dead) return;
-        spawnRing(scene, at, 2.3, 0x7fdcff, 0.4);
-        burst(at.clone().setY(0.5), 0xbff4ff, 14, { speed: 6, size: 0.16 });
-        play('freeze', { at, rate: 1.0 });
-        if (Math.hypot(player.pos.x - at.x, player.pos.z - at.z) < 2.3 + player.radius) {
-          player.slowT = Math.max(player.slowT, 2.8);
-          if (player.hurt(13)) damageNumber(player.pos, 13, 'player');
-        }
-      }, 950);
+      state.pending.push({
+        t: 0.95,
+        fn: () => {
+          spawnRing(scene, at, 2.3, 0x7fdcff, 0.4);
+          burst(at.clone().setY(0.5), 0xbff4ff, 14, { speed: 6, size: 0.16 });
+          play('freeze', { at, rate: 1.0 });
+          if (Math.hypot(player.pos.x - at.x, player.pos.z - at.z) < 2.3 + player.radius) {
+            player.slowT = Math.max(player.slowT, 2.8);
+            if (player.hurt(13)) damageNumber(player.pos, 13, 'player');
+          }
+        },
+      });
     }
   } else if (godId === 'plague') {
     state.t = 2.7;

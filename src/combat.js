@@ -395,7 +395,7 @@ export function spawnSwordWave(origin, dir, weapon, dmg, scale = 1) {
 }
 
 // Đạn của quái: 'orb' (cầu tím của pháp sư) hoặc 'arrow' (mũi tên nỏ)
-export function enemyShot(origin, dir, dmg = 8, kind = 'orb') {
+export function enemyShot(origin, dir, dmg = 8, kind = 'orb', speed = null) {
   capProjectiles(false);
   let mesh;
   if (kind === 'arrow') {
@@ -410,7 +410,8 @@ export function enemyShot(origin, dir, dmg = 8, kind = 'orb') {
   }
   mesh.position.copy(origin);
   ctx.scene.add(mesh);
-  projectiles.push({ kind, friendly: false, mesh, vel: dir.clone().multiplyScalar(kind === 'arrow' ? 19 : 7), life: 3.5, dmg, color: kind === 'arrow' ? 0xffe0a0 : 0xc06bff });
+  const spd = speed ?? (kind === 'arrow' ? 20 : 10.5);
+  projectiles.push({ kind, friendly: false, mesh, vel: dir.clone().multiplyScalar(spd), life: 3.5, dmg, color: kind === 'arrow' ? 0xffe0a0 : 0xc06bff });
 }
 
 function removeProjectile(i) {

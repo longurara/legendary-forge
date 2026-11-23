@@ -501,18 +501,19 @@ export class Player {
     if (back) damageNumber(e.pos, 'Đánh Lén!', 'react perfect');
     // Cắt Chiêu (Spell-Break Interrupt — cơ chế #5): đòn nặng/kỹ năng đánh trúng địch đang niệm đòn Tím
     if ((big || opts.canInterrupt) && e.teleKind === 'interrupt' && e.alive) {
-      e.interruptAttack?.(true);
-      dmg = Math.round(dmg * 1.45 + 15);
-      damageNumber(e.pos, 'Cắt Chiêu!', 'react ult');
-      spawnRing(this.scene, e.pos, 3.6, 0xd070ff, 0.45);
-      flash(e.pos.clone().setY(1.2), 0xe8a8ff, 4, 0.22);
-      addShake(0.45);
-      addHitStop(0.09);
-      play('hammer', { at: e.pos, rate: 1.4 });
-      haptic(24);
-      if (this.hasRelic('mirror')) this.specialCd *= 0.6;
-      progressAwakening(this, 'stun');
-      if (ctx.onSpellBreak) ctx.onSpellBreak(e);
+      if (e.interruptAttack?.(true) !== false) {
+        dmg = Math.round(dmg * 1.45 + 15);
+        damageNumber(e.pos, 'Cắt Chiêu!', 'react ult');
+        spawnRing(this.scene, e.pos, 3.6, 0xd070ff, 0.45);
+        flash(e.pos.clone().setY(1.2), 0xe8a8ff, 4, 0.22);
+        addShake(0.45);
+        addHitStop(0.09);
+        play('hammer', { at: e.pos, rate: 1.4 });
+        haptic(24);
+        if (this.hasRelic('mirror')) this.specialCd *= 0.6;
+        progressAwakening(this, 'stun');
+        if (ctx.onSpellBreak) ctx.onSpellBreak(e);
+      }
     }
     // Độ bền & Nhiệt Lưỡi (cơ chế #1)
     if (w0.dur == null) w0.dur = 100;
@@ -851,13 +852,14 @@ export class Player {
     // Khả năng Cắt Chiêu của kỹ năng Chuột Phải lên quái đang niệm đòn Tím trong tầm gần
     for (const e of enemies) {
       if (e.alive && e.teleKind === 'interrupt' && e.pos.distanceTo(this.pos) < 5.5) {
-        e.interruptAttack?.(true);
-        damageNumber(e.pos, 'Cắt Chiêu!', 'react ult');
-        spawnRing(this.scene, e.pos, 3.6, 0xd070ff, 0.45);
-        play('hammer', { at: e.pos, rate: 1.4 });
-        dealDamage(e, Math.round(24 * mul), fireW, new THREE.Vector3(e.pos.x - this.pos.x, 0, e.pos.z - this.pos.z).normalize(), 12, true, false);
-        progressAwakening(this, 'stun');
-        if (ctx.onSpellBreak) ctx.onSpellBreak(e);
+        if (e.interruptAttack?.(true) !== false) {
+          damageNumber(e.pos, 'Cắt Chiêu!', 'react ult');
+          spawnRing(this.scene, e.pos, 3.6, 0xd070ff, 0.45);
+          play('hammer', { at: e.pos, rate: 1.4 });
+          dealDamage(e, Math.round(24 * mul), fireW, new THREE.Vector3(e.pos.x - this.pos.x, 0, e.pos.z - this.pos.z).normalize(), 12, true, false);
+          progressAwakening(this, 'stun');
+          if (ctx.onSpellBreak) ctx.onSpellBreak(e);
+        }
       }
     }
     if (w.legend === 'boss_knight') {

@@ -64,7 +64,7 @@ export function renderPauseBuildHtml(player, refs = {}) {
   for (const list of [PERKS, EVOLUTIONS, BOONS, DUOS]) {
     for (const item of list) perkMap.set(item.id, item);
   }
-  const ownedPerks = Object.entries(player.perkLv || {}).filter(([, lv]) => lv > 0);
+  const ownedPerks = Object.entries(player.perkLv || {}).filter(([id, lv]) => lv > 0 && perkMap.has(id));
   const perksHtml = ownedPerks.length
     ? ownedPerks.map(([id, lv]) => {
       const def = perkMap.get(id);
@@ -78,7 +78,7 @@ export function renderPauseBuildHtml(player, refs = {}) {
   const relicsHtml = (player.relics || []).length
     ? (player.relics || []).map((id) => {
       const r = RELICS.find((x) => x.id === id);
-      return `<span class="pb-pill relic${r?.cursed ? ' cursed' : ''}" title="${r?.desc || ''}">${r?.name || id}</span>`;
+      return `<span class="pb-pill pb-relic${r?.cursed ? ' pb-cursed' : ''}" title="${r?.desc || ''}">${r?.name || id}</span>`;
     }).join('')
     : '<span class="muted small">Chưa có di vật</span>';
 

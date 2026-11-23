@@ -6,6 +6,7 @@ import { models, fitModel, Animator } from './models.js';
 import { ctx, enemyShot, aoe } from './combat.js';
 import { play } from './audio.js';
 import { Enemy } from './enemies.js';
+import { steerMove, rangedStrafeVec, hasLineOfSight, leadPos, leadAngle, pickBossMove, findWoundedAlly, canStartMelee, claimMeleeToken } from './ai.js';
 
 export function attachProp(fitted, propName, bone = 'handslotr', scale = 1) {
   const hand = fitted.getObjectByName(bone);
@@ -80,16 +81,17 @@ export class Walker extends Enemy {
     this.after?.(dt, time);
     return false;
   }
-  move(dirX, dirZ, speed, bdt) { this.pos.x += dirX * speed * bdt; this.pos.z += dirZ * speed * bdt; }
+  move(dirX, dirZ, speed, bdt, opts) { steerMove(this, dirX, dirZ, speed, bdt, opts); }
 }
 
-// ---------- Pháp Sư Hồi Máu: giữ khoảng cách, hồi máu cho quái xung quanh ----------
+// ---------- Pháp Sư Hồi Máu: tìm đồng minh bị thương để hồi máu, tự vệ khi đi lẻ ----------
 export class Healer extends Walker {
   constructor(scene, x, z) {
     super(scene, x, z);
+    this._isRanged = true;
     this.hp = 28; this.color = 0x7fe39a; this.mass = 0.9; this.contactDmg = 0; this.dropChance = 0.25; this.xp = 5;
     this.hurtSound = 'mageHurt'; this.dieSound = 'mageDie';
-    this.healT = 2.5; this.strafe = Math.random() < 0.5 ? 1 : -1; this.casting = 0;
+    this.healT = 2.5; this.boltCd = 1.4; this.strafe = Math.random() < 0.5 ? 1 : -1; this.casting = 0;
     this.build('enemy_mage', 2.0);
     tintMats(this, 0x6fe38a, 0.45, 0x1a8a3a, 0.25);
   }
@@ -101,14 +103,36 @@ export class Healer extends Walker {
       if (this.casting <= 0) this.castHeal();
       return null;
     }
-    const radial = d > 10 ? 1 : d < 7.5 ? -1 : 0;
-    this.move((dx / d) * radial * 2.6 + (-dz / d) * this.strafe * 1.2, (dz / d) * radial * 2.6 + (dx / d) * this.strafe * 1.2, 1, bdt);
+    const wounded = findWoundedAlly(this, 18);
+    const hasAllies = (ctx.enemies || []).some((e) => e !== this && e.alive && !e.dead && !(e instanceof Healer) && !e.ward);
+    if (!hasAllies) {
+      rangedStrafeVec(this, player, d, dx, dz, 6.2, 10.5, 2.8, 1.7, bdt);
+      this.boltCd -= bdt;
+      if (this.boltCd <= 0 && !player.dead && d < 16 && hasLineOfSight(this.pos.x, this.pos.z, player.pos.x, player.pos.z)) {
+        const ang = leadAngle(this.pos, player, 10.5, 0.6);
+        const dir = new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang));
+        enemyShot(this.pos.clone().setY(1.2).addScaledVector(dir, 0.7), dir, 8, 'orb');
+        play('mageCast', { at: this.pos, rate: 1.5 });
+        this.boltCd = 1.7 + Math.random() * 0.5;
+        this.strafe *= -1;
+      }
+      return { name: 'Walking_D_Skeletons', opts: { speed: 1.2 } };
+    }
+    if (wounded && wounded.pos.distanceTo(this.pos) > 6.2) {
+      let wx = wounded.pos.x - this.pos.x, wz = wounded.pos.z - this.pos.z;
+      const wd = Math.hypot(wx, wz) || 1;
+      wx /= wd; wz /= wd;
+      if (d < 4.5) { wx -= (dx / d) * 0.8; wz -= (dz / d) * 0.8; }
+      this.move(wx, wz, 3.0, bdt);
+    } else {
+      rangedStrafeVec(this, player, d, dx, dz, 7.5, 11.5, 2.7, 1.4, bdt);
+    }
     this.healT -= bdt;
-    const hurt = ctx.enemies.some((e) => e !== this && e.alive && !e.spawning && e.hp < (e.maxHpEff || e.maxHp || e.hp) * 0.9 && e.pos.distanceTo(this.pos) < 7.5);
+    const hurt = wounded && wounded.pos.distanceTo(this.pos) <= 7.5;
     if (this.healT <= 0 && hurt) {
-      this.casting = 0.85; this.healT = 4.5;
+      this.casting = 0.8; this.healT = 4.2;
       this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 7.5, duration: 0.85, kind: 'interrupt' });
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 7.5, duration: 0.8, kind: 'interrupt' });
       play('mageCast', { at: this.pos, rate: 1.4 });
       if (this.anim) this.anim.play('Spellcast_Raise', { once: true, fade: 0.1 });
     }
@@ -129,55 +153,95 @@ export class Healer extends Walker {
   }
 }
 
-// ---------- Khiên Binh: chặn đòn phía trước, đập khiên hất văng ----------
+// ---------- Khiên Binh: chắn trước đồng minh, đập khiên & quét 360 khi bị đánh lén ----------
 export class ShieldBearer extends Walker {
   constructor(scene, x, z) {
     super(scene, x, z);
     this.hp = 60; this.color = 0xc8c0b0; this.mass = 1.6; this.contactDmg = 0; this.dropChance = 0.2; this.xp = 5;
     this.hurtSound = 'hitHeavy'; this.dieSound = 'mageDie';
-    this.state = 'chase'; this.timer = 0; this.cd = 1.5;
+    this.state = 'chase'; this.timer = 0; this.cd = 1.4;
     this.poiseMax = 45;
     this.shadowScale = 0.95;
+    this.guardTarget = null;
+    this.backTime = 0;
     this.build('enemy_minion', 2.05, [['prop_skel_blade', 'handslotr'], ['prop_skel_shield', 'handslotl']]);
   }
   get radius() { return 0.6; }
   takeHit(dmg, dir, kb, crit, kind) {
-    // Bị đánh từ phía trước khi đang giơ khiên: giảm 80% sát thương
     if (dir && this.stunT <= 0 && !this.spawning && this.state !== 'bash') {
       const fx = Math.sin(this.facing), fz = Math.cos(this.facing);
-      if (-(dir.x * fx + dir.z * fz) > 0.35) {
+      const frontDot = -(dir.x * fx + dir.z * fz);
+      if (frontDot > 0.35) {
         hitSpark(this.pos.clone().set(this.pos.x + fx * 0.6, 1, this.pos.z + fz * 0.6), 0xbfd8ff, false);
         if (Math.random() < 0.4) damageNumber(this.pos, 'Chặn', 'burn');
         play('hammer', { at: this.pos, rate: 1.4, vol: 0.5 });
         this.poise += dmg * 0.6;                       // vẫn làm đầy thanh choáng để phá thủ
         return super.takeHit(Math.max(1, Math.round(dmg * 0.2)), dir, kb * 0.2, false, kind);
       }
+      if (frontDot < -0.25) this.backTime = (this.backTime || 0) + 0.55;
     }
     return super.takeHit(dmg, dir, kb, crit, kind);
   }
   think(bdt, player, d, dx, dz) {
     this.cd -= bdt;
     if (this.state === 'chase') {
-      // Xoay chậm về phía người chơi (đánh vòng ra sau được)
       const want = Math.atan2(dx, dz);
       let diff = Math.atan2(Math.sin(want - this.facing), Math.cos(want - this.facing));
-      this.facing += Math.sign(diff) * Math.min(Math.abs(diff), 2.2 * bdt);
-      if (d < 2.6 && this.cd <= 0 && !player.dead) {
-        this.state = 'wind'; this.timer = 0.6;
-        this.teleKind = 'pierce';
-        this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2, length: 3, facing: this.facing, duration: 0.6, kind: 'pierce' });
-        if (this.anim) this.anim.play('Block_Attack', { once: true, fade: 0.1, speed: 0.8 });
+      this.facing += Math.sign(diff) * Math.min(Math.abs(diff), 3.0 * bdt);
+      const fx = Math.sin(this.facing), fz = Math.cos(this.facing);
+      const backDot = (dx * fx + dz * fz) / d;
+      if (d < 2.9 && backDot < -0.25) this.backTime = (this.backTime || 0) + bdt;
+      else this.backTime = Math.max(0, (this.backTime || 0) - bdt * 0.6);
+
+      if (this.backTime >= 0.45 && this.cd <= 0 && d < 3.1 && !player.dead) {
+        this.backTime = 0;
+        this.state = 'sweepWind'; this.timer = 0.5;
+        this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 2.8, duration: 0.5, color: 0xffa040 });
+        if (this.anim) this.anim.play('Block_Attack', { once: true, fade: 0.08, speed: 1.1 });
         return null;
       }
-      if (d > 1.6) { this.move(Math.sin(this.facing), Math.cos(this.facing), 2.3, bdt); return { name: 'Blocking', opts: {} }; }
+      if (d < 2.6 && this.cd <= 0 && !player.dead && canStartMelee(this)) {
+        claimMeleeToken(this);
+        this.state = 'wind'; this.timer = 0.55;
+        this.teleKind = 'pierce';
+        this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2, length: 3, facing: this.facing, duration: 0.55, kind: 'pierce' });
+        if (this.anim) this.anim.play('Block_Attack', { once: true, fade: 0.1, speed: 0.9 });
+        return null;
+      }
+      if (this.guardTarget && this.guardTarget.alive && !this.guardTarget.dead && d > 3.2) {
+        const gd = Math.hypot(player.pos.x - this.guardTarget.pos.x, player.pos.z - this.guardTarget.pos.z) || 1;
+        const gx = this.guardTarget.pos.x + ((player.pos.x - this.guardTarget.pos.x) / gd) * 2.6;
+        const gz = this.guardTarget.pos.z + ((player.pos.z - this.guardTarget.pos.z) / gd) * 2.6;
+        const tx = gx - this.pos.x, tz = gz - this.pos.z;
+        const td = Math.hypot(tx, tz);
+        if (td > 0.65) { this.move(tx / td, tz / td, 2.9, bdt); return { name: 'Blocking', opts: {} }; }
+        return 'Blocking';
+      }
+      if (d > 1.6) { this.move(fx, fz, 2.7, bdt); return { name: 'Blocking', opts: {} }; }
       return 'Blocking';
+    }
+    if (this.state === 'sweepWind') {
+      this.timer -= bdt;
+      if (this.timer <= 0) {
+        play('hitHeavy', { at: this.pos, rate: 1.1 });
+        spawnRing(this.scene, this.pos, 2.8, 0xffa040, 0.4);
+        if (!player.dead && d < 2.8 + player.radius) {
+          hurtPlayer(player, 13);
+          const pd = Math.hypot(player.pos.x - this.pos.x, player.pos.z - this.pos.z) || 1;
+          player.pos.x += ((player.pos.x - this.pos.x) / pd) * 2.4;
+          player.pos.z += ((player.pos.z - this.pos.z) / pd) * 2.4;
+        }
+        this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
+        this.state = 'bash'; this.timer = 0.35;
+      }
+      return null;
     }
     if (this.state === 'wind') {
       this.timer -= bdt;
       if (this.timer <= 0) {
         this.state = 'bash'; this.timer = 0.4;
         this.teleKind = null;
-        this.move(Math.sin(this.facing), Math.cos(this.facing), 6, 0.15);
+        this.move(Math.sin(this.facing), Math.cos(this.facing), 6, 0.15, { ignoreHazards: true });
         play('hitHeavy', { at: this.pos });
         const fx = Math.sin(this.facing), fz = Math.cos(this.facing);
         const rx = player.pos.x - this.pos.x, rz = player.pos.z - this.pos.z;
@@ -191,7 +255,7 @@ export class ShieldBearer extends Walker {
     }
     if (this.state === 'bash') {
       this.timer -= bdt;
-      if (this.timer <= 0) { this.state = 'chase'; this.cd = 2 + Math.random(); }
+      if (this.timer <= 0) { this.state = 'chase'; this.cd = 1.8 + Math.random(); }
       return 'Idle_Combat';
     }
     return null;
@@ -233,7 +297,7 @@ export class Bomber extends Enemy {
       if (this.fuse <= 0) this.blow();
     } else {
       const dx = player.pos.x - this.pos.x, dz = player.pos.z - this.pos.z, d = Math.hypot(dx, dz) || 0.001;
-      this.pos.x += (dx / d) * 5.2 * bdt; this.pos.z += (dz / d) * 5.2 * bdt;
+      steerMove(this, dx, dz, 5.4, bdt);
       this.bob += bdt * 14;
       if (Math.random() < 0.3) emit(this.pos.clone().setY(0.8), { frame: F.glow, color: 0xffa040, size: 0.3, size2: 0, life: 0.25 });
       if (d < 1.8 && !player.dead) this.light();
@@ -303,13 +367,15 @@ export class Wraith extends Walker {
       this.vis = 0;
       if (this.timer <= 0) {
         const back = player.aimDir ? player.aimDir() : new THREE.Vector3(0, 0, 1);
-        this.pos.set(player.pos.x - back.x * 2.2, 0, player.pos.z - back.z * 2.2);
+        const lp = leadPos(this.pos, player, 18, 0.3);
+        const tx = lp.x - back.x * 2.2, tz = lp.z - back.z * 2.2;
+        this.pos.set(tx, 0, tz);
         collide(this.pos, this.radius);
         this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
         smoke(this.pos.clone().setY(0.8), { count: 6, color: 0x2a2040, size: 0.9, life: 0.8, alpha: 0.6 });
-        this.state = 'strike'; this.timer = 0.5; this.revealT = 1.2;
-        this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 2.6, arc: 1.8, facing: this.facing, duration: 0.5, color: 0x9a5aff });
-        if (this.anim) this.anim.play('1H_Melee_Attack_Slice_Diagonal', { once: true, fade: 0.05, speed: 0.9 });
+        this.state = 'strike'; this.timer = 0.44; this.revealT = 1.2;
+        this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 2.6, arc: 1.8, facing: this.facing, duration: 0.44, color: 0x9a5aff });
+        if (this.anim) this.anim.play('1H_Melee_Attack_Slice_Diagonal', { once: true, fade: 0.05, speed: 1.0 });
       }
       return null;
     }
@@ -367,8 +433,8 @@ export class ShadowLord extends Walker {
       case 'chase':
         this.facing = Math.atan2(dx, dz);
         this.timer -= bdt;
-        if (d > 3) this.move(dx / d, dz / d, 3.6 * fast, bdt);
-        if (this.timer <= 0 && !player.dead) this.choose(player, d);
+        if (d > 3) this.move(dx / d, dz / d, 3.8 * fast, bdt);
+        if (this.timer <= 0 && !player.dead) { this.choose(player, d); return null; }
         return d > 3 ? { name: 'Running_C', opts: { speed: 0.9 } } : 'Idle_Combat';
       case 'vanish':
         this.timer -= bdt;
@@ -380,9 +446,9 @@ export class ShadowLord extends Walker {
           this.group.visible = true;
           smoke(this.pos.clone().setY(1), { count: 10, color: 0x1a1030, size: 1.5, life: 1, alpha: 0.7 });
           flash(this.pos.clone().setY(1.5), 0x8a5aff, 3, 0.2);
-          this.state = 'slashWind'; this.timer = 0.65 / fast;
+          this.state = 'slashWind'; this.timer = 0.58 / fast;
           this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 4.2, arc: 2.4, facing: this.facing, duration: this.timer, color: 0xa040ff });
-          if (this.anim) this.anim.play('2H_Melee_Attack_Spin', { once: true, fade: 0.05, speed: 0.8 });
+          if (this.anim) this.anim.play('2H_Melee_Attack_Spin', { once: true, fade: 0.05, speed: 0.9 });
         }
         return null;
       case 'slashWind':
@@ -390,7 +456,13 @@ export class ShadowLord extends Walker {
         if (this.timer <= 0) {
           if (!player.dead && inSector(this.pos, this.facing, player.pos, 4.2 + player.radius, 2.4)) hurtPlayer(player, 26);
           play('swing', { at: this.pos, rate: 0.6 }); addShake(0.4);
-          this.state = 'recover'; this.timer = 0.8;
+          if (this.phase >= 1 && !this.comboed && !player.dead) {
+            this.comboed = true;
+            this.dashes = this.isPartBroken('bladeL') ? 0 : (this.phase >= 1 ? 2 : 1);
+            this.facing = leadAngle(this.pos, player, 26, 0.55);
+            this.state = 'dashAim'; this.timer = 0.45 / fast; this.teleKind = 'pierce';
+            this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.2, length: 13, facing: this.facing, duration: this.timer, kind: 'pierce' });
+          } else { this.comboed = false; this.state = 'recover'; this.timer = 0.7; }
         }
         return null;
       case 'fanWind':
@@ -408,12 +480,12 @@ export class ShadowLord extends Walker {
           if (this.anim) this.anim.play('Throw', { once: true, fade: 0.05 });
           this.fans = (this.fans || 0) + 1;
           if (this.fans < (this.phase >= 1 ? 3 : 2)) { this.state = 'fanAim'; this.timer = 0.35; }
-          else { this.fans = 0; this.state = 'recover'; this.timer = 0.9; }
+          else { this.fans = 0; this.state = 'recover'; this.timer = 0.75; }
         }
         return null;
       case 'fanAim':
         this.timer -= bdt;
-        this.facing = Math.atan2(dx, dz);
+        this.facing = leadAngle(this.pos, player, 20, 0.55);
         if (this.timer <= 0) this.fanStart();
         return null;
       case 'dashAim':
@@ -422,7 +494,7 @@ export class ShadowLord extends Walker {
         return null;
       case 'dash': {
         const step = 26 * bdt;
-        this.move(Math.sin(this.facing), Math.cos(this.facing), 26, bdt);
+        this.move(Math.sin(this.facing), Math.cos(this.facing), 26, bdt, { ignoreObstacles: true, ignoreHazards: true });
         this.left -= step;
         emit(this.pos.clone().setY(1.4), { smoke: true, frame: F.puff, color: 0x2a1a40, size: 1.6, size2: 2.4, life: 0.5, alpha: 0.5 });
         if (!this.hit && !player.dead && Math.hypot(player.pos.x - this.pos.x, player.pos.z - this.pos.z) < 1.7) { this.hit = true; hurtPlayer(player, 20); }
@@ -431,10 +503,10 @@ export class ShadowLord extends Walker {
           this.dashes = (this.dashes || 0) + 1;
           const maxDashes = this.isPartBroken('bladeL') ? 1 : (this.phase >= 1 ? 3 : 2);
           if (this.dashes < maxDashes) {
-            this.state = 'dashAim'; this.timer = 0.45; this.teleKind = 'pierce';
-            this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
-            this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.2, length: 13, facing: this.facing, duration: 0.45, kind: 'pierce' });
-          } else { this.dashes = 0; this.teleKind = null; this.state = 'recover'; this.timer = 1.0; }
+            this.state = 'dashAim'; this.timer = 0.42; this.teleKind = 'pierce';
+            this.facing = leadAngle(this.pos, player, 26, 0.55);
+            this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.2, length: 13, facing: this.facing, duration: 0.42, kind: 'pierce' });
+          } else { this.dashes = 0; this.comboed = false; this.teleKind = null; this.state = 'recover'; this.timer = 0.75; }
         }
         return { name: 'Running_C', opts: { speed: 2 } };
       }
@@ -450,41 +522,45 @@ export class ShadowLord extends Walker {
               ctx.spawnEnemy?.(w);
             }
           }
-          this.state = 'recover'; this.timer = 0.6;
+          this.state = 'recover'; this.timer = 0.55;
         }
         return null;
       case 'recover':
         this.teleKind = null;
+        this.comboed = false;
         this.timer -= bdt;
-        if (this.timer <= 0) { this.state = 'chase'; this.timer = this.phase >= 1 ? 0.6 : 1.2; }
+        if (this.timer <= 0) { this.state = 'chase'; this.timer = this.phase >= 1 ? 0.5 : 0.9; }
         return 'Idle_Combat';
     }
     return null;
   }
   fanStart() {
-    this.state = 'fanWind'; this.timer = 0.55; this.teleKind = 'interrupt';
+    this.state = 'fanWind'; this.timer = 0.5; this.teleKind = 'interrupt';
     const baseN = this.phase >= 1 ? 11 : 7;
     const n = this.isPartBroken('bladeL') ? Math.max(3, Math.floor(baseN * 0.55)) : baseN;
-    for (let i = 0; i < n; i += 2) this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 0.3, length: 14, facing: this.facing + (i - (n - 1) / 2) * 0.16, duration: 0.55, kind: 'interrupt' });
+    for (let i = 0; i < n; i += 2) this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 0.3, length: 14, facing: this.facing + (i - (n - 1) / 2) * 0.16, duration: 0.5, kind: 'interrupt' });
   }
   choose(player, d) {
     const wraiths = ctx.enemies.filter((e) => e instanceof Wraith && !e.dead).length;
-    const opts = ['blink', 'fan', 'dash'];
-    if (wraiths < 2) opts.push('summon');
-    const pick = opts[this.next++ % opts.length];
-    this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
+    const pick = pickBossMove(this, [
+      { id: 'blink', weight: d > 7 ? 2.5 : 1.2 },
+      { id: 'fan', weight: 2.0 },
+      { id: 'dash', weight: d > 5.5 ? 2.6 : 1.0 },
+      { id: 'summon', weight: wraiths < 2 ? 1.4 : 0 },
+    ]);
+    this.facing = leadAngle(this.pos, player, pick === 'dash' ? 26 : 20, 0.55);
     if (pick === 'blink') {
-      this.state = 'vanish'; this.timer = 0.6;
+      this.state = 'vanish'; this.timer = 0.52;
       smoke(this.pos.clone().setY(1), { count: 10, color: 0x1a1030, size: 1.5, life: 1, alpha: 0.7 });
       this.group.visible = false;
       play('dash', { at: this.pos, rate: 0.5 });
     } else if (pick === 'fan') { this.fanStart(); if (this.anim) this.anim.play('Taunt', { once: true, fade: 0.1, speed: 1.5 }); }
     else if (pick === 'dash') {
-      this.state = 'dashAim'; this.timer = 0.7; this.teleKind = 'pierce';
-      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.2, length: 13, facing: this.facing, duration: 0.7, kind: 'pierce' });
+      this.state = 'dashAim'; this.timer = 0.62; this.teleKind = 'pierce';
+      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.2, length: 13, facing: this.facing, duration: 0.62, kind: 'pierce' });
     } else {
-      this.state = 'summon'; this.timer = 1.0; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.0, duration: 1.0, kind: 'interrupt' });
+      this.state = 'summon'; this.timer = 0.9; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.0, duration: 0.9, kind: 'interrupt' });
       if (this.anim) this.anim.play('Spellcast_Summon', { once: true, fade: 0.1 });
       play('mageCast', { at: this.pos, rate: 0.6 });
     }

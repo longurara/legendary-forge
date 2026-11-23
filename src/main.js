@@ -44,6 +44,8 @@ import { updateAbilities, clearAbilities, ULTIMATES } from './abilities.js';
 import { setMusic, updateMusic, unlockMusic } from './music.js';
 import { loadSounds, unlockAudio, play, setListener, getVolume, setVolume, getMusicVolume, setMusicVolume, isMuted, setMuted } from './audio.js';
 import { saveRunState, loadRunState, clearRunState, describeSavedRun, renderPauseBuildHtml } from './run_save.js';
+import { updateTactics, resetTactics, leadAngle, leadPos } from './ai.js';
+import { composeWaveSquads, RoomObjectiveManager } from './encounters.js';
 
 // ================= Khởi tạo =================
 const phoneInput = matchMedia("(pointer: coarse)");
@@ -234,7 +236,7 @@ function renderRelics() {
 }
 
 // ================= Trạng thái =================
-let player, loot, rewards, companions, sandbox, defense;
+let player, loot, rewards, companions, sandbox, defense, objectives;
 let enemies = [];
 let wave = 0;
 let kills = 0;
@@ -347,7 +349,7 @@ function addEnemy(e, opts = {}) {
   if (!e.isBoss && !e.isDummy) {
     const r = opts.r || Math.random;
     if (player.hasRelic('greed')) e.hp *= 1.25;
-    e.hp = Math.round(e.hp * (1 + (wave - 1) * 0.08) * (1 + (floor - 1) * 0.3) * Math.pow(playerPower(), 0.4) * (hasCurse('tough') ? 1.5 : 1) * (deep(1) ? 1.2 : 1) * (opts.hpMul || 1));
+    e.hp = Math.round(e.hp * (1 + (wave - 1) * 0.08) * (1 + (floor - 1) * 0.3) * Math.pow(playerPower(), 0.22) * (hasCurse('tough') ? 1.5 : 1) * (deep(1) ? 1.2 : 1) * (opts.hpMul || 1));
     if (floor >= 3) e.eliteSpeed = (e.eliteSpeed || 1) * (1 + Math.min(0.25, (floor - 2) * 0.06));
     const baseChance = wave >= 3 || deep(3) ? Math.min(0.3, 0.04 + wave * 0.02) * (deep(3) ? 2 : 1) : 0;
     const eliteChance = challengeWave || anchorWave || event?.id === 'elites' ? 1 : baseChance;
@@ -396,7 +398,7 @@ function spawnBossWave() {
   const kind = isTrueFinal ? 10 : nextBossKind(rngFor(6));
   const bosses = createBosses(kind, level);
   applyDifficulty();
-  const hpMul = (1 + 0.4 * (floor - 1)) * playerPower() * (deep(9) ? 1.3 : 1);
+  const hpMul = (1 + 0.4 * (floor - 1)) * Math.pow(playerPower(), 0.55) * (deep(9) ? 1.3 : 1);
   const intactAnchors = activeBossAnchors(floorMap);
   for (const boss of bosses) {
     boss.spawnT = -0.4;
@@ -516,80 +518,25 @@ function spawnWave() {
   let mult = hasCurse('swarm') ? 1.4 : 1;
   let hpMul = 1;
   if (event?.id === 'horde') { mult *= 1.85; hpMul = 0.62; }
-  const n = (k) => Math.max(0, Math.round(k * mult));
-  const fl = floor - 1;
   const biome = floorTheme(floor).biome.id;
-
-  // Mật độ quái phong phú ngay từ Đợt 1 cho đấu trường rộng 18x18 (57.6m x 57.6m)
-  const normals = n(Math.min(4 + Math.floor(wave * 0.7), 8));
-  const goblins = n(Math.min(2 + Math.floor(wave / 2) + fl, 6));
-  const minions = n(Math.min(2 + Math.floor(wave * 0.6), 6));
-  const spiders = n(Math.min(1 + Math.floor(wave / 2) + (biome === 'swamp' ? 2 : 0), 5));
-  const vipers = wave >= 1 ? n(Math.min(1 + Math.floor(wave / 3) + (biome === 'swamp' ? 1 : 0), 4)) : 0;
-  const bigs = wave >= 2 ? n(Math.min(1 + Math.floor(wave / 3), 3)) : 0;
-  const lavas = wave >= 2 ? n(Math.min(1 + Math.floor(wave / 2), 4)) : 0;
-  const orcs = wave >= 2 ? n(Math.min(1 + Math.floor(wave / 3) + fl, 4)) : 0;
-  const archers = wave >= 2 ? n(Math.min(1 + Math.floor(wave / 3), 4)) : 0;
-  const imps = wave >= 2 ? n(Math.min(1 + Math.floor(wave / 3) + (biome === 'lava' ? 2 : 0), 4)) : 0;
-  const wasps = wave >= 2 ? n(Math.min(1 + Math.floor((wave - 1) / 3), 4)) : 0;
-  const shields = wave >= 3 ? n(Math.min(1 + Math.floor(wave / 4) + Math.min(fl, 2), 4)) : 0;
-  const mages = wave >= 3 ? n(Math.min(1 + Math.floor(wave / 3), 4)) : 0;
-  const pyros = wave >= 3 ? n(Math.min(1 + Math.floor((wave - 2) / 3) + (biome === 'lava' ? 1 : 0), 3)) : 0;
-  const lancers = wave >= 3 ? n(Math.min(1 + Math.floor((wave - 2) / 3) + (biome === 'stone' ? 1 : 0), 3)) : 0;
-  const bombers = wave >= 3 ? n(Math.min(1 + Math.floor(wave / 3) + fl, 5)) : 0;
-  const crabs = wave >= 3 ? n(Math.min(1 + Math.floor((wave - 2) / 4) + (biome === 'stone' ? 1 : 0), 3)) : 0;
-  const healers = wave >= 4 ? n(Math.min(1 + Math.floor((wave - 4) / 6) + (fl >= 2 ? 1 : 0), 3)) : 0;
-  const frosts = wave >= 4 || biome === 'ice' ? n(Math.min(1 + Math.floor(wave / 4) + (biome === 'ice' ? 1 : 0), 3)) : 0;
-  const drakes = wave >= 4 || biome === 'ice' ? n(Math.min(1 + Math.floor((wave - 2) / 4) + (biome === 'ice' ? 1 : 0), 3)) : 0;
-  const berserkers = wave >= 4 ? n(Math.min(1 + Math.floor((wave - 3) / 3) + fl, 3)) : 0;
-  const necros = wave >= 4 || biome === 'crypt' ? n(Math.min(1 + Math.floor((wave - 3) / 5) + (biome === 'crypt' ? 1 : 0), 2)) : 0;
-  const glubs = wave >= 4 || biome === 'swamp' ? n(Math.min(1 + Math.floor((wave - 2) / 4) + (biome === 'swamp' ? 2 : 0), 4)) : 0;
-  const burrowers = wave >= 4 ? n(Math.min(1 + Math.floor((wave - 3) / 3) + Math.floor(fl / 2), 3)) : 0;
-  const armoreds = wave >= 5 || fl >= 1 ? n(Math.min(1 + Math.floor((wave - 4) / 3) + fl, 4)) : 0;
-  const assassins = wave >= 5 || fl >= 1 || biome === 'sanctum' ? n(Math.min(1 + Math.floor((wave - 4) / 3) + fl + (biome === 'sanctum' ? 1 : 0), 4)) : 0;
-  const wraiths = wave >= 6 || biome === 'crypt' || biome === 'sanctum' ? n(Math.min(1 + Math.floor(wave / 5) + Math.floor(fl / 2) + (biome === 'sanctum' ? 1 : 0), 4)) : 0;
-  const mothers = wave >= 6 ? n(Math.min(Math.floor((wave - 4) / 3), 2)) : 0;
-
-  const list = [
-    ...Array(orcs).fill('orc'), ...Array(frosts).fill('frostguard'), ...Array(berserkers).fill('berserker'),
-    ...Array(lancers).fill('lancer'), ...Array(pyros).fill('pyro'), ...Array(necros).fill('necro'),
-    ...Array(drakes).fill('drake'), ...Array(glubs).fill('glub'), ...Array(crabs).fill('crab'),
-    ...Array(armoreds).fill('armored'), ...Array(burrowers).fill('burrower'),
-    ...Array(goblins).fill('goblin'), ...Array(spiders).fill('spider'), ...Array(vipers).fill('viper'),
-    ...Array(imps).fill('imp'), ...Array(wasps).fill('wasp'),
-    ...Array(Math.max(2, normals - bigs)).fill('normal'), ...Array(bigs).fill('big'), ...Array(lavas).fill('lava'),
-    ...Array(mages).fill('mage'), ...Array(minions).fill('minion'), ...Array(assassins).fill('assassin'),
-    ...Array(archers).fill('archer'), ...Array(mothers).fill('mother'),
-    ...Array(healers).fill('healer'), ...Array(bombers).fill('bomber'), ...Array(wraiths).fill('wraith'), ...Array(shields).fill('shield'),
-  ];
-  if (arenaWave) list.splice(Math.ceil(list.length / 2));
-  // Giới hạn tổng số quái nâng lên cho bản đồ rộng (46 + 5*tầng)
-  const cap = 46 + floor * 5;
-  while (list.length > cap) {
-    const i = list.indexOf('normal');
-    list.splice(i >= 0 ? i : Math.floor(R() * list.length), 1);
-  }
-  // Đội hình: khiên binh đứng chắn trước quái đánh xa
-  const ranged = [];
-  for (const kind of list) {
-    let [x, z] = spawnPos(6.5, R);
-    if (kind === 'shield' && ranged.length) {
-      const [rx, rz] = ranged.shift();
-      const dx = player.pos.x - rx, dz = player.pos.z - rz, d = Math.hypot(dx, dz) || 1;
-      const sx = rx + (dx / d) * 2.4, sz = rz + (dz / d) * 2.4;
-      if (!isBlocked(sx, sz, 0.8)) { x = sx; z = sz; }
-    }
-    if (['archer', 'healer', 'mage', 'pyro', 'necro', 'viper'].includes(kind)) ranged.push([x, z]);
-    const e = MAKE_ENEMY[kind] ? new MAKE_ENEMY[kind](scene, x, z) : new Slime(scene, x, z, kind);
-    if (kind === 'shield') e.facing = Math.atan2(player.pos.x - x, player.pos.z - z);
-    e.spawnT = -R() * 0.7;
+  const { units, squadNames, escortPairs } = composeWaveSquads({ wave, floor, biome, mult, arenaWave, rng: R, playerPos: player.pos });
+  const spawned = [];
+  for (const u of units) {
+    const e = MAKE_ENEMY[u.kind] ? new MAKE_ENEMY[u.kind](scene, u.x, u.z) : new Slime(scene, u.x, u.z, u.kind);
+    if (u.kind === 'shield') e.facing = Math.atan2(player.pos.x - u.x, player.pos.z - u.z);
+    e.spawnT = -R() * 0.65;
     addEnemy(e, { hpMul, r: R });
+    spawned.push(e);
   }
-  // Lên lịch Quân Tiếp Viện giữa đợt từ Đợt 2 trở đi (khi hạ ~62% quân ban đầu)
+  for (const pair of escortPairs) {
+    const g = spawned[pair.guardIndex], t = spawned[pair.targetIndex];
+    if (g instanceof ShieldBearer && t) g.guardTarget = t;
+  }
+  // Lên lịch Quân Tiếp Viện giữa đợt từ Đợt 2 trở đi (khi hạ ~65% quân ban đầu)
   if (wave >= 2 && !arenaWave) {
     reinforceLeft = floor >= 3 ? 2 : 1;
-    reinforceTrigger = Math.max(3, Math.floor(list.length * 0.38));
-    reinforcePool = [...new Set(list.filter((k) => k !== 'healer' && k !== 'mother'))];
+    reinforceTrigger = Math.max(3, Math.floor(spawned.length * 0.35));
+    reinforcePool = [...new Set(units.map((u) => u.kind).filter((k) => k !== 'healer' && k !== 'mother'))];
   }
   // Kẻ Săn Đầu: từ tầng 2, săn bạn qua các tầng; để chạy thoát thì lần sau mạnh hơn
   if (floor >= 2 && !arenaWave && (run.nemesisLv > 0 ? R() < 0.5 : R() < 0.15)) {
@@ -606,12 +553,54 @@ function spawnWave() {
     nm.maxHpEff = nm.hp;
     nm.poiseMax = Math.round(nm.hp * 0.4);
     for (const m of nm.mats) if (m.color) m.color.lerp(new THREE.Color(0x8a1a3a), 0.5);
+    nm._sigT = 4.2;
+    nm.miniBossTick = (dt) => {
+      if (!nm.alive || nm.spawning || nm.stunned) return;
+      const tp = targetFor(nm);
+      if (!nm._enraged50 && nm.hp <= nm.maxHpEff * 0.5) {
+        nm._enraged50 = true;
+        nm.eliteSpeed = (nm.eliteSpeed || 1) * 1.2;
+        fxRing(scene, nm.pos, 4.5, 0xff5a8a, 0.45);
+        damageNumber(nm.pos, 'Cuồng Nộ!', 'burn');
+      }
+      nm._sigT -= dt;
+      if (nm._sigT <= 0 && tp && !tp.dead) {
+        nm._sigT = 5.5;
+        const baseA = leadAngle(nm.pos, tp, 20, 0.55);
+        for (const off of [-0.22, 0, 0.22]) {
+          const a = baseA + off;
+          const dir = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
+          combat.enemyShot(nm.pos.clone().setY(1.1).addScaledVector(dir, 0.9), dir, 10, 'arrow');
+        }
+        play('bowShoot', { at: nm.pos, rate: 0.9 });
+      }
+    };
     setTimeout(() => showBanner('Kẻ Săn Đầu đã tới!', 'Hạ hắn trong 35 giây trước khi hắn bỏ chạy', 2.6, '#ff5a8a'), 2800);
   }
-  // Cột Tế: thỉnh thoảng xuất hiện, hoặc chắc chắn xuất hiện trong phòng Mỏ Neo Boss
-  if (anchorWave || (wave >= 4 && !arenaWave && R() < 0.35)) {
-    const [x, z] = anchorWave ? [0, -6] : spawnPos(9, R);
-    const t = new Totem(scene, x, z, { hp: Math.round((anchorWave ? 110 : 60) * (1 + (floor - 1) * 0.4)) });
+  // Cột Tế / Mỏ Neo Boss (3 trụ + mục tiêu phòng)
+  if (anchorWave) {
+    const anchorTotems = [];
+    const spots = [[-10, -8], [0, -11], [10, -8]];
+    for (const [ax, az] of spots) {
+      let [tx, tz] = [ax, az];
+      if (isBlocked(tx, tz, 0.9)) [tx, tz] = spawnPos(7, R);
+      const t = new Totem(scene, tx, tz, { hp: Math.round(75 * (1 + (floor - 1) * 0.35)) });
+      t.spawnT = 0; t.maxHpEff = t.hp; enemies.push(t); anchorTotems.push(t);
+    }
+    objectives?.startAnchors(anchorTotems, () => {
+      if (enemies.length >= 36 || !reinforcePool.length) return;
+      for (let k = 0; k < 2; k++) {
+        const kind = reinforcePool[Math.floor(Math.random() * reinforcePool.length)];
+        const [rx, rz] = spawnPos(9);
+        const re = MAKE_ENEMY[kind] ? new MAKE_ENEMY[kind](scene, rx, rz) : new Slime(scene, rx, rz, kind);
+        re.spawnT = -0.3;
+        addEnemy(re);
+      }
+      ctx.enemies = enemies;
+    });
+  } else if (wave >= 4 && !arenaWave && R() < 0.35) {
+    const [x, z] = spawnPos(9, R);
+    const t = new Totem(scene, x, z, { hp: Math.round(60 * (1 + (floor - 1) * 0.4)) });
     t.spawnT = 0; t.maxHpEff = t.hp; enemies.push(t);
   }
   // Thủ Lĩnh (mini-boss) ở đợt thứ 3 của mỗi tầng (8 chủng Thủ Lĩnh đa dạng!)
@@ -633,21 +622,40 @@ function spawnWave() {
     mb.maxHpEff = mb.hp;
     mb.poiseMax = Math.round(mb.hp * 0.4);
     mb.dropChance = 0;
+    mb._sigT = 4.0;
+    mb.miniBossTick = (dt) => {
+      if (!mb.alive || mb.spawning || mb.stunned) return;
+      const tp = targetFor(mb);
+      if (!mb._enraged50 && mb.hp <= mb.maxHpEff * 0.5) {
+        mb._enraged50 = true;
+        mb.eliteSpeed = (mb.eliteSpeed || 1) * 1.2;
+        fxRing(scene, mb.pos, 4.8, 0xff8a4a, 0.45);
+        damageNumber(mb.pos, 'Cuồng Nộ!', 'burn');
+      }
+      mb._sigT -= dt;
+      if (mb._sigT <= 0 && tp && !tp.dead) {
+        mb._sigT = 5.5;
+        const p = leadPos(mb.pos, tp, 12, 0.55);
+        combat.scheduleBomb(new THREE.Vector3(p.x, 0, p.z), 0.9, 2.7, 0, 18, 0xff8a30);
+        play('mageCast', { at: mb.pos, rate: 0.75 });
+      }
+    };
   }
+  if (wave >= 2 && !anchorWave && !challengeWave && !arenaWave && !trialState && R() < 0.3) {
+    objectives?.startKoth(new THREE.Vector3(0, 0, -4), () => {
+      showBanner('Vòng Lò Lửa Đầy!', 'Sóng nổ Thánh Quang · Rơi Rương Di Vật!', 2.2, '#ffcf4a');
+      rewards.spawnChest(0, -4);
+    }, 12);
+  }
+  if (challengeWave || event?.id === 'bloodmoon') objectives?.setFireRing(18.5);
   ctx.enemies = enemies;
   if (player.hasRelic('badge')) player.shieldHp = 25;
-  const parts = [
-    orcs && `${orcs} Orc`, goblins && `${goblins} yêu tinh`, spiders && `${spiders} nhện độc`,
-    imps && `${imps} tiểu quỷ`, lancers && `${lancers} kỵ binh`, pyros && `${pyros} hỏa sư`,
-    frosts && `${frosts} vệ binh băng`, berserkers && `${berserkers} cuồng chiến`, necros && `${necros} chiêu hồn sư`,
-    minions && `${minions} lính xương`, shields && `${shields} khiên binh`, archers && `${archers} cung thủ`,
-  ].filter(Boolean).slice(0, 4).join(' · ');
-  if (anchorWave) showBanner(`Mỏ Neo: ${ANCHOR_TYPES[anchorWave]?.name || 'Boss'}`, 'Dọn sạch để tước sức mạnh Boss cuối tầng · rơi Cổ Ngữ', 2.6, '#ff4080');
+  if (anchorWave) showBanner(`Mỏ Neo: ${ANCHOR_TYPES[anchorWave]?.name || 'Boss'}`, 'Phá hết 3 trụ Mỏ Neo để tước sức mạnh Boss cuối tầng · rơi Cổ Ngữ', 2.6, '#ff4080');
   else if (trialState) showBanner(GOD_WRATH[trialState.spurnedGod.id].name, GOD_WRATH[trialState.spurnedGod.id].desc, 2.8, trialState.spurnedGod.color);
-  else if (challengeWave) showBanner(`Đợt ${wave}: Thử Thách`, 'Toàn quái tinh anh · thưởng di vật', 2.4, '#ff6a4a');
+  else if (challengeWave) showBanner(`Đợt ${wave}: Thử Thách`, 'Toàn quái tinh anh · giữ vị trí trong Vòng Lửa!', 2.4, '#ff6a4a');
   else if (event) showBanner(event.name, event.desc, 2.6, event.color);
   else if (enemies.some((e) => e.miniBoss)) showBanner('Thủ Lĩnh xuất hiện!', enemies.find((e) => e.miniBoss).name + ' · hạ để nhận rương di vật', 2.6, '#ff8a4a');
-  else showBanner(`Đợt ${wave}`, `${enemies.length} quái · ${parts}`);
+  else showBanner(`Đợt ${wave}`, `${enemies.length} quái · ${squadNames.slice(0, 2).join(' + ')}`);
   renderEvent();
   play('waveStart');
 }
@@ -663,6 +671,8 @@ function renderEvent() {
 
 function onWaveCleared() {
   if (run.mode === 'sandbox') return;
+  objectives?.clear();
+  resetTactics();
   loot.vacuumAll();
   if (!hitThisWave && wave % 5 !== 0) questProgress('nohit');
   play('waveClear');
@@ -1021,6 +1031,8 @@ function restart() {
   companions?.clear();
   sandbox?.clear();
   defense?.clear();
+  objectives?.clear();
+  resetTactics();
   resetFlameState();
   runDmg = { basic: 0, special: 0, react: 0, rune: 0, ult: 0, pet: 0 };
   victoryShown = false;
@@ -1151,6 +1163,8 @@ function descend() {
     removeExit();
     loot.clear();
     rewards.clear();
+    objectives?.clear();
+    resetTactics();
     for (const e of enemies) if (!e.dead) e.die();
     enemies = [];
     ctx.enemies = enemies;
@@ -1914,6 +1928,7 @@ function update(realDt, render = true) {
       handleInteract();
     }
 
+    updateTactics(enemies, player, dt);
     for (const e of enemies) {
       if (e.nemesis && e.alive && (e.fleeT -= dt) <= 0) {
         e.noReward = true; run.nemesisLv = (run.nemesisLv || 0) + 1;
@@ -1957,6 +1972,10 @@ function update(realDt, render = true) {
     updateAbilities(dt);
     updateRunes(dt);
     companions?.update(dt, player, enemies, loot, time);
+    const fBoss = enemies.find((e) => e.isTrueBoss && e.alive);
+    if (fBoss) objectives?.setFireRing(fBoss.arenaRadius);
+    else if (enemies.some((e) => e.isTrueBoss)) objectives?.setFireRing(0);
+    objectives?.update(dt, player, enemies, time);
     if (defense?.active) {
       defense.update(dt, enemies, player, time);
       if (defense.coreHp <= 0 && !deathShown) {
@@ -2049,6 +2068,7 @@ function update(realDt, render = true) {
     if (!player.dead && run.mode !== 'sandbox' && enemies.length === 0 && arenaT <= 0) {
       if (intermission === null) onWaveCleared();
       if (intermission !== null && isFinite(intermission)) {
+        if (pressed.has('KeyG') && !choosingReward && !inShop && !exitOpen && intermission > 0.3) intermission = 0.25;
         intermission -= dt;
         if (intermission <= 0) {
           intermission = null;
@@ -2268,14 +2288,19 @@ function updateHud(realDt) {
   $('slowmo').style.opacity = player.slowmoT > 0 ? 1 : 0;
   const idle = started && !player.dead && enemies.length === 0 && wave > 0;
   const creepLimit = deep(10) ? 40 : 60;
-  const tHtml = creeping ? '<i class="ico ico-hourglass"></i> <span style="color:#b89aff">Bóng Tối Lan!</span>'
+  const objHud = !idle && started ? objectives?.hudText?.() : '';
+  const baseT = creeping ? '<i class="ico ico-hourglass"></i> <span style="color:#b89aff">Bóng Tối Lan!</span>'
     : waveTime > creepLimit - 15 && enemies.length ? `<i class="ico ico-hourglass"></i> Bóng Tối Lan sau ${Math.ceil(creepLimit - waveTime)} giây`
     : arenaT > 0 ? `<i class="ico ico-hourglass"></i> Đấu Trường: còn ${Math.ceil(arenaT)} giây`
     : !idle ? ''
     : exitOpen ? '<i class="ico ico-hourglass"></i> Tới nắp hầm giữa phòng để xuống tầng'
     : choosingReward ? '<i class="ico ico-hourglass"></i> Chọn một bệ phần thưởng để bắt đầu đợt tiếp theo'
     : inShop ? '<i class="ico ico-hourglass"></i> Mua đồ ở thương nhân, bấm "Rời đi" khi xong'
-    : intermission !== null && isFinite(intermission) ? `<i class="ico ico-hourglass"></i> Đợt ${wave + 1} sau ${Math.ceil(intermission)} giây` : '';
+    : intermission !== null && isFinite(intermission)
+      ? `<i class="ico ico-hourglass"></i> Đợt ${wave + 1} sau ${Math.ceil(intermission)} giây`
+        + (intermission > 1.2 ? ' · <span class="keycap">G</span> Sẵn sàng ngay' : '')
+      : '';
+  const tHtml = [objHud, baseT].filter(Boolean).join(' · ');
   if (tHtml !== _lastTimerHtml) { _lastTimerHtml = tHtml; hud.timer.innerHTML = tHtml; }
   if (bannerTimer > 0) { bannerTimer -= realDt; if (bannerTimer <= 0) hud.bannerWrap.classList.remove('show'); }
   if (player.dead && (!player2 || player2.dead) && !deathShown) onDeath();
@@ -2605,14 +2630,16 @@ async function init() {
     play('anvil'); play('explode', { at: b.pos });
     const dx = player.pos.x - b.pos.x, dz = player.pos.z - b.pos.z, d = Math.hypot(dx, dz) || 1;
     if (d < 6) { player.pos.x += (dx / d) * (6 - d); player.pos.z += (dz / d) * (6 - d); }
-    // Từ tầng 2: boss dựng 3 pha lê hộ thể quanh mình (luôn tìm chỗ trống gần boss)
-    if (floor >= 2 || deep(6)) {
+    // Từ tầng 2: chỉ các Boss pháp thuật / Hắc Hỏa GĐ1 mới dựng pha lê hộ thể; còn lại Bùng Phát Cuồng Nộ
+    const arcaneWard = b instanceof ArchMage || b instanceof ShadowLord || b instanceof PlagueKing || (b.isTrueBoss && b.phase === 1);
+    if ((floor >= 2 || deep(6)) && arcaneWard) {
       const baseA = Math.random() * Math.PI * 2;
-      for (let k = 0; k < 3; k++) {
+      const wCount = floor >= 4 ? 3 : 2;
+      for (let k = 0; k < wCount; k++) {
         let wx = null, wz = null;
         outer: for (const rad of [7, 9, 11]) {
           for (let step = 0; step < 8; step++) {
-            const a = baseA + (k / 3) * Math.PI * 2 + step * (Math.PI / 4);
+            const a = baseA + (k / wCount) * Math.PI * 2 + step * (Math.PI / 4);
             const tx = b.pos.x + Math.cos(a) * rad, tz = b.pos.z + Math.sin(a) * rad;
             if (!isBlocked(tx, tz, 0.8)) { wx = tx; wz = tz; break outer; }
           }
@@ -2621,7 +2648,12 @@ async function init() {
         const w = new Totem(scene, wx, wz, { ward: b, hp: Math.round(40 * (1 + (floor - 1) * 0.35)) });
         w.spawnT = 0; w.maxHpEff = w.hp; enemies.push(w);
       }
-      showBanner('Phá 3 pha lê hộ thể!', `${b.name} bất tử khi pha lê còn đứng`, 2.4, '#b070ff');
+      showBanner(`Phá ${wCount} pha lê hộ thể!`, `${b.name} bất tử khi pha lê còn đứng`, 2.4, '#b070ff');
+    } else {
+      fxRing(scene, b.pos, 6.5, 0xff4a3a, 0.5);
+      addShake(0.8);
+      b.timeMul = (b.timeMul || 1) + 0.12;
+      if (typeof b.timer === 'number') b.timer = Math.min(b.timer, 0.35);
     }
     const mkList = [Minion, null, Healer, Wraith, FireImp, FrostDrake, GoblinRaider, VenomSpider, FrostGuard, Wraith, PyroMage];
     const mk = b.bossKind === 1 ? null : (mkList[b.bossKind ?? 0] || Minion);
@@ -2683,6 +2715,7 @@ async function init() {
 
   loot = new Loot(scene);
   rewards = new Rewards(scene);
+  objectives = new RoomObjectiveManager(scene);
   echoMgr = new EchoManager(scene);
   companions = new CompanionManager(scene);
   sandbox = new SandboxManager(scene);

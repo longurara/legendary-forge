@@ -15,6 +15,7 @@ import { damagePillars } from './hazards.js';
 import { play } from './audio.js';
 import { Walker, tintMats, hurtPlayer } from './enemies_new.js';
 import { Creature, FireImp, FrostDrake, AcidGlub, VenomSpider, GoblinRaider, FrostGuard, StoneCrab, OrcBrute, PyroMage } from './enemies_pack.js';
+import { leadPos, leadAngle, pickBossMove, rangedStrafeVec, steerMove } from './ai.js';
 
 const inSector = (from, facing, target, range, arc) => {
   const dx = target.x - from.x, dz = target.z - from.z;
@@ -80,14 +81,15 @@ export class ForgeOgre extends Creature {
       case 'chase':
         this.facing = Math.atan2(dx, dz);
         this.timer -= fdt;
-        if (d > 2.8) { this.move(dx / d, dz / d, 2.9 * fast, bdt); return { name: 'Walk', opts: { speed: 1.0 * fast } }; }
-        if (this.timer <= 0 && !player.dead) this.choose(player, d);
+        if (this.timer <= 0 && !player.dead) { this.choose(player, d); return null; }
+        if (d > 2.8) { this.move(dx / d, dz / d, 3.6 * fast, bdt); return { name: 'Walk', opts: { speed: 1.15 * fast } }; }
         return 'Idle';
       case 'crossWind':
         this.timer -= fdt;
         if (Math.random() < 0.5) flame(this.pos.clone().setY(2.2), { count: 1, size: 0.8, spread: 0.6 });
         if (this.timer <= 0) {
           this.teleKind = null;
+          this.comboed = false;
           const rings = this.isPartBroken('core') ? 2 : (this.enraged ? 4 : 3);
           const dirs = this.enraged ? 8 : 4;
           for (let k = 0; k < dirs; k++) {
@@ -100,15 +102,15 @@ export class ForgeOgre extends Creature {
             }
           }
           addShake(0.8); play('explode', { at: this.pos, rate: 0.7 });
-          this.state = 'recover'; this.timer = 1.0;
+          this.state = 'recover'; this.timer = 0.75;
         }
         return null;
       case 'pullWind':
         this.timer -= fdt;
-        // Hút nhẹ người chơi về phía lò nung trước khi nổ!
-        if (!player.dead && d < 12 && d > 2.2) {
-          player.pos.x -= (dx / d) * 3.8 * bdt;
-          player.pos.z -= (dz / d) * 3.8 * bdt;
+        // Hút mạnh người chơi về phía lò nung trước khi nổ!
+        if (!player.dead && d < 13 && d > 2.2) {
+          player.pos.x -= (dx / d) * 7.8 * bdt;
+          player.pos.z -= (dz / d) * 7.8 * bdt;
           collide(player.pos, player.radius);
         }
         if (this.timer <= 0) {
@@ -119,7 +121,7 @@ export class ForgeOgre extends Creature {
           addShake(0.95); play('explode', { at: this.pos, rate: 0.65 });
           if (!player.dead && d < R + player.radius) hurtPlayer(player, 26);
           spawnFirePatch(this.pos.clone(), R * 0.6, 4.5, 14, true);
-          this.state = 'recover'; this.timer = 1.1;
+          this.state = 'recover'; this.timer = 0.75;
         }
         return null;
       case 'chargeAim':
@@ -132,7 +134,7 @@ export class ForgeOgre extends Creature {
       case 'charge': {
         const step = 20 * fdt;
         const fx = Math.sin(this.facing), fz = Math.cos(this.facing);
-        this.move(fx, fz, 20 * fast, bdt);
+        this.move(fx, fz, 20 * fast, bdt, { ignoreObstacles: true, ignoreHazards: true });
         this.left -= step;
         if (Math.random() < 0.35) spawnFirePatch(this.pos.clone(), 1.5, 3.2, 12, true);
         // Quỷ lao húc sập luôn cột đá trên đường đi!
@@ -145,7 +147,13 @@ export class ForgeOgre extends Creature {
         if (this.left <= 0 || before.distanceTo(this.pos) > 0.02) {
           this.teleKind = null;
           addShake(0.6); play('hitHeavy', { at: this.pos, rate: 0.65 });
-          this.state = 'recover'; this.timer = 1.05;
+          if (this.enraged && !this.comboed && !player.dead) {
+            this.comboed = true;
+            this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
+            this.state = 'crossWind'; this.timer = 0.72 / fast; this.teleKind = 'interrupt';
+            this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.5, duration: this.timer, kind: 'interrupt' });
+            if (this.anim) this.anim.play('Punch', { once: true, fade: 0.08, speed: 1.0 });
+          } else { this.comboed = false; this.state = 'recover'; this.timer = 0.75; }
         }
         return { name: 'Run2', opts: { speed: 1.5 } };
       }
@@ -161,42 +169,45 @@ export class ForgeOgre extends Creature {
             const imp = new FireImp(this.scene, sx, sz);
             imp.spawnT = 0.2; ctx.spawnEnemy?.(imp);
           }
-          this.state = 'recover'; this.timer = 0.7;
+          this.state = 'recover'; this.timer = 0.6;
         }
         return null;
       case 'recover':
         this.teleKind = null;
+        this.comboed = false;
         this.timer -= fdt;
-        if (this.timer <= 0) { this.state = 'chase'; this.timer = this.enraged ? 0.65 : 1.15; }
+        if (this.timer <= 0) { this.state = 'chase'; this.timer = this.enraged ? 0.55 : 0.9; }
         return 'Idle';
     }
     return 'Idle';
   }
   choose(player, d) {
     const imps = ctx.enemies.filter((e) => e instanceof FireImp && !e.dead).length;
-    const opts = ['cross', 'charge', 'pull'];
-    if (imps < 2) opts.push('summon');
-    let pick = opts[this.next++ % opts.length];
-    if (pick === 'pull' && d > 11) pick = 'charge';
-    this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
+    const pick = pickBossMove(this, [
+      { id: 'charge', weight: d > 9 ? 3.2 : 1.2 },
+      { id: 'pull', weight: d < 10 ? 2.6 : 0.4 },
+      { id: 'cross', weight: d <= 12 ? 2.2 : 0.7 },
+      { id: 'summon', weight: imps < 2 ? 1.3 : 0 },
+    ]);
     const sp = this.enraged ? 1.28 : 1;
+    this.facing = pick === 'charge' ? leadAngle(this.pos, player, 20 * sp, 0.55) : Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
     if (pick === 'cross') {
-      this.state = 'crossWind'; this.timer = 1.05; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.5, duration: 1.05 / sp, kind: 'interrupt' });
-      if (this.anim) this.anim.play('Punch', { once: true, fade: 0.1, speed: 0.7 });
+      this.state = 'crossWind'; this.timer = 0.95; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.5, duration: 0.95 / sp, kind: 'interrupt' });
+      if (this.anim) this.anim.play('Punch', { once: true, fade: 0.1, speed: 0.8 });
       play('ignite', { at: this.pos, rate: 0.7 });
     } else if (pick === 'pull') {
-      this.state = 'pullWind'; this.timer = 1.25; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: this.isPartBroken('core') ? 4.0 : 5.4, duration: 1.25 / sp, kind: 'interrupt' });
-      if (this.anim) this.anim.play('Weapon', { once: true, fade: 0.1, speed: 0.65 });
+      this.state = 'pullWind'; this.timer = 1.15; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: this.isPartBroken('core') ? 4.0 : 5.4, duration: 1.15 / sp, kind: 'interrupt' });
+      if (this.anim) this.anim.play('Weapon', { once: true, fade: 0.1, speed: 0.75 });
       play('anvil', { rate: 0.7 });
     } else if (pick === 'charge') {
-      this.state = 'chargeAim'; this.timer = 0.78; this.teleKind = 'pierce';
-      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.6, length: 16, facing: this.facing, duration: 0.78 / sp, kind: 'pierce' });
+      this.state = 'chargeAim'; this.timer = 0.7; this.teleKind = 'pierce';
+      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.6, length: 16, facing: this.facing, duration: 0.7 / sp, kind: 'pierce' });
       if (this.anim) this.anim.play('Wave', { once: true, fade: 0.1, speed: 1.4 });
     } else {
-      this.state = 'summon'; this.timer = 1.0; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.2, duration: 1.0 / sp, kind: 'interrupt' });
+      this.state = 'summon'; this.timer = 0.9; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.2, duration: 0.9 / sp, kind: 'interrupt' });
       if (this.anim) this.anim.play('Yes', { once: true, fade: 0.1 });
       play('mageCast', { at: this.pos, rate: 0.6 });
     }
@@ -247,14 +258,15 @@ export class FrostDragon extends Creature {
       case 'hover':
         this.facing = Math.atan2(dx, dz);
         this.timer -= fdt;
-        if (d > 8) this.move(dx / d, dz / d, 4.2 * fast, bdt);
-        else if (d < 4.5) this.move(-dx / d, -dz / d, 3.0 * fast, bdt);
-        if (this.timer <= 0 && !player.dead) this.choose(player, d);
+        this.strafe = this.strafe || 1;
+        if (this.timer <= 0 && !player.dead) { this.choose(player, d); return null; }
+        rangedStrafeVec(this, player, d, dx, dz, 4.8, 9.0, 4.4 * fast, 2.2 * fast, bdt);
         return 'Flying_Idle';
       case 'breathWind':
         this.timer -= fdt;
         if (this.timer <= 0) {
           this.teleKind = null;
+          this.comboed = false;
           const n = this.isPartBroken('crest') ? 5 : (this.enraged ? 11 : 7);
           for (let i = 0; i < n; i++) {
             const a = this.facing + (i - (n - 1) / 2) * 0.15;
@@ -268,7 +280,7 @@ export class FrostDragon extends Creature {
           ctx.reactSurface?.(this.pos.clone().add(new THREE.Vector3(Math.sin(this.facing) * 5, 0, Math.cos(this.facing) * 5)), 5.5, 'ice', null, 18);
           play('freeze', { at: this.pos, rate: 0.7 });
           addShake(0.45);
-          this.state = 'recover'; this.timer = 0.85;
+          this.state = 'recover'; this.timer = 0.7;
         }
         return null;
       case 'swoopAim':
@@ -278,7 +290,7 @@ export class FrostDragon extends Creature {
       case 'swoop': {
         const step = 26 * fdt;
         const fx = Math.sin(this.facing), fz = Math.cos(this.facing);
-        this.move(fx, fz, 26 * fast, bdt);
+        this.move(fx, fz, 26 * fast, bdt, { ignoreObstacles: true, ignoreHazards: true });
         this.left -= step;
         if (Math.random() < 0.7) emit(this.pos.clone().setY(1.6), { frame: F.sparkle, color: 0xc8f4ff, color2: 0x3090e0, size: 0.7, size2: 0.1, life: 0.35 });
         if (!this.hitDone && !player.dead && d < 2.0) {
@@ -288,7 +300,13 @@ export class FrostDragon extends Creature {
         if (this.left <= 0 || before.distanceTo(this.pos) > 0.02) {
           this.teleKind = null;
           spawnRing(this.scene, this.pos, 4.2, 0x7fdcff, 0.45);
-          this.state = 'recover'; this.timer = 0.9;
+          if (this.enraged && !this.comboed && !player.dead) {
+            this.comboed = true;
+            this.facing = leadAngle(this.pos, player, 18, 0.45);
+            this.state = 'breathWind'; this.timer = 0.65 / fast; this.teleKind = 'interrupt';
+            this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 10.5, arc: 1.35, facing: this.facing, duration: this.timer, kind: 'interrupt' });
+            if (this.anim) this.anim.play('Headbutt', { once: true, fade: 0.08, speed: 1.0 });
+          } else { this.comboed = false; this.state = 'recover'; this.timer = 0.72; }
         }
         return { name: 'Fast_Flying', opts: { speed: 1.6 } };
       }
@@ -297,12 +315,16 @@ export class FrostDragon extends Creature {
         if (this.timer <= 0) {
           this.teleKind = null;
           const cnt = this.isPartBroken('crest') ? 3 : (this.enraged ? 7 : 5);
+          const lp = leadPos(this.pos, player, 11, 0.65);
+          const vx = player.vel?.x || Math.sin(this.facing), vz = player.vel?.z || Math.cos(this.facing);
+          const vn = Math.hypot(vx, vz) || 1;
           for (let i = 0; i < cnt; i++) {
-            const at = player.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 9, 0, (Math.random() - 0.5) * 9));
-            scheduleBomb(at, 0.9 + i * 0.18, 2.3, 0, 16, 0x7fdcff);
+            const step = (i - (cnt - 1) * 0.4) * 2.1;
+            const at = new THREE.Vector3(lp.x + (vx / vn) * step + (Math.random() - 0.5) * 1.8, 0, lp.z + (vz / vn) * step + (Math.random() - 0.5) * 1.8);
+            scheduleBomb(at, 0.85 + i * 0.16, 2.3, 0, 16, 0x7fdcff);
           }
           play('freeze', { at: this.pos, rate: 0.9 });
-          this.state = 'recover'; this.timer = 0.8;
+          this.state = 'recover'; this.timer = 0.7;
         }
         return null;
       case 'summon':
@@ -316,38 +338,42 @@ export class FrostDragon extends Creature {
             const dr = new FrostDrake(this.scene, sx, sz);
             dr.spawnT = 0.2; ctx.spawnEnemy?.(dr);
           }
-          this.state = 'recover'; this.timer = 0.7;
+          this.state = 'recover'; this.timer = 0.6;
         }
         return null;
       case 'recover':
         this.teleKind = null;
+        this.comboed = false;
         this.timer -= fdt;
-        if (this.timer <= 0) { this.state = 'hover'; this.timer = this.enraged ? 0.65 : 1.1; }
+        if (this.timer <= 0) { this.state = 'hover'; this.strafe = -(this.strafe || 1); this.timer = this.enraged ? 0.55 : 0.9; }
         return 'Flying_Idle';
     }
     return 'Flying_Idle';
   }
   choose(player, d) {
     const drakes = ctx.enemies.filter((e) => e instanceof FrostDrake && !e.dead).length;
-    const opts = ['breath', 'swoop', 'hail'];
-    if (drakes < 2) opts.push('summon');
-    const pick = opts[this.next++ % opts.length];
-    this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
+    const pick = pickBossMove(this, [
+      { id: 'breath', weight: d < 10.5 ? 2.6 : 0.8 },
+      { id: 'swoop', weight: d > 7.5 ? 3.0 : 1.4 },
+      { id: 'hail', weight: 2.3 },
+      { id: 'summon', weight: drakes < 2 ? 1.3 : 0 },
+    ]);
     const sp = this.enraged ? 1.28 : 1;
+    this.facing = pick === 'swoop' ? leadAngle(this.pos, player, 26 * sp, 0.55) : Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
     if (pick === 'breath') {
-      this.state = 'breathWind'; this.timer = 0.9; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 10.5, arc: 1.35, facing: this.facing, duration: 0.9 / sp, kind: 'interrupt' });
-      if (this.anim) this.anim.play('Headbutt', { once: true, fade: 0.1, speed: 0.8 });
+      this.state = 'breathWind'; this.timer = 0.82; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 10.5, arc: 1.35, facing: this.facing, duration: 0.82 / sp, kind: 'interrupt' });
+      if (this.anim) this.anim.play('Headbutt', { once: true, fade: 0.1, speed: 0.9 });
     } else if (pick === 'swoop') {
-      this.state = 'swoopAim'; this.timer = 0.72; this.teleKind = 'pierce';
-      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.5, length: 18, facing: this.facing, duration: 0.72 / sp, kind: 'pierce' });
+      this.state = 'swoopAim'; this.timer = 0.65; this.teleKind = 'pierce';
+      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.5, length: 18, facing: this.facing, duration: 0.65 / sp, kind: 'pierce' });
     } else if (pick === 'hail') {
-      this.state = 'hail'; this.timer = 0.85; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.5, duration: 0.85 / sp, kind: 'interrupt' });
+      this.state = 'hail'; this.timer = 0.78; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.5, duration: 0.78 / sp, kind: 'interrupt' });
       if (this.anim) this.anim.play('Punch', { once: true, fade: 0.1 });
     } else {
-      this.state = 'summon'; this.timer = 1.0; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.2, duration: 1.0 / sp, kind: 'interrupt' });
+      this.state = 'summon'; this.timer = 0.9; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.2, duration: 0.9 / sp, kind: 'interrupt' });
       play('mageCast', { at: this.pos, rate: 0.7 });
     }
   }
@@ -396,13 +422,15 @@ export class EmberDragon extends Creature {
       case 'hover':
         this.facing = Math.atan2(dx, dz);
         this.timer -= fdt;
-        if (d > 8.5) this.move(dx / d, dz / d, 4.3 * fast, bdt);
-        if (this.timer <= 0 && !player.dead) this.choose(player, d);
+        this.strafe = this.strafe || 1;
+        if (this.timer <= 0 && !player.dead) { this.choose(player, d); return null; }
+        rangedStrafeVec(this, player, d, dx, dz, 5.0, 9.5, 4.4 * fast, 2.0 * fast, bdt);
         return 'Flying_Idle';
       case 'flamefan':
         this.timer -= fdt;
         if (this.timer <= 0) {
           this.teleKind = null;
+          this.comboed = false;
           const n = this.enraged ? 11 : 7;
           for (let i = 0; i < n; i++) {
             const a = this.facing + (i - (n - 1) / 2) * 0.16;
@@ -410,8 +438,15 @@ export class EmberDragon extends Creature {
             enemyShot(this.pos.clone().setY(1.8).addScaledVector(dir, 1.2), dir, 12, 'orb');
             if (i % 2 === 0) spawnFirePatch(this.pos.clone().addScaledVector(dir, 5.5), 1.6, 3.8, 12, true);
           }
+          if (!player.dead && d < 5.0 + player.radius) {
+            spawnRing(this.scene, this.pos, 4.8, 0xff6a2a, 0.5);
+            hurtPlayer(player, 16);
+            const pd = Math.hypot(dx, dz) || 1;
+            player.pos.x += (dx / pd) * 3.2; player.pos.z += (dz / pd) * 3.2;
+            collide(player.pos, player.radius);
+          }
           play('ignite', { at: this.pos, rate: 0.7 }); addShake(0.45);
-          this.state = 'recover'; this.timer = 0.85;
+          this.state = 'recover'; this.timer = 0.7;
         }
         return null;
       case 'meteor':
@@ -420,13 +455,16 @@ export class EmberDragon extends Creature {
         if (this.timer <= 0) {
           this.teleKind = null;
           const cnt = this.isPartBroken('halo') ? 3 : (this.enraged ? 9 : 6);
+          const lp = leadPos(this.pos, player, 12, 0.65);
+          const pat = [[0, 0], [3.0, 0], [-3.0, 0], [0, 3.0], [0, -3.0], [2.4, 2.4], [-2.4, 2.4], [2.4, -2.4], [-2.4, -2.4]];
           for (let i = 0; i < cnt; i++) {
-            const at = player.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 11, 0, (Math.random() - 0.5) * 11));
-            scheduleBomb(at, 0.85 + i * 0.16, 2.3, 0, 18, 0xff5a1a);
+            const off = pat[i % pat.length];
+            const at = new THREE.Vector3(lp.x + off[0], 0, lp.z + off[1]);
+            scheduleBomb(at, 0.8 + i * 0.14, 2.3, 0, 18, 0xff5a1a);
             spawnFirePatch(at, 1.6, 3.8, 12, true);
           }
           play('explode', { at: this.pos, rate: 0.75 });
-          this.state = 'recover'; this.timer = 0.9;
+          this.state = 'recover'; this.timer = 0.72;
         }
         return null;
       case 'rushAim':
@@ -435,7 +473,7 @@ export class EmberDragon extends Creature {
         return null;
       case 'rush': {
         const step = 25 * fdt;
-        this.move(Math.sin(this.facing), Math.cos(this.facing), 25 * fast, bdt);
+        this.move(Math.sin(this.facing), Math.cos(this.facing), 25 * fast, bdt, { ignoreObstacles: true, ignoreHazards: true });
         this.left -= step;
         if (Math.random() < 0.4) spawnFirePatch(this.pos.clone(), 1.5, 3.5, 12, true);
         if (!this.hitDone && !player.dead && d < 2.0) { this.hitDone = true; hurtPlayer(player, 24); }
@@ -443,7 +481,13 @@ export class EmberDragon extends Creature {
         if (this.left <= 0 || before.distanceTo(this.pos) > 0.02) {
           this.teleKind = null;
           explosion(this.pos, 3.8, 0xff5a1a, { smoke: true, scorch: true });
-          this.state = 'recover'; this.timer = 0.9;
+          if (this.enraged && !this.comboed && !player.dead) {
+            this.comboed = true;
+            this.facing = leadAngle(this.pos, player, 16, 0.45);
+            this.state = 'flamefan'; this.timer = 0.65 / fast; this.teleKind = 'interrupt';
+            this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 9.5, arc: 1.6, facing: this.facing, duration: this.timer, kind: 'interrupt' });
+            if (this.anim) this.anim.play('Headbutt', { once: true, fade: 0.08 });
+          } else { this.comboed = false; this.state = 'recover'; this.timer = 0.72; }
         }
         return { name: 'Fast_Flying', opts: { speed: 1.7 } };
       }
@@ -459,38 +503,42 @@ export class EmberDragon extends Creature {
             const m = i % 2 === 0 ? new FireImp(this.scene, sx, sz) : new GoblinRaider(this.scene, sx, sz);
             m.spawnT = 0.2; ctx.spawnEnemy?.(m);
           }
-          this.state = 'recover'; this.timer = 0.7;
+          this.state = 'recover'; this.timer = 0.6;
         }
         return null;
       case 'recover':
         this.teleKind = null;
+        this.comboed = false;
         this.timer -= fdt;
-        if (this.timer <= 0) { this.state = 'hover'; this.timer = this.enraged ? 0.6 : 1.05; }
+        if (this.timer <= 0) { this.state = 'hover'; this.strafe = -(this.strafe || 1); this.timer = this.enraged ? 0.55 : 0.85; }
         return 'Flying_Idle';
     }
     return 'Flying_Idle';
   }
-  choose(player) {
+  choose(player, d) {
     const adds = ctx.enemies.filter((e) => (e instanceof FireImp || e instanceof GoblinRaider) && !e.dead).length;
-    const opts = ['flamefan', 'rush', 'meteor'];
-    if (adds < 2) opts.push('summon');
-    const pick = opts[this.next++ % opts.length];
-    this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
+    const pick = pickBossMove(this, [
+      { id: 'flamefan', weight: d < 5.5 ? 3.4 : 1.8 },
+      { id: 'rush', weight: d > 7.5 ? 3.0 : 1.2 },
+      { id: 'meteor', weight: 2.2 },
+      { id: 'summon', weight: adds < 2 ? 1.3 : 0 },
+    ]);
     const sp = this.enraged ? 1.3 : 1;
+    this.facing = pick === 'rush' ? leadAngle(this.pos, player, 25 * sp, 0.55) : Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
     if (pick === 'flamefan') {
-      this.state = 'flamefan'; this.timer = 0.85; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 9.5, arc: 1.6, facing: this.facing, duration: 0.85 / sp, kind: 'interrupt' });
+      this.state = 'flamefan'; this.timer = 0.78; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 9.5, arc: 1.6, facing: this.facing, duration: 0.78 / sp, kind: 'interrupt' });
       if (this.anim) this.anim.play('Headbutt', { once: true, fade: 0.1 });
     } else if (pick === 'meteor') {
-      this.state = 'meteor'; this.timer = 1.0; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.0, duration: 1.0 / sp, kind: 'interrupt' });
+      this.state = 'meteor'; this.timer = 0.88; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.0, duration: 0.88 / sp, kind: 'interrupt' });
       if (this.anim) this.anim.play('Punch', { once: true, fade: 0.1 });
     } else if (pick === 'rush') {
-      this.state = 'rushAim'; this.timer = 0.72; this.teleKind = 'pierce';
-      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.6, length: 18, facing: this.facing, duration: 0.72 / sp, kind: 'pierce' });
+      this.state = 'rushAim'; this.timer = 0.65; this.teleKind = 'pierce';
+      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.6, length: 18, facing: this.facing, duration: 0.65 / sp, kind: 'pierce' });
     } else {
-      this.state = 'summon'; this.timer = 1.0; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.2, duration: 1.0 / sp, kind: 'interrupt' });
+      this.state = 'summon'; this.timer = 0.9; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.2, duration: 0.9 / sp, kind: 'interrupt' });
     }
   }
   after(dt) { if (this.haloGroup?.visible) this.haloGroup.rotation.y += dt * 2.4; }
@@ -539,28 +587,30 @@ export class PlagueKing extends Creature {
       case 'chase':
         this.facing = Math.atan2(dx, dz);
         this.timer -= fdt;
-        if (d > 4.5) { this.move(dx / d, dz / d, 2.8 * fast, bdt); return { name: 'Walk', opts: { speed: 1.1 * fast } }; }
-        if (this.timer <= 0 && !player.dead) this.choose(player, d);
+        if (this.timer <= 0 && !player.dead) { this.choose(player, d); return null; }
+        if (d > 4.5) { this.move(dx / d, dz / d, 3.4 * fast, bdt); return { name: 'Walk', opts: { speed: 1.15 * fast } }; }
         return 'Idle';
       case 'barrage':
         this.timer -= fdt;
         if (this.timer <= 0) {
           this.teleKind = null;
           const cnt = this.isPartBroken('spores') ? 3 : (this.enraged ? 7 : 5);
+          const lp = leadPos(this.pos, player, 11, 0.65);
           for (let i = 0; i < cnt; i++) {
-            const at = player.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 11, 0, (Math.random() - 0.5) * 11));
+            const at = new THREE.Vector3(lp.x + (Math.random() - 0.5) * 7, 0, lp.z + (Math.random() - 0.5) * 7);
             if (isBlocked(at.x, at.z, 0.8)) continue;
             spawnToxic(at, 2.1, 8.5);
             burst(at.clone().setY(0.3), 0x8fe83a, 10, { speed: 4, size: 0.16 });
           }
           play('slimeLand', { at: this.pos, rate: 0.7 });
-          this.state = 'recover'; this.timer = 0.8;
+          this.state = 'recover'; this.timer = 0.7;
         }
         return null;
       case 'detonate':
         this.timer -= fdt;
         if (this.timer <= 0) {
           this.teleKind = null;
+          this.comboed = false;
           // Kích nổ mọi vũng độc hiện có trong phòng!
           const tox = getToxics();
           const dmg = this.isPartBroken('spores') ? 10 : 18;
@@ -574,14 +624,16 @@ export class PlagueKing extends Creature {
             }
           }
           addShake(0.65); play('explode', { at: this.pos, rate: 0.8 });
-          this.state = 'recover'; this.timer = 0.95;
+          this.state = 'recover'; this.timer = 0.75;
         }
         return null;
       case 'leapWind':
         this.timer -= fdt;
         if (this.timer <= 0) {
-          this.state = 'leap'; this.t = 0; this.dur = 0.95;
-          this.from = this.pos.clone(); this.to = player.pos.clone();
+          this.state = 'leap'; this.t = 0; this.dur = 0.78;
+          this.from = this.pos.clone();
+          const lp = leadPos(this.pos, player, 12, 0.6);
+          this.to = new THREE.Vector3(lp.x, 0, lp.z);
           this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.to, radius: 4.2, duration: this.dur / fast, color: 0x70e84a });
           if (this.anim) this.anim.play('Jump', { once: true, fade: 0.05 });
           play('slimeLand', { at: this.pos, rate: 0.65 });
@@ -600,7 +652,10 @@ export class PlagueKing extends Creature {
           if (!player.dead && Math.hypot(player.pos.x - this.pos.x, player.pos.z - this.pos.z) < 4.2 + player.radius) {
             hurtPlayer(player, 22); player.poisonT = Math.max(player.poisonT || 0, 3.5);
           }
-          this.state = 'recover'; this.timer = 0.9;
+          if (this.enraged && !this.comboed && getToxics().length >= 2 && !player.dead) {
+            this.comboed = true;
+            this.detonateStart(0.85 / fast);
+          } else { this.comboed = false; this.state = 'recover'; this.timer = 0.72; }
         }
         return null;
       }
@@ -616,41 +671,50 @@ export class PlagueKing extends Creature {
             const m = i % 2 === 0 ? new VenomSpider(this.scene, sx, sz) : new AcidGlub(this.scene, sx, sz);
             m.spawnT = 0.2; ctx.spawnEnemy?.(m);
           }
-          this.state = 'recover'; this.timer = 0.7;
+          this.state = 'recover'; this.timer = 0.6;
         }
         return null;
       case 'recover':
         this.teleKind = null;
+        this.comboed = false;
         this.height = 0;
         this.timer -= fdt;
-        if (this.timer <= 0) { this.state = 'chase'; this.timer = this.enraged ? 0.6 : 1.1; }
+        if (this.timer <= 0) { this.state = 'chase'; this.timer = this.enraged ? 0.55 : 0.9; }
         return 'Idle';
     }
     return 'Idle';
   }
-  choose(player) {
+  detonateStart(dur) {
+    this.state = 'detonate'; this.timer = dur; this.teleKind = 'interrupt';
+    this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.2, duration: dur, kind: 'interrupt' });
+    for (const p of getToxics().slice(0, 6)) {
+      spawnTelegraph(this.scene, { shape: 'circle', pos: p.pos.clone(), radius: Math.max(2.6, p.radius * 1.45), duration: dur, color: 0x8fe83a });
+    }
+    if (this.anim) this.anim.play('Wave', { once: true, fade: 0.1 });
+    play('mageCast', { at: this.pos, rate: 0.65 });
+  }
+  choose(player, d) {
     const adds = ctx.enemies.filter((e) => (e instanceof VenomSpider || e instanceof AcidGlub) && !e.dead).length;
     const tox = getToxics();
-    const opts = ['barrage', 'leap'];
-    if (tox.length >= 2) opts.push('detonate');
-    if (adds < 2) opts.push('summon');
-    const pick = opts[this.next++ % opts.length];
+    const pick = pickBossMove(this, [
+      { id: 'leap', weight: d > 9 ? 3.2 : 1.4 },
+      { id: 'detonate', weight: tox.length >= 2 ? 3.0 : 0 },
+      { id: 'barrage', weight: 2.4 },
+      { id: 'summon', weight: adds < 2 ? 1.3 : 0 },
+    ]);
     this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
     const sp = this.enraged ? 1.26 : 1;
     if (pick === 'barrage') {
-      this.state = 'barrage'; this.timer = 0.75; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.4, duration: 0.75 / sp, kind: 'interrupt' });
+      this.state = 'barrage'; this.timer = 0.7; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.4, duration: 0.7 / sp, kind: 'interrupt' });
       if (this.anim) this.anim.play('Weapon', { once: true, fade: 0.1 });
     } else if (pick === 'detonate') {
-      this.state = 'detonate'; this.timer = 1.2; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.8, duration: 1.2 / sp, kind: 'interrupt' });
-      if (this.anim) this.anim.play('Wave', { once: true, fade: 0.1 });
-      play('mageCast', { at: this.pos, rate: 0.65 });
+      this.detonateStart(1.0 / sp);
     } else if (pick === 'leap') {
-      this.state = 'leapWind'; this.timer = 0.55; this.teleKind = 'pierce';
+      this.state = 'leapWind'; this.timer = 0.45; this.teleKind = 'pierce';
     } else {
-      this.state = 'summon'; this.timer = 1.0; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.2, duration: 1.0 / sp, kind: 'interrupt' });
+      this.state = 'summon'; this.timer = 0.9; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.2, duration: 0.9 / sp, kind: 'interrupt' });
     }
   }
   after(dt) { if (this.sporeGroup?.visible) this.sporeGroup.rotation.y += dt * 2.2; }
@@ -701,13 +765,14 @@ export class FrostWarden extends Walker {
       case 'chase':
         this.facing = Math.atan2(dx, dz);
         this.timer -= fdt;
-        if (d > 3.2) { this.move(dx / d, dz / d, 3.1 * fast, bdt); return 'Walking_D_Skeletons'; }
-        if (this.timer <= 0 && !player.dead) this.choose(player, d);
+        if (this.timer <= 0 && !player.dead) { this.choose(player, d); return null; }
+        if (d > 3.2) { this.move(dx / d, dz / d, 3.8 * fast, bdt); return 'Walking_D_Skeletons'; }
         return 'Idle_Combat';
       case 'nova':
         this.timer -= fdt;
         if (this.timer <= 0) {
           this.teleKind = null;
+          this.comboed = false;
           const R = this.enraged ? 6.0 : 5.2;
           spawnRing(this.scene, this.pos, R, 0x7fdcff, 0.55);
           burst(this.pos.clone().setY(0.6), 0xbff4ff, 44, { speed: 12, size: 0.22 });
@@ -719,7 +784,7 @@ export class FrostWarden extends Walker {
             enemyShot(this.pos.clone().setY(1.6), new THREE.Vector3(Math.sin(a), 0, Math.cos(a)), 11, 'arrow');
           }
           ctx.reactSurface?.(this.pos, R, 'ice', null, 20);
-          this.state = 'recover'; this.timer = 0.95;
+          this.state = 'recover'; this.timer = 0.75;
         }
         return null;
       case 'lance':
@@ -735,9 +800,11 @@ export class FrostWarden extends Walker {
           play('freeze', { at: this.pos, rate: 1.35 });
           this.bursts = (this.bursts || 0) + 1;
           if (this.bursts < (this.enraged ? 3 : 2)) {
-            this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
-            this.timer = 0.42;
-          } else { this.bursts = 0; this.state = 'recover'; this.timer = 0.85; }
+            this.facing = leadAngle(this.pos, player, 20, 0.6);
+            this.timer = 0.38;
+            this.teleKind = 'interrupt';
+            this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 10, arc: 0.9, facing: this.facing, duration: 0.38, kind: 'interrupt' });
+          } else { this.bursts = 0; this.state = 'recover'; this.timer = 0.72; }
         }
         return null;
       case 'dashAim':
@@ -746,7 +813,7 @@ export class FrostWarden extends Walker {
         return null;
       case 'dash': {
         const step = 25 * fdt;
-        this.move(Math.sin(this.facing), Math.cos(this.facing), 25 * fast, bdt);
+        this.move(Math.sin(this.facing), Math.cos(this.facing), 25 * fast, bdt, { ignoreObstacles: true, ignoreHazards: true });
         this.left -= step;
         if (Math.random() < 0.7) emit(this.pos.clone().setY(1.0), { frame: F.sparkle, color: 0xbff4ff, color2: 0x3080ff, size: 0.6, size2: 0.1, life: 0.3 });
         if (!this.hitDone && !player.dead && d < 1.85) { this.hitDone = true; hurtPlayer(player, 22); player.slowT = Math.max(player.slowT, 2.8); }
@@ -755,10 +822,15 @@ export class FrostWarden extends Walker {
           this.dashes = (this.dashes || 0) + 1;
           const maxD = this.isPartBroken('crown') ? 1 : (this.enraged ? 3 : 2);
           if (this.dashes < maxD) {
-            this.state = 'dashAim'; this.timer = 0.48; this.teleKind = 'pierce';
-            this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
-            this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.2, length: 14, facing: this.facing, duration: 0.48 / fast, kind: 'pierce' });
-          } else { this.dashes = 0; this.teleKind = null; this.state = 'recover'; this.timer = 0.95; }
+            this.state = 'dashAim'; this.timer = 0.44; this.teleKind = 'pierce';
+            this.facing = leadAngle(this.pos, player, 25 * fast, 0.55);
+            this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.2, length: 14, facing: this.facing, duration: 0.44 / fast, kind: 'pierce' });
+          } else if (this.enraged && !this.comboed && !player.dead) {
+            this.dashes = 0; this.comboed = true;
+            this.state = 'nova'; this.timer = 0.75 / fast; this.teleKind = 'interrupt';
+            this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 6.0, duration: this.timer, kind: 'interrupt' });
+            if (this.anim) this.anim.play('2H_Melee_Attack_Chop', { once: true, fade: 0.08, speed: 0.9 });
+          } else { this.dashes = 0; this.comboed = false; this.teleKind = null; this.state = 'recover'; this.timer = 0.75; }
         }
         return { name: 'Running_C', opts: { speed: 1.8 } };
       }
@@ -773,39 +845,42 @@ export class FrostWarden extends Walker {
             const m = i % 2 === 0 ? new FrostGuard(this.scene, sx, sz) : new StoneCrab(this.scene, sx, sz);
             m.spawnT = 0.2; ctx.spawnEnemy?.(m);
           }
-          this.state = 'recover'; this.timer = 0.7;
+          this.state = 'recover'; this.timer = 0.6;
         }
         return null;
       case 'recover':
         this.teleKind = null;
+        this.comboed = false;
         this.timer -= fdt;
-        if (this.timer <= 0) { this.state = 'chase'; this.timer = this.enraged ? 0.65 : 1.15; }
+        if (this.timer <= 0) { this.state = 'chase'; this.timer = this.enraged ? 0.55 : 0.9; }
         return 'Idle_Combat';
     }
     return null;
   }
   choose(player, d) {
     const guards = ctx.enemies.filter((e) => (e instanceof FrostGuard || e instanceof StoneCrab) && !e.dead).length;
-    const opts = ['nova', 'dash', 'lance'];
-    if (guards < 2) opts.push('summon');
-    let pick = opts[this.next++ % opts.length];
-    if (pick === 'nova' && d > 8) pick = 'dash';
-    this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
+    const pick = pickBossMove(this, [
+      { id: 'dash', weight: d > 8 ? 3.0 : 1.3 },
+      { id: 'lance', weight: d > 5.5 ? 2.5 : 1.2 },
+      { id: 'nova', weight: d < 5.5 ? 3.2 : 0.7 },
+      { id: 'summon', weight: guards < 2 ? 1.3 : 0 },
+    ]);
     const sp = this.enraged ? 1.28 : 1;
+    this.facing = pick === 'dash' ? leadAngle(this.pos, player, 25 * sp, 0.55) : leadAngle(this.pos, player, 20, 0.6);
     if (pick === 'nova') {
-      this.state = 'nova'; this.timer = 1.05; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: this.enraged ? 6.0 : 5.2, duration: 1.05 / sp, kind: 'interrupt' });
-      if (this.anim) this.anim.play('2H_Melee_Attack_Chop', { once: true, fade: 0.1, speed: 0.75 });
+      this.state = 'nova'; this.timer = 0.95; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: this.enraged ? 6.0 : 5.2, duration: 0.95 / sp, kind: 'interrupt' });
+      if (this.anim) this.anim.play('2H_Melee_Attack_Chop', { once: true, fade: 0.1, speed: 0.8 });
     } else if (pick === 'dash') {
-      this.state = 'dashAim'; this.timer = 0.72; this.teleKind = 'pierce';
-      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.2, length: 14, facing: this.facing, duration: 0.72 / sp, kind: 'pierce' });
+      this.state = 'dashAim'; this.timer = 0.65; this.teleKind = 'pierce';
+      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.2, length: 14, facing: this.facing, duration: 0.65 / sp, kind: 'pierce' });
     } else if (pick === 'lance') {
-      this.state = 'lance'; this.timer = 0.6; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 10, arc: 0.9, facing: this.facing, duration: 0.6 / sp, kind: 'interrupt' });
+      this.state = 'lance'; this.timer = 0.55; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 10, arc: 0.9, facing: this.facing, duration: 0.55 / sp, kind: 'interrupt' });
       if (this.anim) this.anim.play('Throw', { once: true, fade: 0.1 });
     } else {
-      this.state = 'summon'; this.timer = 1.0; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.0, duration: 1.0 / sp, kind: 'interrupt' });
+      this.state = 'summon'; this.timer = 0.9; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.0, duration: 0.9 / sp, kind: 'interrupt' });
       if (this.anim) this.anim.play('Spellcast_Summon', { once: true, fade: 0.1 });
     }
   }
@@ -831,7 +906,7 @@ class ReaperTwin extends Walker {
     this.hurtSound = 'hitHeavy'; this.dieSound = 'mageDie';
     this.state = 'intro'; this.timer = 1.4; this.next = 0; this.shadowScale = 1.5;
     this.absorbed = false; this.sibling = null;
-    this.beamCd = 6.5; this.beamT = 0; this.beamTick = 0; this.beamMesh = null;
+    this.beamCd = 6.5; this.beamWarnT = 0; this.beamT = 0; this.beamTick = 0; this.beamMesh = null;
 
     const scythe = models.prop_scythe ? ['prop_scythe', 'handslotr', 0.33] : ['weapon_axe', 'handslotr', 1];
     this.build(role === 'flame' ? 'enemy_rogue' : 'enemy_mage', 3.15, [scythe]);
@@ -877,13 +952,11 @@ class ReaperTwin extends Walker {
     if (this.role !== 'flame') return;
     const sib = this.sibling;
     if (!sib || sib.dead || this.dead || this.spawning) {
+      this.beamWarnT = 0; this.beamT = 0;
       if (this.beamMesh) { this.scene.remove(this.beamMesh); this.beamMesh.geometry.dispose(); this.beamMesh.material.dispose(); this.beamMesh = null; }
       return;
     }
-    if (this.beamT > 0) {
-      this.beamT -= dt; this.beamTick -= dt;
-      const a = this.pos.clone().setY(1.5), b = sib.pos.clone().setY(1.5);
-      const mid = a.clone().lerp(b, 0.5), len = a.distanceTo(b);
+    const ensureMesh = () => {
       if (!this.beamMesh) {
         this.beamMesh = new THREE.Mesh(
           new THREE.CylinderGeometry(0.16, 0.16, 1, 10, 1, true),
@@ -891,9 +964,32 @@ class ReaperTwin extends Walker {
         );
         this.scene.add(this.beamMesh);
       }
+      const a = this.pos.clone().setY(1.5), b = sib.pos.clone().setY(1.5);
+      const mid = a.clone().lerp(b, 0.5), len = a.distanceTo(b);
       this.beamMesh.position.copy(mid);
-      this.beamMesh.scale.set(1, Math.max(0.1, len), 1);
       this.beamMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+      return { a, b, len };
+    };
+    if (this.beamWarnT > 0) {
+      this.beamWarnT -= dt;
+      const { len } = ensureMesh();
+      this.beamMesh.scale.set(0.35, Math.max(0.1, len), 0.35);
+      this.beamMesh.material.color.setHex(0xffffff);
+      this.beamMesh.material.opacity = 0.4 + Math.sin(this.beamWarnT * 30) * 0.25;
+      if (this.beamWarnT <= 0) {
+        this.beamT = this.isPartBroken('seal') ? 1.6 : 3.2;
+        this.beamTick = 0;
+        play('zap', { at: this.pos, rate: 0.8 });
+        damageNumber(this.pos, 'Liên Kết Song Sinh!', 'react overload');
+      }
+      return;
+    }
+    if (this.beamT > 0) {
+      this.beamT -= dt; this.beamTick -= dt;
+      const { a, b, len } = ensureMesh();
+      this.beamMesh.scale.set(1, Math.max(0.1, len), 1);
+      this.beamMesh.material.color.setHex(0xffd070);
+      this.beamMesh.material.opacity = 0.78;
       if (Math.random() < dt * 16) spawnBolt(this.scene, a, b, 0xffe080);
       if (this.beamTick <= 0 && !player.dead) {
         const dist = distPointToSeg(player.pos.x, player.pos.z, this.pos.x, this.pos.z, sib.pos.x, sib.pos.z);
@@ -909,9 +1005,8 @@ class ReaperTwin extends Walker {
     } else {
       this.beamCd -= dt;
       if (this.beamCd <= 0) {
-        this.beamT = this.isPartBroken('seal') ? 1.6 : 3.2;
-        play('zap', { at: this.pos, rate: 0.8 });
-        damageNumber(this.pos, 'Liên Kết Song Sinh!', 'react overload');
+        this.beamWarnT = 0.85;
+        play('zap', { at: this.pos, rate: 1.4, vol: 0.4 });
       }
     }
   }
@@ -922,18 +1017,27 @@ class ReaperTwin extends Walker {
     switch (this.state) {
       case 'intro':
         this.timer -= fdt;
-        if (this.timer <= 0) { this.state = 'chase'; this.timer = this.role === 'flame' ? 0.9 : 1.4; }
+        if (this.timer <= 0) { this.state = 'chase'; this.timer = this.role === 'flame' ? 0.8 : 1.1; }
         return 'Idle_Combat';
       case 'chase':
         this.facing = Math.atan2(dx, dz);
         this.timer -= fdt;
+        if (this.timer <= 0 && !player.dead) { this.choose(player, d); return null; }
         if (this.role === 'flame') {
-          if (d > 3) { this.move(dx / d, dz / d, 4.1 * fast, bdt); return { name: 'Running_C', opts: { speed: 1.15 } }; }
+          if (d > 3) { this.move(dx / d, dz / d, 4.4 * fast, bdt); return { name: 'Running_C', opts: { speed: 1.2 } }; }
+          return 'Idle_Combat';
+        } else if (this.sibling && !this.sibling.dead) {
+          const fx = player.pos.x - this.sibling.pos.x, fz = player.pos.z - this.sibling.pos.z;
+          const fd = Math.hypot(fx, fz) || 1;
+          const ox = Math.max(-25, Math.min(25, player.pos.x + (fx / fd) * 8.5));
+          const oz = Math.max(-25, Math.min(25, player.pos.z + (fz / fd) * 8.5));
+          const mx = ox - this.pos.x, mz = oz - this.pos.z;
+          const md = Math.hypot(mx, mz);
+          if (md > 0.8) this.move(mx / md, mz / md, 4.0 * fast, bdt);
         } else {
-          const rad = d > 11 ? 1 : d < 6.5 ? -0.8 : 0;
-          this.move((dx / d) * rad * 3.2 + (-dz / d) * 2.0, (dz / d) * rad * 3.2 + (dx / d) * 2.0, 1, bdt);
+          this.strafe = this.strafe || 1;
+          rangedStrafeVec(this, player, d, dx, dz, 5.5, 10.5, 4.0 * fast, 2.5 * fast, bdt);
         }
-        if (this.timer <= 0 && !player.dead) this.choose(player, d);
         return 'Walking_D_Skeletons';
       case 'dashAim':
         this.timer -= fdt;
@@ -941,7 +1045,7 @@ class ReaperTwin extends Walker {
         return null;
       case 'dash': {
         const step = 25 * fdt;
-        this.move(Math.sin(this.facing), Math.cos(this.facing), 25 * fast, bdt);
+        this.move(Math.sin(this.facing), Math.cos(this.facing), 25 * fast, bdt, { ignoreObstacles: true, ignoreHazards: true });
         this.left -= step;
         if (Math.random() < 0.5) flame(this.pos.clone().setY(1.0), { count: 1, size: 0.5, spread: 0.3 });
         if (!this.hitDone && !player.dead && d < 1.8) { this.hitDone = true; hurtPlayer(player, 19); }
@@ -949,29 +1053,38 @@ class ReaperTwin extends Walker {
         if (this.left <= 0 || before.distanceTo(this.pos) > 0.02) {
           this.teleKind = null;
           spawnFirePatch(this.pos.clone(), 1.8, 3.5, 12, true);
-          this.state = 'recover'; this.timer = 0.85;
+          if (this.absorbed && !this.comboed && !player.dead && Math.hypot(player.pos.x - this.pos.x, player.pos.z - this.pos.z) < 6) {
+            this.comboed = true;
+            this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
+            this.state = 'cleave'; this.timer = 0.52 / fast;
+            this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 4.4, arc: 2.5, facing: this.facing, duration: this.timer, color: 0xff6a2a });
+            if (this.anim) this.anim.play('2H_Melee_Attack_Spin', { once: true, fade: 0.06, speed: 1.0 });
+          } else { this.comboed = false; this.state = 'recover'; this.timer = 0.65; }
         }
         return { name: 'Running_C', opts: { speed: 1.8 } };
       }
       case 'cleave':
         this.timer -= fdt;
         if (this.timer <= 0) {
+          this.comboed = false;
           if (!player.dead && inSector(this.pos, this.facing, player.pos, 4.4 + player.radius, 2.5)) hurtPlayer(player, 21);
           play('swing', { at: this.pos, rate: 0.65 }); addShake(0.4);
-          this.state = 'recover'; this.timer = 0.8;
+          this.state = 'recover'; this.timer = 0.65;
         }
         return null;
       case 'lightning':
         this.timer -= fdt;
         if (this.timer <= 0) {
           this.teleKind = null;
+          this.comboed = false;
           const cnt = this.absorbed ? 6 : 4;
+          const lp = leadPos(this.pos, player, 10, 0.55);
           for (let i = 0; i < cnt; i++) {
-            const at = player.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 7, 0, (Math.random() - 0.5) * 7));
-            scheduleBomb(at, 0.85 + i * 0.16, 2.0, 0, 16, 0xffe14a);
+            const at = new THREE.Vector3(lp.x + (Math.random() - 0.5) * 6, 0, lp.z + (Math.random() - 0.5) * 6);
+            scheduleBomb(at, 0.8 + i * 0.14, 2.0, 0, 16, 0xffe14a);
           }
           play('zap', { at: this.pos });
-          this.state = 'recover'; this.timer = 0.85;
+          this.state = 'recover'; this.timer = 0.7;
         }
         return null;
       case 'fan':
@@ -985,41 +1098,53 @@ class ReaperTwin extends Walker {
             enemyShot(this.pos.clone().setY(1.6).addScaledVector(dir, 1), dir, 11, 'orb');
           }
           play('mageCast', { at: this.pos, rate: 1.2 });
-          this.state = 'recover'; this.timer = 0.85;
+          if (this.absorbed && !this.comboed && !player.dead) {
+            this.comboed = true;
+            this.state = 'lightning'; this.timer = 0.65 / fast; this.teleKind = 'interrupt';
+            this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.2, duration: this.timer, kind: 'interrupt' });
+            if (this.anim) this.anim.play('Spellcast_Raise', { once: true, fade: 0.08 });
+            play('zap', { at: this.pos, rate: 1.3, vol: 0.5 });
+          } else { this.comboed = false; this.state = 'recover'; this.timer = 0.7; }
         }
         return null;
       case 'recover':
         this.teleKind = null;
+        this.comboed = false;
         this.timer -= fdt;
-        if (this.timer <= 0) { this.state = 'chase'; this.timer = this.enraged ? 0.65 : 1.15; }
+        if (this.timer <= 0) { this.state = 'chase'; this.timer = this.enraged ? 0.55 : 0.9; }
         return 'Idle_Combat';
     }
     return null;
   }
 
   choose(player, d) {
-    const opts = this.role === 'flame'
-      ? (this.absorbed ? ['dash', 'cleave', 'lightning', 'fan'] : ['dash', 'cleave'])
-      : (this.absorbed ? ['lightning', 'fan', 'dash', 'cleave'] : ['lightning', 'fan']);
-    let pick = opts[this.next++ % opts.length];
-    if (pick === 'cleave' && d > 5.5) pick = 'dash';
-    this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
+    const pool = this.role === 'flame'
+      ? (this.absorbed
+        ? [{ id: 'dash', weight: d > 5.5 ? 3.0 : 1.3 }, { id: 'cleave', weight: d < 5.2 ? 3.2 : 0.4 }, { id: 'lightning', weight: 2.0 }, { id: 'fan', weight: 1.8 }]
+        : [{ id: 'dash', weight: d > 5.5 ? 3.2 : 1.2 }, { id: 'cleave', weight: d < 5.2 ? 3.2 : 0.3 }])
+      : (this.absorbed
+        ? [{ id: 'lightning', weight: 2.2 }, { id: 'fan', weight: 2.4 }, { id: 'dash', weight: d > 6 ? 2.6 : 1.0 }, { id: 'cleave', weight: d < 5.0 ? 2.8 : 0.3 }]
+        : [{ id: 'lightning', weight: 2.0 }, { id: 'fan', weight: 2.4 }]);
+    const pick = pickBossMove(this, pool);
     const sp = this.enraged ? 1.25 : 1;
+    this.facing = pick === 'dash' ? leadAngle(this.pos, player, 25 * sp, 0.55)
+      : pick === 'fan' ? leadAngle(this.pos, player, 10.5, 0.6)
+        : Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
     if (pick === 'dash') {
-      this.state = 'dashAim'; this.timer = 0.7; this.teleKind = 'pierce';
-      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.1, length: 14, facing: this.facing, duration: 0.7 / sp, kind: 'pierce' });
+      this.state = 'dashAim'; this.timer = 0.62; this.teleKind = 'pierce';
+      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.1, length: 14, facing: this.facing, duration: 0.62 / sp, kind: 'pierce' });
     } else if (pick === 'cleave') {
-      this.state = 'cleave'; this.timer = 0.68;
-      this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 4.4, arc: 2.5, facing: this.facing, duration: 0.68 / sp, color: 0xff6a2a });
-      if (this.anim) this.anim.play('2H_Melee_Attack_Spin', { once: true, fade: 0.08, speed: 0.8 });
+      this.state = 'cleave'; this.timer = 0.6;
+      this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 4.4, arc: 2.5, facing: this.facing, duration: 0.6 / sp, color: 0xff6a2a });
+      if (this.anim) this.anim.play('2H_Melee_Attack_Spin', { once: true, fade: 0.08, speed: 0.9 });
     } else if (pick === 'lightning') {
-      this.state = 'lightning'; this.timer = 0.9; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.2, duration: 0.9 / sp, kind: 'interrupt' });
+      this.state = 'lightning'; this.timer = 0.8; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.2, duration: 0.8 / sp, kind: 'interrupt' });
       if (this.anim) this.anim.play('Spellcast_Raise', { once: true, fade: 0.1 });
       play('zap', { at: this.pos, rate: 1.3, vol: 0.5 });
     } else {
-      this.state = 'fan'; this.timer = 0.65; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 9, arc: 1.2, facing: this.facing, duration: 0.65 / sp, kind: 'interrupt' });
+      this.state = 'fan'; this.timer = 0.58; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'sector', pos: this.pos, radius: 9, arc: 1.2, facing: this.facing, duration: 0.58 / sp, kind: 'interrupt' });
       if (this.anim) this.anim.play('Spellcast_Shoot', { once: true, fade: 0.1 });
     }
   }
@@ -1060,7 +1185,7 @@ export class FallenSmith extends Walker {
     this.poiseMax = 200 * level;
     this.color = 0xff8a24; this.mass = 8; this.contactDmg = 14; this.dropChance = 0; this.xp = 100;
     this.hurtSound = 'hitHeavy'; this.dieSound = 'explode';
-    this.state = 'intro'; this.timer = 1.8; this.next = 0; this.chargesLeft = 0;
+    this.state = 'intro'; this.timer = 1.8; this.next = 0; this.chargesLeft = 0; this.arenaRadius = 0;
     this.shadowScale = 2.5;
 
     const hammer = models.prop_hammer_gold ? ['prop_hammer_gold', 'handslotr', 0.95] : ['weapon_greatsword', 'handslotr', 1.25];
@@ -1112,19 +1237,20 @@ export class FallenSmith extends Walker {
 
   think(bdt, player, d, dx, dz) {
     const ph = this.phaseLevel;
+    this.arenaRadius = ph === 3 ? 15.5 : ph === 2 ? 19.0 : 0;
     const fast = ph === 3 ? 1.42 : ph === 2 ? 1.22 : 1.0;
     const fdt = bdt * fast;
     switch (this.state) {
       case 'intro':
         this.timer -= fdt;
         if (Math.random() < 0.45) flame(this.pos.clone().setY(2.2), { count: 1, size: 1.0, spread: 0.9 });
-        if (this.timer <= 0) { this.state = 'chase'; this.timer = 1.0; }
+        if (this.timer <= 0) { this.state = 'chase'; this.timer = 0.8; }
         return 'Idle_Combat';
       case 'chase':
         this.facing = Math.atan2(dx, dz);
         this.timer -= fdt;
-        if (d > 3.2) { this.move(dx / d, dz / d, 3.3 * fast, bdt); return { name: 'Running_C', opts: { speed: 1.05 * fast } }; }
-        if (this.timer <= 0 && !player.dead) this.choose(player, d);
+        if (this.timer <= 0 && !player.dead) { this.choose(player, d); return null; }
+        if (d > 3.2) { this.move(dx / d, dz / d, 4.2 * fast, bdt); return { name: 'Running_C', opts: { speed: 1.2 * fast } }; }
         return 'Idle_Combat';
       case 'slamWind':
         this.timer -= fdt;
@@ -1138,7 +1264,7 @@ export class FallenSmith extends Walker {
           addShake(1.0); play('anvil', { rate: 0.55 }); play('explode', { at: this.pos, rate: 0.7 });
           if (!player.dead && d < R + player.radius) hurtPlayer(player, ph === 3 ? 30 : 25);
           spawnFirePatch(this.pos.clone(), R * 0.55, 4.5, 16, true);
-          this.state = 'recover'; this.timer = 0.95;
+          this.state = 'recover'; this.timer = 0.65;
         }
         return null;
       case 'chargeAim':
@@ -1151,7 +1277,7 @@ export class FallenSmith extends Walker {
       case 'charge': {
         const step = 24 * fdt;
         const fx = Math.sin(this.facing), fz = Math.cos(this.facing);
-        this.move(fx, fz, 24 * fast, bdt);
+        this.move(fx, fz, 24 * fast, bdt, { ignoreObstacles: true, ignoreHazards: true });
         this.left -= step;
         if (Math.random() < 0.45) spawnFirePatch(this.pos.clone(), 1.6, 3.6, 14, true);
         damagePillars(this.pos, 2.5, new THREE.Vector3(fx, 0, fz), true);
@@ -1164,12 +1290,19 @@ export class FallenSmith extends Walker {
           addShake(0.65); play('hitHeavy', { at: this.pos, rate: 0.6 });
           if (this.chargesLeft > 0 && !player.dead) {
             this.chargesLeft--;
-            this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
-            this.state = 'chargeAim'; this.timer = 0.55; this.teleKind = 'pierce';
-            this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.8, length: 18, facing: this.facing, duration: 0.55 / fast, kind: 'pierce' });
+            this.facing = leadAngle(this.pos, player, 24 * fast);
+            this.state = 'chargeAim'; this.timer = 0.52; this.teleKind = 'pierce';
+            this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.8, length: 18, facing: this.facing, duration: 0.52 / fast, kind: 'pierce' });
+          } else if (ph >= 2 && !this.comboed && !player.dead) {
+            this.comboed = true;
+            const R = this.isPartBroken('hammer') ? 4.8 : (ph === 3 ? 7.0 : 6.0);
+            this.state = 'slamWind'; this.timer = 0.68; this.teleKind = 'interrupt';
+            this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: R, duration: 0.68 / fast, kind: 'interrupt' });
+            if (this.anim) this.anim.play('2H_Melee_Attack_Chop', { once: true, fade: 0.1, speed: 1.0 });
+            play('anvil', { rate: 0.8 });
           } else {
             this.teleKind = null;
-            this.state = 'recover'; this.timer = 0.9;
+            this.state = 'recover'; this.timer = 0.65;
           }
         }
         return { name: 'Running_C', opts: { speed: 1.75 } };
@@ -1186,7 +1319,7 @@ export class FallenSmith extends Walker {
           }
           spawnRing(this.scene, this.pos, 4.5, 0xffaa30, 0.45);
           play('mageCast', { at: this.pos, rate: 0.7 });
-          this.state = 'recover'; this.timer = 0.85;
+          this.state = 'recover'; this.timer = 0.6;
         }
         return null;
       case 'crossWind':
@@ -1205,7 +1338,15 @@ export class FallenSmith extends Walker {
             }
           }
           addShake(0.85); play('explode', { at: this.pos, rate: 0.65 });
-          this.state = 'recover'; this.timer = 1.0;
+          if (ph >= 3 && !this.comboed && !player.dead) {
+            this.comboed = true;
+            this.facing = leadAngle(this.pos, player, 10.5);
+            this.state = 'radialWind'; this.timer = 0.55; this.teleKind = 'interrupt';
+            this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.2, duration: 0.55 / fast, kind: 'interrupt' });
+            if (this.anim) this.anim.play('Spellcast_Raise', { once: true, fade: 0.1 });
+          } else {
+            this.state = 'recover'; this.timer = 0.7;
+          }
         }
         return null;
       case 'meteorRain':
@@ -1214,15 +1355,19 @@ export class FallenSmith extends Walker {
         if (this.timer <= 0) {
           this.teleKind = null;
           const count = this.isPartBroken('hammer') ? 5 : 8;
+          const lp = leadPos(this.pos, player, 10, 0.6);
+          const center = new THREE.Vector3(lp.x, 0, lp.z);
           for (let i = 0; i < count; i++) {
+            const a = (i / Math.max(1, count - 1)) * Math.PI * 2;
             const at = i === 0
-              ? player.pos.clone()
-              : player.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 14, 0, (Math.random() - 0.5) * 14));
-            scheduleBomb(at, 0.8 + i * 0.16, 2.5, 0, 22, 0xff4a10);
+              ? center.clone()
+              : center.clone().add(new THREE.Vector3(Math.sin(a) * (3.4 + (i % 2) * 2.2), 0, Math.cos(a) * (3.4 + (i % 2) * 2.2)));
+            if (isBlocked(at.x, at.z, 0.5)) continue;
+            scheduleBomb(at, 0.65 + i * 0.11, 2.5, 0, 22, 0xff4a10);
             spawnFirePatch(at, 1.9, 4.5, 16, true);
           }
           addShake(0.95); play('anvil', { rate: 0.45 }); play('explode', { at: this.pos, rate: 0.6 });
-          this.state = 'recover'; this.timer = 1.1;
+          this.state = 'recover'; this.timer = 0.75;
         }
         return null;
       case 'summon':
@@ -1238,13 +1383,13 @@ export class FallenSmith extends Walker {
             m.spawnT = 0.2; ctx.spawnEnemy?.(m);
           }
           play('mageCast', { at: this.pos, rate: 0.6 });
-          this.state = 'recover'; this.timer = 0.75;
+          this.state = 'recover'; this.timer = 0.65;
         }
         return null;
       case 'recover':
         this.teleKind = null;
         this.timer -= fdt;
-        if (this.timer <= 0) { this.state = 'chase'; this.timer = ph === 3 ? 0.5 : ph === 2 ? 0.75 : 1.05; }
+        if (this.timer <= 0) { this.state = 'chase'; this.timer = ph === 3 ? 0.35 : ph === 2 ? 0.55 : 0.75; }
         return 'Idle_Combat';
     }
     return null;
@@ -1253,44 +1398,63 @@ export class FallenSmith extends Walker {
   choose(player, d) {
     const ph = this.phaseLevel;
     const fast = ph === 3 ? 1.42 : ph === 2 ? 1.22 : 1.0;
+    this.comboed = false;
     const allies = ctx.enemies.filter((e) => (e instanceof OrcBrute || e instanceof PyroMage) && !e.dead).length;
-    const opts = ph === 1
-      ? ['slam', 'charge', 'radial']
+    const candidates = ph === 1
+      ? [
+          { id: 'slam', weight: d < 8.5 ? 2.2 : 0.4 },
+          { id: 'charge', weight: d > 4.5 ? 2.0 : 0.8 },
+          { id: 'radial', weight: d < 12 ? 1.4 : 0.9 },
+        ]
       : ph === 2
-        ? ['cross', 'charge', 'slam', 'radial', ...(allies < 2 ? ['summon'] : [])]
-        : ['meteor', 'charge', 'cross', 'slam', 'radial'];
-    let pick = opts[this.next++ % opts.length];
+        ? [
+            { id: 'cross', weight: d > 4 ? 1.8 : 1.1 },
+            { id: 'charge', weight: d > 5 ? 1.9 : 0.9 },
+            { id: 'slam', weight: d < 8 ? 2.1 : 0.4 },
+            { id: 'radial', weight: 1.2 },
+            ...(allies < 2 ? [{ id: 'summon', weight: 1.1 }] : []),
+          ]
+        : [
+            { id: 'meteor', weight: 2.0 },
+            { id: 'charge', weight: d > 5 ? 1.9 : 1.0 },
+            { id: 'cross', weight: 1.7 },
+            { id: 'slam', weight: d < 8 ? 2.2 : 0.4 },
+            { id: 'radial', weight: 1.3 },
+          ];
+    let pick = pickBossMove(this, candidates);
     if (pick === 'slam' && d > 9.5) pick = 'charge';
-    this.facing = Math.atan2(player.pos.x - this.pos.x, player.pos.z - this.pos.z);
+    this.facing = pick === 'charge'
+      ? leadAngle(this.pos, player, 24 * fast)
+      : leadAngle(this.pos, player, 10.5);
 
     if (pick === 'slam') {
-      this.state = 'slamWind'; this.timer = 1.05; this.teleKind = 'interrupt';
+      this.state = 'slamWind'; this.timer = 0.95; this.teleKind = 'interrupt';
       const R = this.isPartBroken('hammer') ? 4.8 : (ph === 3 ? 7.0 : 6.0);
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: R, duration: 1.05 / fast, kind: 'interrupt' });
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: R, duration: 0.95 / fast, kind: 'interrupt' });
       if (this.anim) this.anim.play('2H_Melee_Attack_Chop', { once: true, fade: 0.1, speed: 0.7 });
       play('anvil', { rate: 0.7 });
     } else if (pick === 'charge') {
-      this.state = 'chargeAim'; this.timer = 0.76; this.teleKind = 'pierce';
+      this.state = 'chargeAim'; this.timer = 0.68; this.teleKind = 'pierce';
       this.chargesLeft = ph === 3 ? 1 : 0;
-      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.8, length: 18, facing: this.facing, duration: 0.76 / fast, kind: 'pierce' });
+      this.tele = spawnTelegraph(this.scene, { shape: 'rect', pos: this.pos, width: 2.8, length: 18, facing: this.facing, duration: 0.68 / fast, kind: 'pierce' });
       if (this.anim) this.anim.play('2H_Melee_Attack_Spin', { once: true, fade: 0.1, speed: 1.2 });
     } else if (pick === 'radial') {
-      this.state = 'radialWind'; this.timer = 0.85; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.2, duration: 0.85 / fast, kind: 'interrupt' });
+      this.state = 'radialWind'; this.timer = 0.78; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.2, duration: 0.78 / fast, kind: 'interrupt' });
       if (this.anim) this.anim.play('Spellcast_Raise', { once: true, fade: 0.1 });
     } else if (pick === 'cross') {
-      this.state = 'crossWind'; this.timer = 1.0; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 5.0, duration: 1.0 / fast, kind: 'interrupt' });
+      this.state = 'crossWind'; this.timer = 0.9; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 5.0, duration: 0.9 / fast, kind: 'interrupt' });
       if (this.anim) this.anim.play('2H_Melee_Attack_Chop', { once: true, fade: 0.1, speed: 0.75 });
       play('ignite', { at: this.pos, rate: 0.65 });
     } else if (pick === 'meteor') {
-      this.state = 'meteorRain'; this.timer = 1.15; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.5, duration: 1.15 / fast, kind: 'interrupt' });
+      this.state = 'meteorRain'; this.timer = 1.0; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 4.5, duration: 1.0 / fast, kind: 'interrupt' });
       if (this.anim) this.anim.play('Spellcast_Summon', { once: true, fade: 0.1 });
       play('anvil', { rate: 0.5 });
     } else {
-      this.state = 'summon'; this.timer = 1.0; this.teleKind = 'interrupt';
-      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.5, duration: 1.0 / fast, kind: 'interrupt' });
+      this.state = 'summon'; this.timer = 0.9; this.teleKind = 'interrupt';
+      this.tele = spawnTelegraph(this.scene, { shape: 'circle', pos: this.pos, radius: 3.5, duration: 0.9 / fast, kind: 'interrupt' });
       if (this.anim) this.anim.play('Spellcast_Summon', { once: true, fade: 0.1 });
     }
   }

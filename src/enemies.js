@@ -1,9 +1,10 @@
 import * as THREE from 'three';
-import { collide } from './world.js';
+import { collide, isBlocked } from './world.js';
 import { burst, damageNumber, spawnRing, addShake, statusFx, hitSpark, explosion, smoke, flame, emit, F } from './fx.js';
 import { models, fitModel, Animator } from './models.js';
 import { ctx, enemyShot } from './combat.js';
 import { play } from './audio.js';
+import { rangedStrafeVec, hasLineOfSight, leadPos } from './ai.js';
 
 const WHITE = new THREE.Color(0xffffff);
 const ICE = new THREE.Color(0x7fdcff);
@@ -44,6 +45,8 @@ export class Enemy {
     this.poiseMax = 0;
     this.poise = 0;
     this.stunT = 0;
+    this.interruptImmunity = 0;
+    this.miniBossTick = null;
     this.mats = [];
     this.group = new THREE.Group();
     scene.add(this.group);
@@ -148,17 +151,32 @@ export class Enemy {
 
   // Hủy chiêu hiện tại (khi bị Cắt Chiêu hoặc Phản Xuyên — cơ chế #5)
   interruptAttack(doStun = true) {
+    if ((this.isBoss || this.miniBoss) && doStun && this.interruptImmunity > 0) {
+      if (this.poiseMax) this.poise += this.poiseMax * 0.25;
+      play('hammer', { at: this.pos, rate: 1.6 });
+      damageNumber(this.pos, 'Kháng Cắt!', 'burn');
+      return false;
+    }
     if (this.tele) { this.tele.done = true; this.tele = null; }
     this.teleKind = null;
     if (this.casting > 0) this.casting = 0;
+    if (this.shootT != null) this.shootT = Math.max(this.shootT, 1.2);
+    if (!this.slimy || this.height > 0) this.height = 0;
     if (this.state && this.state !== 'intro') {
-      if (this.isBoss) { this.state = this.state === 'wait' || this.state === 'jump' ? 'wait' : this.state === 'idle' ? 'idle' : 'recover'; this.timer = 1.2; }
-      else { this.state = 'recover'; this.timer = 1.0; }
+      if (this.isBoss) {
+        this.state = this.state === 'wait' || this.state === 'jump' ? 'wait'
+          : this.state === 'hover' ? 'hover'
+            : this.state === 'idle' ? 'idle' : 'recover';
+        this.timer = 1.1;
+      } else { this.state = 'recover'; this.timer = 1.0; }
     }
     if (doStun) {
-      this.stunT = Math.max(this.stunT, this.isBoss ? 2.6 : 2.2);
+      this.stunT = Math.max(this.stunT, this.isBoss ? 1.8 : 2.2);
       this.stunId = (this.stunId || 0) + 1;
     }
+    if (this.isBoss) this.interruptImmunity = 7.0;
+    else if (this.miniBoss) this.interruptImmunity = 5.0;
+    return true;
   }
 
   // Phá bộ phận Boss (cơ chế #5)
@@ -264,6 +282,8 @@ export class Enemy {
       this.stunT -= dt;
       if (Math.random() < dt * 10) burst(this.pos.clone().setY(1.6 * (this.isBoss ? 2 : 1)), 0xffe060, 1, { speed: 1.5, up: 0.5, gravity: 0, life: 0.3, size: 0.12 });
     }
+    if (this.interruptImmunity > 0) this.interruptImmunity = Math.max(0, this.interruptImmunity - dt);
+    if (this.miniBossTick) this.miniBossTick(dt);
     if (this.eliteTick) this.eliteTick(dt);
     if (this.totemBuff > 0) { this.totemBuff -= dt; if (Math.random() < dt * 5) emit(this.pos.clone().setY(1.6), { frame: F.glow, color: 0xff6a4a, size: 0.3, size2: 0, life: 0.4, vel: new THREE.Vector3(0, 1, 0) }); }
     if (this.regenPct && this.hp < this.maxHpEff) this.hp = Math.min(this.maxHpEff, this.hp + this.maxHpEff * this.regenPct * dt);
@@ -473,9 +493,15 @@ export class Slime extends Enemy {
         this.hopT = 0;
         this.hopFrom.copy(this.pos);
         const dir = new THREE.Vector3(player.pos.x - this.pos.x, 0, player.pos.z - this.pos.z);
-        const d = dir.length();
+        const d = dir.length() || 0.001;
         dir.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), (Math.random() - 0.5) * 0.6);
-        this.hopTo.copy(this.pos).addScaledVector(dir, Math.min(d + 0.3, this.cfg.hop));
+        const stepLen = Math.min(d + 0.3, this.cfg.hop);
+        let chosenDir = dir;
+        for (const aOff of [0, 0.55, -0.55, 1.1, -1.1]) {
+          const cand = aOff === 0 ? dir : dir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), aOff);
+          if (!isBlocked(this.pos.x + cand.x * stepLen, this.pos.z + cand.z * stepLen, this.radius * 0.8)) { chosenDir = cand; break; }
+        }
+        this.hopTo.copy(this.pos).addScaledVector(chosenDir, stepLen);
         this.hopDur = 0.45 + s * 0.12;
       }
     } else if (this.state === 'hop') {
@@ -595,26 +621,29 @@ export class Mage extends Enemy {
       if (this.spawnT >= dur) this.spawning = false;
       if (this.spawnT > 0 && Math.random() < dt * 20) burst(this.pos.clone().setY(0.1), 0x6a5a4a, 1, { speed: 2, up: 3, size: 0.15 });
     } else {
-      // Giữ khoảng cách ~6m, đi vòng quanh người chơi; đứng yên khi đang niệm phép
-      const to = new THREE.Vector3(player.pos.x - this.pos.x, 0, player.pos.z - this.pos.z);
-      const d = to.length();
-      to.normalize();
+      // Giữ khoảng cách ~6m, nghiêng góc né cột & thoát kẹt góc tường
+      const dx = player.pos.x - this.pos.x, dz = player.pos.z - this.pos.z;
+      const d = Math.hypot(dx, dz) || 0.001;
+      const to = new THREE.Vector3(dx / d, 0, dz / d);
       if (!this.casting) {
-        const radial = d > 6.8 ? 1 : d < 5.2 ? -1 : 0;
-        const perp = new THREE.Vector3(-to.z, 0, to.x).multiplyScalar(this.strafe);
-        this.pos.addScaledVector(to, radial * 2.4 * bdt).addScaledVector(perp, 1.4 * bdt);
+        rangedStrafeVec(this, player, d, dx, dz, 5.2, 7.2, 2.8, 1.7, bdt);
         moving = bdt > 0;
       }
       this.strafeT -= bdt;
       if (this.strafeT <= 0) { this.strafe *= -1; this.strafeT = 1.5 + Math.random() * 2; }
 
-      // Niệm phép 0.6s rồi bắn (nếu bị Mù bởi Màn Sương thì bắn lệch hoặc tạm dừng)
+      // Niệm phép 0.6s rồi bắn (chỉ bắt đầu niệm khi có đường ngắm thẳng)
       this.shootT -= bdt;
+      const los = hasLineOfSight(this.pos.x, this.pos.z, player.pos.x, player.pos.z);
       if (this.shootT < 0.6 && !this.casting) {
-        this.casting = true;
-        this.teleKind = 'interrupt';
-        play('mageCast', { at: this.pos });
-        if (this.anim) { this.anim.play('Spellcast_Shoot', { once: true, fade: 0.1, speed: 1.2 }); this.animBusy = 0.9; }
+        if (los) {
+          this.casting = true;
+          this.teleKind = 'interrupt';
+          play('mageCast', { at: this.pos });
+          if (this.anim) { this.anim.play('Spellcast_Shoot', { once: true, fade: 0.1, speed: 1.2 }); this.animBusy = 0.9; }
+        } else {
+          this.shootT = 0.65;
+        }
       }
       if (this.casting) {
         const k = Math.min(1, (0.6 - this.shootT) / 0.6);
@@ -623,17 +652,15 @@ export class Mage extends Enemy {
       }
       if (this.shootT <= 0 && !player.dead) {
         const origin = this.pos.clone().setY(1.1).addScaledVector(to, 0.7);
-        // Bắn đón đầu: nhắm vào chỗ người chơi sắp tới (bị Mù trong Sương sẽ bắn lệch mạnh)
-        const tLead = Math.min(1.6, d / 7) * ((ctx.floor || 1) >= 2 ? 0.85 : 0.5);
-        const aimAt = player.pos.clone().addScaledVector(player.vel || new THREE.Vector3(), tLead);
-        const lead = new THREE.Vector3(aimAt.x - this.pos.x, 0, aimAt.z - this.pos.z).normalize();
+        const lp = leadPos(this.pos, player, 10.5, (ctx.floor || 1) >= 2 ? 0.78 : 0.6);
+        const lead = new THREE.Vector3(lp.x - this.pos.x, 0, lp.z - this.pos.z).normalize();
         if (this.blindT > 0) {
           const miss = (Math.random() - 0.5) * 1.4;
           const a = Math.atan2(lead.x, lead.z) + miss;
           lead.set(Math.sin(a), 0, Math.cos(a));
         }
-        enemyShot(origin, lead, 8);
-        this.shootT = 2.3 + Math.random() * 0.9;
+        enemyShot(origin, lead, 8, 'orb');
+        this.shootT = 2.0 + Math.random() * 0.8;
         this.casting = false;
         this.teleKind = null;
         this.core.scale.setScalar(this.walker ? 0.001 : 1);
