@@ -17,11 +17,22 @@ export function setFxSettings(patch = {}) {
 let fxBiome = 'stone';
 export function setFxBiome(id) { fxBiome = id || 'stone'; }
 
-// ---------- Rung màn hình ----------
-export const shake = { trauma: 0 };
+// ---------- Rung màn hình, Giật hướng & Nhịp Zoom ----------
+export const shake = { trauma: 0, kickX: 0, kickZ: 0 };
 export function addShake(amount) {
   if (fxSettings.shakeScale <= 0) { shake.trauma = 0; return; }
   shake.trauma = Math.min(1, shake.trauma + amount * fxSettings.shakeScale);
+}
+export function addKick(dir, strength = 0.22) {
+  if (!dir || fxSettings.shakeScale <= 0) return;
+  const s = strength * fxSettings.shakeScale;
+  shake.kickX = Math.max(-0.65, Math.min(0.65, shake.kickX + (dir.x || 0) * s));
+  shake.kickZ = Math.max(-0.65, Math.min(0.65, shake.kickZ + (dir.z || 0) * s));
+}
+export const camPulse = { zoom: 0 };
+export function addCamZoom(delta) {
+  if (fxSettings.shakeScale <= 0) return;
+  camPulse.zoom = Math.max(-0.12, Math.min(0.08, camPulse.zoom + delta));
 }
 
 // ---------- Hit stop (đóng băng game trong tích tắc khi đánh trúng) ----------
@@ -851,6 +862,17 @@ export function statusFx(e, dt) {
   if (e.shockT > 0 && Math.random() < dt * 9 * d) {
     emit(_sPos.set(e.pos.x + rv(0.3), 0.5 + Math.random() * 0.8 * h, e.pos.z + rv(0.3)), { frame: F.elec, color: 0xfff07a, color2: 0x7ab8ff, size: 1.1 * h, size2: 0.9 * h, life: 0.12, hdr: 2.2 });
   }
+  if (e.daggerMarks > 0 && Math.random() < dt * (3 + e.daggerMarks * 2.5) * d) {
+    const ang = performance.now() * 0.005 + e.daggerMarks * 1.4;
+    const rad = 0.55 * h;
+    emit(_sPos.set(e.pos.x + Math.cos(ang) * rad, 0.9 * h, e.pos.z + Math.sin(ang) * rad), { frame: F.sparkle, color: 0xff5a8a, color2: 0xffb8d0, size: 0.42, size2: 0.08, life: 0.28, hdr: 2.0 });
+  }
+  if (e.arcaneMark > 0 && Math.random() < dt * (3 + e.arcaneMark * 2.5) * d) {
+    emit(_sPos.set(e.pos.x + rv(0.45 * h), 0.75 + Math.random() * 0.65 * h, e.pos.z + rv(0.45 * h)), { frame: F.rune, color: 0x8fe8ff, color2: 0xc080ff, size: 0.48, size2: 0.1, life: 0.35, rotV: 3, hdr: 1.9 });
+  }
+  if (e.shredT > 0 && Math.random() < dt * 5 * d) {
+    emit(_sPos.set(e.pos.x + rv(0.35 * h), 0.55 + Math.random() * 0.7 * h, e.pos.z + rv(0.35 * h)), { frame: F.cross, color: 0xffa840, color2: 0xff5a20, size: 0.4, size2: 0.06, life: 0.25, vel: _v1.set(rv(1.2), 1.0, rv(1.2)), hdr: 1.9 });
+  }
 }
 
 // ---------- Vùng cảnh báo đòn đánh của quái (Dùng chung Geometry chuẩn hóa) ----------
@@ -987,7 +1009,7 @@ const lastReactAt = new Map();
 const tmpP = new THREE.Vector3();
 
 export const dmgScale = { player: 1 };
-export function damageNumber(pos, value, kind = '') {
+export function damageNumber(pos, value, kind = '', dir = null) {
   if (!dmgLayer || !pos) return;
   if (!fxSettings.showDmg && !kind.startsWith('react') && kind !== 'player') return;
   if (kind === 'player' && typeof value === 'number') value = Math.max(1, Math.round(value * dmgScale.player));
@@ -1008,16 +1030,26 @@ export function damageNumber(pos, value, kind = '') {
     el = document.createElement('div');
     dmgLayer.appendChild(el);
   }
+  const isBig = kind === 'big';
+  const isHeal = kind === 'heal';
   el.className = 'dmg ' + kind;
-  el.textContent = value;
+  el.textContent = isBig && typeof value === 'number' ? value + '!' : value;
   el.style.display = '';
+  const fanA = Math.random() * Math.PI * 2;
+  const fanSpd = isHeal ? 0.25 : 0.7 + Math.random() * 0.9;
+  const vx = (dir ? dir.x * 1.1 : 0) + Math.cos(fanA) * fanSpd;
+  const vz = (dir ? dir.z * 1.1 : 0) + Math.sin(fanA) * fanSpd;
   dmgNums.push({
     el,
-    x: pos.x + (Math.random() - 0.5) * 0.6,
-    y: (pos.y || 0) + 1.2,
+    x: pos.x + (Math.random() - 0.5) * 0.45,
+    y: (pos.y || 0) + 1.25,
     z: pos.z,
-    vy: 2.5,
-    life: 0.8,
+    vx,
+    vz,
+    vy: isHeal ? 1.6 : isBig ? 3.1 : 2.4,
+    noGrav: isHeal,
+    big: isBig,
+    life: isHeal ? 0.9 : 0.8,
   });
 }
 
@@ -1025,13 +1057,15 @@ function updateDamageNumbers(dt, camera) {
   for (let i = dmgNums.length - 1; i >= 0; i--) {
     const d = dmgNums[i];
     d.life -= dt;
-    d.vy -= 5 * dt;
+    if (!d.noGrav) d.vy -= 5 * dt;
+    d.x += (d.vx || 0) * dt;
+    d.z += (d.vz || 0) * dt;
     d.y += d.vy * dt;
     if (camera) {
       tmpP.set(d.x, d.y, d.z).project(camera);
       const x = (tmpP.x * 0.5 + 0.5) * innerWidth;
       const y = (-tmpP.y * 0.5 + 0.5) * innerHeight;
-      const pop = d.life > 0.65 ? 1 + (d.life - 0.65) * 4 : 1;
+      const pop = d.life > 0.65 ? 1 + (d.life - 0.65) * (d.big ? 3.2 : 2.6) : 1;
       d.el.style.opacity = Math.min(1, d.life * 3);
       d.el.style.transform = `translate3d(${x.toFixed(1)}px,${y.toFixed(1)}px,0) translate(-50%,-50%) scale(${pop.toFixed(2)})`;
     }
@@ -1066,6 +1100,8 @@ export function clearFx() {
   decals.length = 0;
   for (const L of lights) L.t = 0;
   hitStop.time = 0; hitStop.cd = 0;
+  shake.trauma = 0; shake.kickX = 0; shake.kickZ = 0;
+  camPulse.zoom = 0;
   frameFx.explosions = 0; frameFx.bursts = 0; frameFx.bolts = 0; frameFx.rings = 0; frameFx.emits = 0; frameFx.sparks = 0; frameFx.smokes = 0;
 }
 

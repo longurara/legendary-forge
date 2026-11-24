@@ -382,9 +382,11 @@ export function placeSecretWall(rand, onBreak) {
   return w;
 }
 
-// Người chơi đang đứng trên băng / nước / sương mù không
+// Người chơi đang đứng trên băng / nước / đầm lầy / nham thạch / sương mù không
 export function onIce(x, z) { return icePatches.some((p) => !p.melted && Math.hypot(x - p.x, z - p.z) < p.r); }
 export function onWater(x, z) { return waterPatches.some((p) => Math.hypot(x - p.x, z - p.z) < p.r); }
+export function onSwamp(x, z) { return swampBogs.some((b) => Math.hypot(x - b.x, z - b.z) < b.r); }
+export function onLava(x, z) { return lavaPools.some((L) => L.obsidianT <= 0 && Math.hypot(x - L.x, z - L.z) < L.r); }
 export function inSteam(x, z) { return steamClouds.some((s) => Math.hypot(x - s.x, z - s.z) < s.r); }
 
 // Tạo màn sương hơi nước (từ Tôi Địa Hình hoặc Lửa + Băng): làm mù quái đánh xa

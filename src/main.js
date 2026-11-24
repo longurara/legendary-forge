@@ -22,7 +22,7 @@ import { CompanionManager } from './companions.js';
 import { SandboxManager, DefenseManager, TURRET_TYPES, DEFENSE_MAX_WAVES } from './modes.js';
 import { enemyBestiaryId, renderBestiaryHtml, renderRunSummaryHtml } from './bestiary.js';
 import { Minion, Boss, Assassin, Archer, KingSlime, ArchMage } from './enemies_extra.js';
-import { initFx, updateFx, shake, hitStop, clearFx, damageNumber, fxQuality, setFxQuality, fxSettings, setFxSettings, fxStats, dmgScale, explosion, spawnRing as fxRing, flash as fxFlash, smoke, burst, addShake, liquidMaterial, emit, F, glowSprite } from './fx.js';
+import { initFx, updateFx, shake, camPulse, hitStop, clearFx, damageNumber, fxQuality, setFxQuality, fxSettings, setFxSettings, fxStats, dmgScale, explosion, spawnRing as fxRing, flash as fxFlash, smoke, burst, addShake, liquidMaterial, emit, F, glowSprite } from './fx.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -358,6 +358,7 @@ function syncMenuStage() {
   player.root.rotation.y = -0.45;
   if (player.footRing) player.footRing.visible = false;
   if (player.footArrow) player.footArrow.visible = false;
+  if (player.sweetArc) player.sweetArc.visible = false;
   player.anim?.play('Idle', { fade: 0 });
 }
 let hurtFlash = 0;
@@ -377,6 +378,17 @@ let shopItems = [];
 let event = null;                // biến cố của đợt hiện tại
 let darkLight = null;
 let slowmoReal = 0;
+const camLookAhead = new THREE.Vector3();
+let hitCombo = 0, hitComboT = 0, killStreak = 0, killStreakT = 0;
+let retHitT = 0, retCrit = false;
+let _pickupChain = 0, _pickupChainT = 0;
+let _prevDashReady = true, _prevSpReady = true, _prevSlot = 0;
+function pulseHudEl(el, cls = 'res-pop') {
+  if (!el) return;
+  el.classList.remove(cls);
+  void el.offsetWidth;
+  el.classList.add(cls);
+}
 // 8 Cơ chế nâng cao
 let runeBag = [];
 let bossCores = [];
@@ -974,12 +986,19 @@ function addSouls(v) {
   runSouls += v;
   meta.souls += v;
   saveMeta(meta);
+  if (v > 0) pulseHudEl($('souls'));
 }
-function addScrap(v) { if (v > 0 && player.hasRelic('greed')) v *= 2; scrap += v; $('scrap').textContent = scrap; }
+function addScrap(v) {
+  if (v > 0 && player.hasRelic('greed')) v *= 2;
+  scrap += v;
+  $('scrap').textContent = scrap;
+  if (v > 0) pulseHudEl($('scrap'));
+}
 function addGold(v) {
   const emberMul = v > 0 && flameTier() === 'ember' ? 2 : 1;
   v = Math.round(v * (v > 0 && player.hasRelic('goldbag') ? 1.5 : 1) * (v > 0 && player.stats.hoard ? 2 : 1) * emberMul);
   gold = Math.max(0, gold + v);
+  if (v > 0) pulseHudEl($('gold'));
 }
 
 function grantRelic() {
@@ -1573,6 +1592,10 @@ function onKill(e, opts = {}) {
   if (st.killinvis) player.iframes = Math.max(player.iframes, 0.6);
   if (player.weapon.legend === 'bloodfire') player.heal(3);
   if (player.weapon.type === 'scythe') player.scytheSouls = Math.min(5, (player.scytheSouls || 0) + 2);
+  if (!e.isDummy) {
+    killStreak = killStreakT > 0 ? killStreak + 1 : 1;
+    killStreakT = 2.2;
+  }
   // Ngọc & Cổ Ngữ Lập Trình: tinh anh, Thủ Lĩnh và Boss rơi
   const runeChance = (e.elite ? 0.32 : 0) * (hasDynCurse('cursed_greed') ? 2 : 1);
   if (Math.random() < runeChance || e.miniBoss || e.isBoss) {
@@ -1743,8 +1766,8 @@ function renderForge() {
           const open = a.id === 'default' || !!meta.aspectsUnlocked[a.id];
           const on = activeId === a.id;
           return open
-            ? `<button class="btn aspect-btn${on ? ' on' : ''}" data-type="${type}" data-aspect="${a.id}">${a.name}${on ? ' ✓' : ''}</button>`
-            : `<button class="btn aspect-btn" data-type="${type}" data-aspect="${a.id}" data-cost="${a.cost}" ${meta.souls < a.cost ? 'disabled' : ''}>${a.name} · <i class="ico ico-soul"></i>${a.cost}</button>`;
+            ? `<button class="btn aspect-btn${on ? ' on' : ''}" data-type="${type}" data-aspect="${a.id}" title="${a.desc}">${a.name}${on ? ' ✓' : ''}</button>`
+            : `<button class="btn aspect-btn" data-type="${type}" data-aspect="${a.id}" data-cost="${a.cost}" title="${a.desc}" ${meta.souls < a.cost ? 'disabled' : ''}>${a.name} · <i class="ico ico-soul"></i>${a.cost}</button>`;
         }).join('')}</div>
       </div>`;
     }).join('');
@@ -2250,18 +2273,23 @@ function update(realDt, render = true) {
     echoMgr?.update(dt, camera, time, player.pos);
     updateEliteLabels(enemies, camera);
     for (const p of loot.updatePickups(dt, player, player.stats.magnet)) {
-      if (p.kind === 'soul') { addSouls(p.value); play('drop', { vol: 0.6, rate: 1.4 }); }
+      if (p.kind === 'soul' || p.kind === 'gold' || p.kind === 'scrap') {
+        _pickupChain = _pickupChainT > 0 ? Math.min(10, _pickupChain + 1) : 0;
+        _pickupChainT = 0.35;
+      }
+      const pRate = 1 + _pickupChain * 0.065;
+      if (p.kind === 'soul') { addSouls(p.value); play('drop', { vol: 0.6, rate: 1.2 * pRate }); }
       else if (p.kind === 'gold') {
         addGold(p.value);
         if (hasDynCurse('blood_gold') && !player.hasRelic('fury') && player.weapon?.corrupted !== 'c_finisher') player.heal(2);
-        play('drop', { vol: 0.5, rate: 1.8 });
+        play('drop', { vol: 0.5, rate: 1.45 * pRate });
       } else if (p.kind === 'potion') {
         if (!player.hasRelic('fury') && player.weapon?.corrupted !== 'c_finisher') player.heal(25);
         play('heal');
       } else if (p.kind === 'gem') pickGem(p.value);
       else if (p.kind === 'rune') pickRune(typeof p.value === 'string' ? p.value : p.value?.id);
       else if (p.kind === 'core') pickCore(typeof p.value === 'string' ? p.value : p.value?.id);
-      else if (p.kind === 'scrap') { addScrap(p.value); play('pickup', { vol: 0.35, rate: 1.6 }); }
+      else if (p.kind === 'scrap') { addScrap(p.value); play('pickup', { vol: 0.35, rate: 1.35 * pRate }); }
     }
   }
 
@@ -2308,9 +2336,10 @@ function update(realDt, render = true) {
   setMusic(!started ? 'calm' : bossAlive ? 'boss' : enemies.length ? 'battle' : 'calm');
   updateMusic(realDt);
 
-  // Camera (zoom gần khi hạ boss, hoặc lướt mượt từ góc Lò Rèn menu)
+  // Camera (zoom gần khi hạ boss, tụ lực, phản đòn & look-ahead theo hướng chuột)
   slowmoReal = Math.max(0, slowmoReal - realDt);
   camZoom += ((slowmoReal > 0 ? 0.62 : 1) - camZoom) * Math.min(1, realDt * 3);
+  let effZoom = camZoom;
   if (!started) {
     menuT += realDt * 0.16;
     camTarget.set(-1.55 + Math.sin(menuT) * 1.0, 4.45 + Math.sin(menuT * 0.7) * 0.2, 9.0 + Math.cos(menuT) * 0.55);
@@ -2319,22 +2348,42 @@ function update(realDt, render = true) {
     if (menuTransitionT > 0) menuTransitionT = Math.max(0, menuTransitionT - realDt);
     // 2 người: camera nhìn vào giữa hai người, lùi xa khi hai người cách xa
     const focus = player2 && !player2.dead && !player.dead ? player.pos.clone().lerp(player2.pos, 0.5) : player2 && player.dead ? player2.pos : player.pos;
+    let gx = 0, gz = 0;
+    if (!paused && !choosing && !inShopOpen() && !player2 && !touchIn.active) {
+      const dx = aim.x - focus.x, dz = aim.z - focus.z;
+      const dist = Math.hypot(dx, dz) || 1;
+      const shift = Math.min(1.5, dist * 0.11);
+      gx = (dx / dist) * shift;
+      gz = (dz / dist) * shift;
+    }
+    const lf = Math.min(1, realDt * 7);
+    camLookAhead.x += (gx - camLookAhead.x) * lf;
+    camLookAhead.z += (gz - camLookAhead.z) * lf;
     const spread = player2 ? Math.min(0.55, Math.max(0, player.pos.distanceTo(player2.pos) - 8) * 0.03) : 0;
-    camTarget.copy(focus).addScaledVector(CAM_OFFSET, camZoom + spread);
+    const chZoom = player.charging ? -0.05 * Math.min(1, player.chargeT / 1.0) : 0;
+    effZoom = Math.max(0.52, camZoom + camPulse.zoom + chZoom + spread);
+    camTarget.copy(focus).add(camLookAhead).addScaledVector(CAM_OFFSET, effZoom);
     camera.position.lerp(camTarget, 1 - Math.pow(0.001, realDt));
   }
   shake.trauma = Math.max(0, shake.trauma - realDt * 1.8);
+  shake.kickX *= Math.max(0, 1 - realDt * 14);
+  shake.kickZ *= Math.max(0, 1 - realDt * 14);
+  camPulse.zoom *= Math.max(0, 1 - realDt * 9);
+  retHitT = Math.max(0, retHitT - realDt);
+  if (hitComboT > 0) { hitComboT -= realDt; if (hitComboT <= 0) hitCombo = 0; }
+  if (killStreakT > 0) { killStreakT -= realDt; if (killStreakT <= 0) killStreak = 0; }
+  if (_pickupChainT > 0) { _pickupChainT -= realDt; if (_pickupChainT <= 0) _pickupChain = 0; }
   const s = shake.trauma * shake.trauma * 0.6;
   const base = camera.position.clone();
-  camera.position.x += (Math.random() * 2 - 1) * s;
+  camera.position.x += (Math.random() * 2 - 1) * s + shake.kickX;
   camera.position.y += (Math.random() * 2 - 1) * s;
-  camera.position.z += (Math.random() * 2 - 1) * s;
+  camera.position.z += (Math.random() * 2 - 1) * s + shake.kickZ;
   if (!started) {
     camLookTarget.set(-1.45, 1.05, -0.2);
     camLook.lerp(camLookTarget, 1 - Math.pow(0.04, realDt));
     camera.lookAt(camLook);
   } else {
-    camLookTarget.set(camera.position.x - CAM_OFFSET.x * camZoom, 0, camera.position.z - CAM_OFFSET.z * camZoom);
+    camLookTarget.set(camera.position.x - CAM_OFFSET.x * effZoom, 0, camera.position.z - CAM_OFFSET.z * effZoom);
     if (menuTransitionT > 0) camLook.lerp(camLookTarget, 1 - Math.pow(0.0005, realDt));
     else camLook.copy(camLookTarget);
     camera.lookAt(camLook);
@@ -2378,13 +2427,66 @@ function updateHud(realDt) {
   hud.kills.textContent = kills;
   hud.best.textContent = best;
   const dashP = player.dashStock >= player.stats.dashCharges ? 1 : 1 - player.dashCd / player.dashCdMax;
+  const dashNow = player.dashStock > 0;
   hud.dashRing.style.setProperty('--p', dashP.toFixed(3));
-  hud.dashRing.classList.toggle('ready', player.dashStock > 0);
+  hud.dashRing.classList.toggle('ready', dashNow);
+  if (dashNow && !_prevDashReady) pulseHudEl(hud.dashRing, 'ready-pop');
+  _prevDashReady = dashNow;
   $('dash-stock').textContent = player.stats.dashCharges > 1 ? '×' + player.dashStock : '';
   const spearRecall = player.activeSpecialType === 'spear' && player.lodgedSpear;
   const spP = 1 - player.specialCd / player.specialCdMax;
-  $('special-ring').style.setProperty('--p', spearRecall ? '1' : Math.max(0, spP).toFixed(3));
-  $('special-ring').classList.toggle('ready', spearRecall || (spP >= 1 && !player.boomerangOut));
+  const spNow = spearRecall || (spP >= 1 && !player.boomerangOut);
+  const spRing = $('special-ring');
+  spRing.style.setProperty('--p', spearRecall ? '1' : Math.max(0, spP).toFixed(3));
+  spRing.classList.toggle('ready', spNow);
+  if (spNow && !_prevSpReady) pulseHudEl(spRing, 'ready-pop');
+  _prevSpReady = spNow;
+  if (player.slot !== _prevSlot) {
+    _prevSlot = player.slot;
+    pulseHudEl(hud.slots[player.slot], 'slot-swap');
+  }
+  const cw = player.weapon;
+  const useReticle = started && !paused && !choosing && !inShopOpen() && !touchIn.active && !pad.active;
+  document.body?.classList?.toggle('custom-reticle', useReticle);
+  const retEl = $('reticle');
+  if (retEl) {
+    retEl.classList.toggle('hidden', !useReticle);
+    if (useReticle) {
+      const rx = (mouse.x * 0.5 + 0.5) * innerWidth;
+      const ry = (-mouse.y * 0.5 + 0.5) * innerHeight;
+      retEl.style.transform = `translate3d(${rx.toFixed(1)}px,${ry.toFixed(1)}px,0) translate(-50%,-50%)`;
+      retEl.classList.toggle('hit', retHitT > 0);
+      retEl.classList.toggle('crit', retHitT > 0 && retCrit);
+      const ring = retEl.querySelector('.ret-ring');
+      if (ring) ring.style.transform = player.attack ? 'scale(1.3)' : 'scale(1)';
+      const rBar = $('ret-bar'), rSweet = $('ret-sweet'), rFill = $('ret-fill');
+      if (rBar && rSweet && rFill) {
+        if (cw?.type === 'crossbow' && player.reloadT > 0) {
+          rBar.classList.remove('hidden');
+          rSweet.style.left = '42%'; rSweet.style.width = '28%';
+          rFill.style.width = `${Math.min(100, Math.max(0, Math.round((1 - player.reloadT / Math.max(0.1, player.reloadDur)) * 100)))}%`;
+          rFill.classList.toggle('jam', !!player.activeReloadLocked);
+        } else if (player.charging) {
+          rBar.classList.remove('hidden');
+          rSweet.style.left = '58%'; rSweet.style.width = '35%';
+          rFill.style.width = `${Math.min(100, Math.round((player.chargeT / 1.45) * 100))}%`;
+          rFill.classList.remove('jam');
+        } else {
+          rBar.classList.add('hidden');
+        }
+      }
+    }
+  }
+  const comboEl = $('combo-chip');
+  if (comboEl) {
+    const showCombo = started && !paused && (hitCombo >= 2 || killStreak >= 3);
+    comboEl.classList.toggle('hidden', !showCombo);
+    if (showCombo) {
+      $('combo-num').textContent = hitCombo >= 2 ? `×${hitCombo}` : `${killStreak}`;
+      $('combo-lbl').textContent = killStreak >= 8 ? 'CUỒNG SÁT!' : killStreak >= 5 ? 'NGŨ SÁT!' : killStreak >= 3 ? 'TAM SÁT!' : 'LIÊN KÍCH';
+      comboEl.classList.toggle('hot', hitCombo >= 10 || killStreak >= 3);
+    }
+  }
   $('rage-fill').style.width = player.rage + '%';
   $('rage').classList.toggle('full', player.rage >= 100);
   // Đồng bộ vòng hồi chiêu, Nộ & Nhiệt Lưỡi trực tiếp lên cụm nút cảm ứng
@@ -2397,7 +2499,6 @@ function updateHud(realDt) {
     const ds = $('touch-dash-stock');
     if (ds) ds.textContent = player.stats.dashCharges > 1 ? '×' + player.dashStock : '';
   }
-  const cw = player.weapon;
   const cwHz = cw ? player.heatZone(cw) : 'cold';
   const cwHot = cwHz === 'hot' || cwHz === 'critical';
   const tSp = $('touch-special');
@@ -2544,6 +2645,7 @@ function updateHud(realDt) {
   hud.hurt.style.opacity = hurtFlash;
   const low = !player.dead && player.hp / player.maxHp < 0.3;
   hud.lowhp.style.opacity = low ? 0.35 + Math.sin(time * 6) * 0.25 : 0;
+  hud.hpFill?.parentElement?.classList?.toggle('low-hp', !player.dead && player.hp / player.maxHp < 0.25);
   $('slowmo').style.opacity = player.slowmoT > 0 ? 1 : 0;
   const idle = started && !player.dead && enemies.length === 0 && wave > 0;
   document.body?.classList?.toggle('hud-idle', idle || inShop || exitOpen);
@@ -2885,6 +2987,11 @@ async function init() {
   run.curses = [...(meta.curses || [])];
   ctx.player = player;
   ctx.onRangedHit = (e, dealt, proj) => (proj?.owner?.onRangedHit ? proj.owner.onRangedHit(e, dealt, proj) : player?.onRangedHit?.(e, dealt, proj));
+  ctx.onHitConfirm = (e, dmg, crit) => {
+    retHitT = Math.max(retHitT, crit ? 0.14 : 0.09);
+    retCrit = !!crit;
+    if (e) { hitCombo++; hitComboT = 2.6; }
+  };
   ctx.recordDmg = (tag, amt) => {
     const k = runDmg[tag] !== undefined ? tag : 'basic';
     runDmg[k] += Math.max(0, Math.round(amt || 0));

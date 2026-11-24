@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { keys, pressed, mouse, pad, touch, haptic } from './input.js';
-import { collide } from './world.js';
-import { spawnSlash, spawnThrust, burst, addShake, addHitStop, damageNumber, spawnRing, spawnBolt, smoke, flash, hitSpark, emit, F } from './fx.js';
+import { collide, currentBiome } from './world.js';
+import { spawnSlash, spawnThrust, burst, addShake, addKick, addCamZoom, addHitStop, damageNumber, spawnRing, spawnBolt, smoke, flash, hitSpark, emit, F } from './fx.js';
 import { TYPES, RARITY, makeWeapon, buildWeaponMesh, buildHeldWeapon, slashColor, applyAffixes, rollAffixes, swapWeaponForm, updateWeaponHeatVisual } from './weapons.js';
-import { onIce, onWater, spawnSteamCloud, reactSurface, damagePillars } from './hazards.js';
+import { onIce, onWater, onSwamp, onLava, spawnSteamCloud, reactSurface, damagePillars } from './hazards.js';
 import { ctx, dealDamage, spawnOrb, spawnBoomerang, spawnSwordWave, spawnFirePatch, spawnToxic, scheduleBomb, aoe, scheduleAftershock, tryCatchBoomerang, spawnLodgedSpear, recallLodgedSpear, hasLodgedSpear, spawnChakram, spawnOrbitDiscs } from './combat.js';
 import { fireRunes, progressAwakening } from './runes.js';
 import { flameState, flameTier, hasDynCurse, addFlame } from './corruption.js';
@@ -64,7 +64,13 @@ export class Player {
     arrow.position.set(0, 0.03, 0.85);
     this.footRing = ring;
     this.footArrow = arrow;
-    this.root.add(ring, arrow);
+    this.sweetArc = new THREE.Mesh(
+      new THREE.RingGeometry(0.94, 1.0, 22, 1, -Math.PI / 2 - 0.55, 1.1).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0xffe07a, transparent: true, opacity: 0.42, depthWrite: false, side: THREE.DoubleSide }),
+    );
+    this.sweetArc.position.y = 0.025;
+    this.sweetArc.visible = false;
+    this.root.add(ring, arrow, this.sweetArc);
 
     // Quả cầu hộ mệnh (di vật)
     this.orbs = [0, 1].map(() => {
@@ -177,6 +183,9 @@ export class Player {
     this.novaCount = 0;
     this.eclipsePhase = 0;
     this.phoenixCount = 0;
+    this.dashBuf = 0;
+    this.specialBuf = 0;
+    this.swapBuf = 0;
     this.pendingTimers = [];
     this.relicT = { frost: 0, quiver: 0, ember: 0, iceArmor: 0, tornado: 0 };
     const startLv = up.start || 0;
@@ -490,6 +499,7 @@ export class Player {
     play('hammer', { rate: 1.3 });
     haptic(22);
     addShake(0.35);
+    addCamZoom(-0.07);
     damageNumber(this.pos, hot ? 'Đỡ Phóng Nhiệt!' : 'Đỡ Đòn!', 'react perfect');
     const mul = RARITY[this.weapon.rarity].mul * this.stats.dmg * (hot ? 1.5 : 1);
     aoe(this.pos, hot ? 4.8 : 3, Math.round(25 * mul), hot ? { element: 'fire', element2: this.weapon.element } : this.weapon, hot ? 16 : 12, { barrels: true });
@@ -664,6 +674,7 @@ export class Player {
         spawnRing(this.scene, e.pos, 3.6, 0xd070ff, 0.45);
         flash(e.pos.clone().setY(1.2), 0xe8a8ff, 4, 0.22);
         addShake(0.45);
+        addCamZoom(-0.07);
         addHitStop(0.09);
         play('hammer', { at: e.pos, rate: 1.4 });
         haptic(24);
@@ -947,6 +958,7 @@ export class Player {
         this.gainRage(6);
         play('cast', { rate: 1.15 });
         addShake(0.14);
+        addKick(dir, w.type === 'crossbow' ? -0.22 : -0.1);
         return;
       }
       const shotDmg = Math.round(s.dmg * mul * (crit ? this.stats.critMult : 1));
@@ -969,6 +981,7 @@ export class Player {
         const bDmg = Math.round(shotDmg * (isEmp ? (rep ? 1.35 : 1.45) : 1));
         spawnOrb(origin, dir, w, bDmg, 0, s.speed * this.stats.range, { bolt: true, pierce, explode: false, explodeRadius: isEmp && rep ? 2.5 : 0, crit: crit || isEmp, big: isEmp });
         if (isEmp) burst(origin, 0xffcf4a, 6, { speed: 4, size: 0.1 });
+        if (this.bowAmmo === 1) play('swap', { rate: 1.75, vol: 0.35 });
         if (this.bowAmmo <= 0) {
           this.reloadDur = Math.max(0.8, (T.reloadDur || 1.15) / Math.sqrt(Math.max(1, this.effAtkSpd())));
           this.reloadT = this.reloadDur;
@@ -1012,10 +1025,13 @@ export class Player {
       this.gainRage(3);
       play('cast');
       addShake(0.05);
+      addKick(dir, w.type === 'crossbow' ? -0.22 : -0.1);
       return;
     }
     this.lunge = a.lunge;
-    play('swing', { rate: w.type === 'sword' || w.type === 'gauntlets' ? 1.15 : 0.8 });
+    const baseRate = w.type === 'daggers' || w.type === 'gauntlets' ? 1.18 : w.type === 'greatsword' || w.type === 'hammer' ? 0.72 : 0.95;
+    const comboRate = baseRate + (this.comboIdx || 0) * 0.06 + (w.type === 'gauntlets' ? (this.fistFury || 0) * 0.05 : 0);
+    play('swing', { rate: comboRate });
     const col = slashColor(w);
     if (a.thrust) spawnThrust(this.scene, this.pos, this.facing, a.range, col);
     else if (a.doubleCross) {
@@ -1051,6 +1067,7 @@ export class Player {
       if ((w.type === 'spear' || w.type === 'whip') && dist >= a.range * 0.62) {
         sweetMul = 1.35;
         this.nextCrit = true;
+        play('hammer', { at: e.pos, rate: 1.7, vol: 0.42 });
         damageNumber(e.pos, w.type === 'spear' ? 'Điểm Ngọt!' : 'Quất Trúng Đỉnh!', 'react perfect');
         if (w.type === 'whip' && this.aspectOf('whip') === 'storm_lash' && chainCount < 2) {
           let c = 0;
@@ -1147,7 +1164,7 @@ export class Player {
       this.hp = Math.max(1, this.hp - 2);
       damageNumber(this.pos, 'Khát Máu -2', 'player');
     }
-    if (hitAny) { addShake(a.shake); addHitStop(a.stop); play(a.big ? 'hitHeavy' : 'hit'); } else addShake(0.04);
+    if (hitAny) { addShake(a.shake); addKick(aimD, a.big ? 0.3 : 0.14); addHitStop(a.stop); play(a.big ? 'hitHeavy' : 'hit'); } else addShake(0.04);
   }
 
   hitBarrels(range, arc) {
@@ -1483,7 +1500,7 @@ export class Player {
     const sweet = this.chargeT >= 0.85 && this.chargeT <= 1.35;
     const k = Math.min(1, this.chargeT / 1.2);
     const mul = this.dmgMul() * (this.stats.specialPower || 1) * (hot ? 1.35 : 1) * (sweet ? 1.5 : 1);
-    if (sweet) { this.nextCrit = true; damageNumber(this.pos, 'Trảm Tuyệt Đỉnh!', 'react ult'); }
+    if (sweet) { this.nextCrit = true; addCamZoom(-0.07); damageNumber(this.pos, 'Trảm Tuyệt Đỉnh!', 'react ult'); }
     const range = 4.6 * this.stats.range, arc = 2.4;
     this.specialCd = this.specialCdMax;
     this.playOnce('2H_Melee_Attack_Slice', 0.45);
@@ -1699,14 +1716,23 @@ export class Player {
     else if (pad.active && Math.hypot(pad.move.x, pad.move.z) > 0) input.set(pad.move.x, 0, pad.move.z);
     if (input.lengthSq() > 1) input.normalize();
 
-    if (pressed.has('KeyQ') && (this.weapons.length > 1 || this.weapon?.altForm)) {
+    if (pressed.has('KeyQ') && (this.weapons.length > 1 || this.weapon?.altForm)) this.swapBuf = 0.12;
+    else this.swapBuf = Math.max(0, (this.swapBuf || 0) - dt);
+    if (this.swapBuf > 0 && this.dashTime <= 0 && (this.weapons.length > 1 || this.weapon?.altForm)) {
+      this.swapBuf = 0;
       this.quenchSwap(enemies);
     }
 
-    // Lướt (Bước Bóng Đêm: +8 thể lực, xa hơn 35%, đốt kẻ bị xuyên qua)
+    // Lướt (kèm bộ đệm phím 120ms & Bước Bóng Đêm)
     const dashCost = hasDynCurse('shadow_step') ? 30 : 22;
-    if (pressed.has('Space') && this.dashStock > 0 && this.stamina < dashCost) { this.stamWarn = 0.4; play('uiBack', { vol: 0.4 }); }
-    if (pressed.has('Space') && this.dashStock > 0 && this.stamina >= dashCost) {
+    if (pressed.has('Space')) {
+      if (this.dashStock > 0 && this.stamina < dashCost && this.dashTime <= 0) { this.stamWarn = 0.4; play('uiBack', { vol: 0.4 }); }
+      else this.dashBuf = 0.12;
+    } else {
+      this.dashBuf = Math.max(0, (this.dashBuf || 0) - dt);
+    }
+    if (this.dashBuf > 0 && this.dashTime <= 0 && this.dashStock > 0 && this.stamina >= dashCost) {
+      this.dashBuf = 0;
       this.stamina -= dashCost; this.stamDelay = 0.5;
       if (this.stats.dashshock) { spawnRing(this.scene, this.pos, 3, 0xfff07a, 0.3); play('zap', { at: this.pos }); for (const e of ctx.enemies) if (e.alive && !e.spawning && e.pos.distanceTo(this.pos) < 3) dealDamage(e, Math.round(10 * this.stats.dmg), { element: 'lightning', element2: null }, null, 0, false, false); }
       if (this.dashStock === this.stats.dashCharges) this.dashCd = this.dashCdMax;
@@ -1751,13 +1777,24 @@ export class Player {
       castUltimate(this);
     }
 
-    // Kỹ năng chuột phải (bao gồm Thu Thương không tốn cooldown/thể lực nếu đã cắm thương)
+    // Kỹ năng chuột phải (kèm bộ đệm phím 120ms & Thu Thương không tốn cooldown/thể lực)
     const rightDown = mouse.rdown || touch.special || pad.special;
-    if (mouse.rclicked && this.activeSpecialType === 'spear' && hasLodgedSpear(this) && !this.attack && this.dashTime <= 0 && !this.charging) {
-      this.useSpecial(enemies);
-    } else {
-      if (mouse.rclicked && this.specialCd <= 0 && this.stamina < 18) { this.stamWarn = 0.4; }
-      if (mouse.rclicked && this.specialCd <= 0 && this.stamina >= 18 && !this.attack && this.dashTime <= 0 && !this.charging) { this.stamina -= 18; this.stamDelay = 0.5; this.useSpecial(enemies); }
+    if (mouse.rclicked) this.specialBuf = 0.12;
+    else this.specialBuf = Math.max(0, (this.specialBuf || 0) - dt);
+    if (this.specialBuf > 0 && !this.attack && this.dashTime <= 0 && !this.charging) {
+      if (this.activeSpecialType === 'spear' && hasLodgedSpear(this)) {
+        this.specialBuf = 0;
+        this.useSpecial(enemies);
+      } else if (this.specialCd <= 0) {
+        if (this.stamina >= 18) {
+          this.specialBuf = 0;
+          this.stamina -= 18; this.stamDelay = 0.5;
+          this.useSpecial(enemies);
+        } else if (mouse.rclicked) {
+          this.stamWarn = 0.4;
+          this.specialBuf = 0;
+        }
+      }
     }
     if (this.charging) {
       const chMul = this.aspectOf('greatsword') === 'mountain_cleaver' ? 1.3 : 1;
@@ -1840,7 +1877,7 @@ export class Player {
             damageNumber(e.pos, 'Phản Xuyên!', 'react ult');
             spawnRing(this.scene, e.pos, 4.0, 0xff5a8a, 0.45);
             flash(e.pos.clone().setY(1.2), 0xffffff, 4.5, 0.22);
-            addShake(0.5); addHitStop(0.1);
+            addShake(0.5); addCamZoom(-0.07); addHitStop(0.1);
             haptic(28);
             play('hammer', { at: e.pos, rate: 1.5 });
             if (this.hasRelic('windcharm')) aoe(this.pos, 4.5, Math.round(18 * this.stats.dmg), { element: 'wind', element2: null }, 18);
@@ -1891,7 +1928,34 @@ export class Player {
     this.stepT = moving && this.dashTime <= 0 ? (this.stepT || 0) + dt : 0.22;
     if (this.stepT > 0.3) {
       this.stepT = 0; play('step');
-      smoke(this.pos.clone().setY(0.08), { count: 1, color: 0x6a5e52, size: 0.35, life: 0.6, speed: 0.4, rise: 0.25, alpha: 0.3 });
+      const fp = this.pos.clone().setY(0.08);
+      if (onWater(fp.x, fp.z)) {
+        emit(fp, { frame: F.glow, color: 0x9fe8ff, size: 0.26, size2: 0.04, life: 0.35, vel: new THREE.Vector3((Math.random() - 0.5) * 1.4, 1.3, (Math.random() - 0.5) * 1.4) });
+        play('slimeLand', { rate: 1.65, vol: 0.15 });
+      } else if (onIce(fp.x, fp.z) || currentBiome.id === 'ice') {
+        emit(fp, { frame: F.sparkle, color: 0xdff8ff, color2: 0x8fe8ff, size: 0.24, size2: 0.05, life: 0.4, vel: new THREE.Vector3((Math.random() - 0.5) * 0.8, 0.7, (Math.random() - 0.5) * 0.8) });
+      } else if (onSwamp(fp.x, fp.z) || currentBiome.id === 'swamp') {
+        emit(fp, { frame: F.glow, color: 0xbfff7a, color2: 0x4ca820, size: 0.26, size2: 0.04, life: 0.45, vel: new THREE.Vector3((Math.random() - 0.5) * 0.6, 0.9, (Math.random() - 0.5) * 0.6) });
+      } else if (onLava(fp.x, fp.z) || currentBiome.id === 'lava') {
+        emit(fp, { frame: F.glow, color: 0xffa040, color2: 0xff4a10, size: 0.22, size2: 0.03, life: 0.4, vel: new THREE.Vector3((Math.random() - 0.5) * 0.9, 1.2, (Math.random() - 0.5) * 0.9), hdr: 1.9 });
+      } else {
+        smoke(fp, { count: 1, color: 0x6a5e52, size: 0.35, life: 0.6, speed: 0.4, rise: 0.25, alpha: 0.3 });
+      }
+    }
+    if (this.footRing && this.footArrow && cw) {
+      const hz = this.heatZone(cw);
+      const col = this.charging && this.chargeT >= 0.85 && this.chargeT <= 1.35 ? 0xfff6a0
+        : (this.riposteT > 0 || this.axeFury) ? 0xffe880
+        : (hz === 'hot' || hz === 'critical') ? 0xff7a2a
+        : 0xffcf6b;
+      this.footRing.material.color.setHex(col);
+      this.footRing.material.opacity = (this.riposteT > 0 || this.axeFury || (this.charging && this.chargeT >= 0.85)) ? 0.78 : (hz === 'hot' || hz === 'critical') ? 0.62 : 0.35;
+      this.footArrow.material.color.setHex(col);
+      if (this.sweetArc) {
+        const showSweet = this.footRing.visible && (cw.type === 'spear' || cw.type === 'whip');
+        this.sweetArc.visible = showSweet;
+        if (showSweet) this.sweetArc.scale.setScalar((cw.type === 'spear' ? 4.4 : 5.0) * 0.78 * this.stats.range);
+      }
     }
     if (this.anim) {
       if (this.animLock <= 0 && !this.attack && !this.charging) this.anim.play(moving ? 'Running_A' : T.idle, { fade: 0.15, speed: moving ? 1.15 : 1 });

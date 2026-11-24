@@ -117,10 +117,10 @@ export class Loot {
       m.scale.setScalar(0.16 + Math.min(value, 10) * 0.02);
       group.add(m);
     }
-    group.position.set(x, 0.5, z);
+    group.position.set(x, 0.7, z);
     this.scene.add(group);
     const a = Math.random() * Math.PI * 2, sp = 2 + Math.random() * 3;
-    this.pickups.push({ kind, value, group, pos: group.position, vel: new THREE.Vector3(Math.cos(a) * sp, 0, Math.sin(a) * sp), t: 0, flying: false });
+    this.pickups.push({ kind, value, group, pos: group.position, vel: new THREE.Vector3(Math.cos(a) * sp, 0, Math.sin(a) * sp), vy: 4.5 + Math.random() * 2.2, bounces: 0, t: 0, flying: false });
   }
 
   // Hút toàn bộ vật phẩm trên sàn về phía người chơi khi dọn xong đợt
@@ -149,8 +149,18 @@ export class Loot {
         const sp = 9 + p.t * 6;
         p.pos.x += (dx / (d || 1)) * Math.min(d, sp * dt);
         p.pos.z += (dz / (d || 1)) * Math.min(d, sp * dt);
+        p.pos.y += (0.95 - p.pos.y) * Math.min(1, dt * 8);
+      } else if (p.bounces < 2 && (p.pos.y > 0.48 || p.vy > 0)) {
+        p.vy -= 18 * dt;
+        p.pos.y += p.vy * dt;
+        if (p.pos.y <= 0.48 && p.vy < 0) {
+          p.pos.y = 0.48;
+          p.vy = p.bounces === 0 ? -p.vy * 0.4 : 0;
+          p.bounces++;
+        }
+      } else {
+        p.pos.y = 0.48 + Math.sin(p.t * 4) * 0.08;
       }
-      p.pos.y = 0.55 + Math.sin(p.t * 4) * 0.1;
       p.group.rotation.y += dt * 2.5;
       if (!player.dead && wants && d < 0.6) {
         got.push({ kind: p.kind, value: p.value });

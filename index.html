@@ -112,6 +112,15 @@
       <div id="minimap-wrap" class="hidden" title="Radar Đấu Trường · Tab xem Bản Đồ Tầng">
         <canvas id="minimap" width="136" height="136"></canvas>
       </div>
+      <div id="combo-chip" class="combo-chip hidden"><b id="combo-num">×0</b><span id="combo-lbl">LIÊN KÍCH</span></div>
+      <div id="reticle" class="reticle hidden" aria-hidden="true">
+        <svg viewBox="0 0 36 36" width="36" height="36">
+          <circle class="ret-ring" cx="18" cy="18" r="7" />
+          <path class="ret-ticks" d="M18 3v5M18 28v5M3 18h5M28 18h5" />
+          <path class="ret-hm" d="M11 11l4 4M25 11l-4 4M11 25l4-4M25 25l-4-4" />
+        </svg>
+        <div id="ret-bar" class="ret-bar hidden"><div id="ret-sweet" class="ret-sweet"></div><div id="ret-fill" class="ret-fill"></div></div>
+      </div>
       <div id="hint">
         <span><span class="keycap">W</span><span class="keycap">A</span><span class="keycap">S</span><span class="keycap">D</span> di chuyển</span>
         <span><span class="keycap wide">Chuột trái</span> tấn công</span>

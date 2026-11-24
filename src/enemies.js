@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { collide, isBlocked } from './world.js';
-import { burst, damageNumber, spawnRing, addShake, statusFx, hitSpark, explosion, smoke, flame, emit, F } from './fx.js';
+import { burst, damageNumber, spawnRing, addShake, statusFx, hitSpark, explosion, smoke, flame, emit, scorch, F } from './fx.js';
 import { models, fitModel, Animator } from './models.js';
 import { ctx, enemyShot } from './combat.js';
 import { play } from './audio.js';
@@ -46,6 +46,9 @@ export class Enemy {
     this.poise = 0;
     this.stunT = 0;
     this.interruptImmunity = 0;
+    this.hitJolt = 0;
+    this._jx = 1;
+    this._jy = 1;
     this.miniBossTick = null;
     this.mats = [];
     this.group = new THREE.Group();
@@ -105,7 +108,9 @@ export class Enemy {
     if (dir && (this.flashCd || 0) <= 0) { this.flash = 0.06; this.flashCd = 0.18; }
     if (dir) {
       this.knock.copy(dir).multiplyScalar(kb / this.mass);
+      this.hitJolt = crit ? 1.0 : 0.72;
       if (this.stunT <= 0) this.onStagger();
+      ctx.onHitConfirm?.(this, dmg, !!crit, kind);
       play(this.hurtSound, { at: this.pos });
       // Gai: phản lại một phần sát thương cận chiến
       if (this.thorns && ctx.player && !ctx.player.dead && this.pos.distanceTo(ctx.player.pos) < 5) {
@@ -139,7 +144,7 @@ export class Enemy {
         ctx.onBossPhase?.(this);
       }
     }
-    damageNumber(this.pos, dmg, crit ? 'big' : kind);
+    damageNumber(this.pos, dmg, crit ? 'big' : kind, dir);
     burst(this.pos.clone().setY(0.6), this.color, crit ? 14 : 7, { speed: 6 });
     if (dir) hitSpark(this.pos.clone().setY(0.8 * (this.giant || 1) * (this.isBoss ? 1.6 : 1)), this.color, crit);
     if (this.hp <= 0) this.kill();
@@ -218,7 +223,13 @@ export class Enemy {
   }
 
   die() {
-    if (!this.dead) play(this.dieSound, { at: this.pos });
+    if (!this.dead) {
+      play(this.dieSound, { at: this.pos });
+      if (this.isBoss || this.elite) {
+        scorch(this.pos, this.isBoss ? 2.2 : 1.1, 5);
+        spawnRing(this.scene, this.pos, this.isBoss ? 3.2 : 1.4, this.color, 0.3);
+      }
+    }
     this.dead = true;
     this.dying = false;
     burst(this.pos.clone().setY(0.6), this.color, Math.round(24 * this.mass), { speed: 9, size: 0.2 * this.mass, life: 0.7 });
@@ -243,6 +254,7 @@ export class Enemy {
   updateStatus(dt) {
     statusFx(this, dt);
     this.flashCd = Math.max(0, (this.flashCd || 0) - dt);
+    if (this.hitJolt > 0) this.hitJolt = Math.max(0, this.hitJolt - dt * 7.5);
     if (this.invulnT > 0) {
       this.invulnT -= dt;
     }
@@ -295,6 +307,23 @@ export class Enemy {
 
   applyTint(time) {
     this.flash = Math.max(0, this.flash - 1 / 60);
+    if (this._lastJoltX != null && Math.abs(this.group.scale.x - this._lastJoltX) < 0.001) {
+      this.group.scale.x /= this._jx;
+      this.group.scale.y /= this._jy;
+      this.group.scale.z /= this._jx;
+    }
+    this._jx = 1;
+    this._jy = 1;
+    this._lastJoltX = null;
+    if (this.squash === undefined && !this.spawning && this.hitJolt > 0) {
+      const j = Math.sin(this.hitJolt * Math.PI) * (this.isBoss ? 0.08 : 0.16);
+      this._jx = 1 + j;
+      this._jy = 1 - j * 0.85;
+      this.group.scale.x *= this._jx;
+      this.group.scale.y *= this._jy;
+      this.group.scale.z *= this._jx;
+      this._lastJoltX = this.group.scale.x;
+    }
     let col = null, ei = 0;
     if (this.flash > 0) { col = WHITE; ei = 0.48; }
     else if (this.invulnT > 0) { col = INVULN; ei = 0.35 + Math.sin(time * 12) * 0.15; }

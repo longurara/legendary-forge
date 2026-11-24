@@ -27,6 +27,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0908; fon
 canvas { display: block; }
 body.menu, body.menu canvas { cursor: url('/ui/cursor_menu.png') 3 2, default; }
 body.playing canvas { cursor: url('/ui/cursor_aim.png') 16 16, crosshair; }
+body.playing.custom-reticle canvas { cursor: none; }
 button { cursor: url('/ui/cursor_menu.png') 3 2, pointer; }
 b { color: var(--gold-hi); font-weight: 700; }
 .hidden { display: none !important; }
@@ -1875,8 +1876,53 @@ body.hud-compact .weapon-mech { bottom: 92px; width: 232px; padding: 5px 8px; }
 .aspect-card p { font-size: 11px; color: var(--muted); line-height: 1.35; margin: 0; flex: 1; }
 .aspect-btns { display: flex; gap: 5px; margin-top: 2px; }
 .panel.big .aspect-btns .btn {
-  min-width: 0; align-self: stretch; flex: 1; padding: 4px 8px; font-size: 11px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0; align-self: stretch; flex: 1; padding: 5px 6px; font-size: 11px;
+  white-space: normal; line-height: 1.2; min-height: 30px; overflow: visible; text-overflow: clip;
 }
 .panel.big .aspect-btns .btn .ico { width: 13px; height: 13px; }
 .aspect-btns .btn.on { border-color: var(--gold-hi); color: var(--gold-hi); background: rgba(255, 207, 74, .14); }
+
+/* ===== Micro-details: Reticle, Hitmarker, Combo Streak & Feedback Pops ===== */
+.reticle {
+  position: fixed; left: 0; top: 0; width: 36px; height: 36px; z-index: 40;
+  pointer-events: none; transform: translate3d(-100px, -100px, 0) translate(-50%, -50%);
+}
+.reticle svg { display: block; overflow: visible; filter: drop-shadow(0 1px 3px rgba(0, 0, 0, .85)); }
+.ret-ring { fill: none; stroke: rgba(255, 224, 150, .85); stroke-width: 1.5; transition: transform .07s; transform-origin: 18px 18px; }
+.ret-ticks { stroke: rgba(255, 207, 74, .7); stroke-width: 1.5; stroke-linecap: round; }
+.ret-hm { stroke: #fff; stroke-width: 2.2; stroke-linecap: round; opacity: 0; transform-origin: 18px 18px; transform: scale(.7); transition: opacity .05s; }
+.reticle.hit .ret-hm { opacity: 1; transform: scale(1); }
+.reticle.crit .ret-hm { stroke: #ffcf4a; opacity: 1; transform: scale(1.18); filter: drop-shadow(0 0 6px #ff9a2a); }
+.ret-bar {
+  position: absolute; left: 50%; top: 34px; width: 48px; height: 5px; transform: translateX(-50%);
+  border-radius: 3px; background: rgba(12, 8, 6, .85); border: 1px solid rgba(255, 210, 120, .45); overflow: hidden;
+}
+.ret-sweet { position: absolute; top: 0; bottom: 0; background: rgba(255, 232, 120, .48); }
+.ret-fill { height: 100%; background: linear-gradient(90deg, #ff9a3c, #ffe880); width: 0%; }
+.ret-fill.jam { background: #a84040; }
+
+.combo-chip {
+  position: absolute; left: 12px; top: 182px; z-index: 6;
+  display: flex; align-items: baseline; gap: 7px; padding: 4px 10px;
+  border-radius: 7px; background: rgba(16, 10, 8, .86); border: 1px solid rgba(255, 207, 74, .45);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .45); pointer-events: none;
+  animation: comboIn .14s cubic-bezier(.22, 1, .36, 1);
+}
+.combo-chip.hot { border-color: #ff9a3c; box-shadow: 0 0 16px rgba(255, 120, 40, .45); }
+.combo-chip b { font: 800 20px var(--f-title); color: #ffe070; line-height: 1; text-shadow: 0 2px 6px rgba(0, 0, 0, .85); }
+.combo-chip span { font: 700 10.5px var(--f-label); letter-spacing: .7px; color: var(--muted); }
+body.hud-compact .combo-chip { top: 158px; padding: 3px 8px; }
+body.hud-compact .combo-chip b { font-size: 17px; }
+@keyframes comboIn { from { transform: scale(1.22); } to { transform: scale(1); } }
+
+@keyframes readyPop { 0% { transform: scale(1.32); filter: brightness(1.7); } 100% { transform: scale(1); filter: brightness(1); } }
+.ring.ready-pop { animation: readyPop .26s cubic-bezier(.22, 1, .36, 1); }
+
+@keyframes resPop { 0% { transform: scale(1.28); color: #fff6c0; } 100% { transform: scale(1); } }
+.res-pop { display: inline-block; animation: resPop .22s ease-out; }
+
+@keyframes slotSwap { 0% { transform: scale(1.06) translateY(-2px); filter: brightness(1.35); } 100% { transform: scale(1); filter: brightness(1); } }
+.slot.slot-swap { animation: slotSwap .2s ease-out; }
+
+@keyframes lowHpPulse { 0%, 100% { box-shadow: 0 0 0 rgba(255, 50, 40, 0); } 50% { box-shadow: 0 0 14px rgba(255, 60, 40, .85); } }
+#hud-left .bar.low-hp { animation: lowHpPulse 1s ease-in-out infinite; }
