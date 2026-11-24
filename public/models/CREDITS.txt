@@ -36,3 +36,8 @@ Nhạc nền: xem public/music/CREDITS.txt
 
 KayKit Halloween Bits 1.0 (Kay Lousberg) - CC0 1.0 - https://github.com/KayKit-Game-Assets/KayKit-Halloween-Bits-1.0
   public/models/crypt/*.gltf (mo, bia, quan tai, dau lau, xuong, nen)
+
+Vũ khí mở rộng (tải từ Poly Pizza):
+  weapon_gauntlets.glb     Glove – Quaternius (CC0)
+  weapon_chakram.glb       Shuriken – iPoly3D (CC0)
+  weapon_whip.glb          Whip – Poly by Google (CC-BY 3.0)

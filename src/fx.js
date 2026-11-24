@@ -539,6 +539,32 @@ function updateSlashes(dt) {
   }
 }
 
+export function spawnThrust(scene, pos, facing, range, color) {
+  if (!addPool || !ringPool.length) return;
+  const dx = Math.sin(facing), dz = Math.cos(facing);
+  const steps = Math.max(4, Math.min(8, Math.round(range * 1.4)));
+  for (let i = 1; i <= steps; i++) {
+    const d = (i / steps) * range;
+    _p1.set(pos.x + dx * d, 0.9, pos.z + dz * d);
+    _v1.set(dx * (9 + i * 1.8), (Math.random() - 0.5) * 0.4, dz * (9 + i * 1.8));
+    emit(_p1, {
+      frame: F.streak,
+      color: i === steps ? 0xffffff : color,
+      color2: color,
+      size: i === steps ? 0.95 : 0.65,
+      size2: 0.15,
+      life: 0.16,
+      vel: _v1,
+      drag: 4,
+      streak: true,
+      hdr: 2.1,
+    });
+  }
+  _p2.set(pos.x + dx * range, 0.9, pos.z + dz * range);
+  emit(_p2, { frame: F.flare, color: 0xffffff, color2: color, size: 1.5, size2: 0.2, life: 0.15, hdr: 2.2 });
+  spawnRing(scene, _p2, Math.max(1.1, range * 0.28), color, 0.22);
+}
+
 // ---------- Sóng xung kích (Pool 20 slot cố định trên fxRoot) ----------
 const rings = [];
 const ringPool = [];

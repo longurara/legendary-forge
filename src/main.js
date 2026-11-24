@@ -32,7 +32,7 @@ import { ctx, updateProjectiles, clearProjectiles } from './combat.js';
 import * as weaponsMod from './weapons.js';
 import { Loot } from './loot.js';
 import { loadModels, models, fitModel } from './models.js';
-import { randomWeapon, forgeWeapons, weaponName, weaponIcons, makeWeapon, rollAffixes, affixById, codexKey, RARITY, TYPES, ELEMENTS, scrapValue, MAX_PLUS, enhanceCost, weaponScore } from './weapons.js';
+import { randomWeapon, forgeWeapons, weaponName, weaponIcons, makeWeapon, rollAffixes, affixById, codexKey, RARITY, TYPES, ELEMENTS, WEAPON_ASPECTS, aspectById, scrapValue, MAX_PLUS, enhanceCost, weaponScore } from './weapons.js';
 import { weaponIcon, $, show } from './ui.js';
 import { PERKS, EVOLUTIONS, baseStats, rollPerks, xpForLevel, META, loadMeta, saveMeta } from './perks.js';
 import { RELICS, relicById, activeRelicSets, PETS, petById, CHARACTERS, charById, CURSES, EVENTS, ACHIEVEMENTS, DEPTHS } from './content.js';
@@ -102,6 +102,7 @@ let _lastDynCursesHtml = '';
 let _lastTimerHtml = '';
 let _lastFlameInt = -1;
 let _lastCorrInt = -1;
+let _lastMechHtml = '';
 let _fpsFrames = 0;
 let _fpsAcc = 0;
 
@@ -227,13 +228,13 @@ function renderSlots() {
   // Đồng bộ icon vũ khí & kỹ năng lên cụm nút vòng cung trên điện thoại
   const atkIco = $('touch-atk-ico');
   if (atkIco) {
-    const wtIco = { daggers: 'x_daggers', crossbow: 'x_crossbow', spear: 'x_sword-stone', scythe: 'x_swords-emblem', hammer: 'anvil' }[player.weapon.type] || player.weapon.type;
+    const wtIco = { daggers: 'x_daggers', crossbow: 'x_crossbow', spear: 'x_sword-stone', scythe: 'x_swords-emblem', hammer: 'anvil', gauntlets: 'x_gauntlet', whip: 'x_whip', chakram: 'x_chakram' }[player.weapon.type] || player.weapon.type;
     atkIco.style.setProperty('--i', `url('/ui/icons/${wtIco}.svg')`);
   }
   const spIco = $('touch-sp-ico');
   if (spIco) spIco.style.setProperty('--i', `url('/ui/icons/${sp.icon}.svg')`);
   const spLbl = $('touch-sp-lbl');
-  if (spLbl) spLbl.textContent = { sword: 'Đỡ', axe: 'Ném', greatsword: 'Tích', staff: 'Cầu', daggers: 'Dao', crossbow: 'Nổ', spear: 'Phóng', scythe: 'Gặt', hammer: 'Chấn' }[player.activeSpecialType] || 'Chiêu';
+  if (spLbl) spLbl.textContent = { sword: 'Đỡ', axe: 'Ném', greatsword: 'Tích', staff: 'Cầu', daggers: 'Dao', crossbow: 'Nổ', spear: 'Phóng', scythe: 'Gặt', hammer: 'Chấn', gauntlets: 'Đấm', whip: 'Kéo', chakram: 'Luân' }[player.activeSpecialType] || 'Chiêu';
 }
 
 function renderRelics() {
@@ -1571,6 +1572,7 @@ function onKill(e, opts = {}) {
   if (st.killboom && !e.isBoss) combat.fireBurst(e.pos, Math.round(10 * st.dmg));
   if (st.killinvis) player.iframes = Math.max(player.iframes, 0.6);
   if (player.weapon.legend === 'bloodfire') player.heal(3);
+  if (player.weapon.type === 'scythe') player.scytheSouls = Math.min(5, (player.scytheSouls || 0) + 2);
   // Ngọc & Cổ Ngữ Lập Trình: tinh anh, Thủ Lĩnh và Boss rơi
   const runeChance = (e.elite ? 0.32 : 0) * (hasDynCurse('cursed_greed') ? 2 : 1);
   if (Math.random() < runeChance || e.miniBoss || e.isBoss) {
@@ -1587,7 +1589,7 @@ function onKill(e, opts = {}) {
   const before = masteryLv(meta.mastery[wt] || 0);
   meta.mastery[wt] = (meta.mastery[wt] || 0) + 1;
   const after = masteryLv(meta.mastery[wt]);
-  if (after > before) { player.recalc(); toast({ daggers: 'x_daggers', crossbow: 'x_crossbow', spear: 'x_sword-stone', scythe: 'x_swords-emblem', hammer: 'anvil' }[wt] || wt, `Thuần thục ${TYPES[wt].name}: cấp ${after}`, `+${after * 4}% sát thương khi dùng ${TYPES[wt].name.toLowerCase()}`); }
+  if (after > before) { player.recalc(); toast({ daggers: 'x_daggers', crossbow: 'x_crossbow', spear: 'x_sword-stone', scythe: 'x_swords-emblem', hammer: 'anvil', gauntlets: 'x_gauntlet', whip: 'x_whip', chakram: 'x_chakram' }[wt] || wt, `Thuần thục ${TYPES[wt].name}: cấp ${after}`, `+${after * 4}% sát thương khi dùng ${TYPES[wt].name.toLowerCase()}`); }
 }
 
 const runInfo = () => ({
@@ -1725,6 +1727,47 @@ function renderForge() {
       renderForge();
       updateMenuSouls();
     };
+  }
+  const aspEl = $('aspect-list');
+  if (aspEl) {
+    meta.aspects = meta.aspects || {};
+    meta.aspectsUnlocked = meta.aspectsUnlocked || {};
+    const wtIco = { daggers: 'x_daggers', crossbow: 'x_crossbow', spear: 'x_sword-stone', scythe: 'x_swords-emblem', hammer: 'anvil', gauntlets: 'x_gauntlet', whip: 'x_whip', chakram: 'x_chakram' };
+    aspEl.innerHTML = Object.entries(WEAPON_ASPECTS).map(([type, list]) => {
+      const activeId = meta.aspects[type] || 'default';
+      const activeAsp = aspectById(type, activeId);
+      return `<div class="aspect-card${activeId !== 'default' ? ' active' : ''}">
+        <div class="aspect-top"><i class="ico" style="--i:url('/ui/icons/${wtIco[type] || type}.svg')"></i><b>${TYPES[type].name}</b></div>
+        <p>${activeAsp?.desc || ''}</p>
+        <div class="aspect-btns">${list.map((a) => {
+          const open = a.id === 'default' || !!meta.aspectsUnlocked[a.id];
+          const on = activeId === a.id;
+          return open
+            ? `<button class="btn aspect-btn${on ? ' on' : ''}" data-type="${type}" data-aspect="${a.id}">${a.name}${on ? ' ✓' : ''}</button>`
+            : `<button class="btn aspect-btn" data-type="${type}" data-aspect="${a.id}" data-cost="${a.cost}" ${meta.souls < a.cost ? 'disabled' : ''}>${a.name} · <i class="ico ico-soul"></i>${a.cost}</button>`;
+        }).join('')}</div>
+      </div>`;
+    }).join('');
+    for (const b of aspEl.querySelectorAll('.aspect-btn')) {
+      b.onclick = () => {
+        const type = b.dataset.type, id = b.dataset.aspect, cost = Number(b.dataset.cost || 0);
+        const open = id === 'default' || !!meta.aspectsUnlocked[id];
+        if (!open) {
+          if (meta.souls < cost) { play('uiBack'); return; }
+          meta.souls -= cost;
+          meta.aspectsUnlocked[id] = true;
+          play('hammer');
+        } else {
+          play('uiClick');
+        }
+        meta.aspects[type] = id;
+        saveMeta(meta);
+        if (player?.weapon?.type === type) player.equip(player.slot);
+        if (!started) syncMenuStage();
+        renderForge();
+        updateMenuSouls();
+      };
+    }
   }
 }
 
@@ -2338,9 +2381,10 @@ function updateHud(realDt) {
   hud.dashRing.style.setProperty('--p', dashP.toFixed(3));
   hud.dashRing.classList.toggle('ready', player.dashStock > 0);
   $('dash-stock').textContent = player.stats.dashCharges > 1 ? '×' + player.dashStock : '';
+  const spearRecall = player.activeSpecialType === 'spear' && player.lodgedSpear;
   const spP = 1 - player.specialCd / player.specialCdMax;
-  $('special-ring').style.setProperty('--p', Math.max(0, spP).toFixed(3));
-  $('special-ring').classList.toggle('ready', spP >= 1 && !player.boomerangOut);
+  $('special-ring').style.setProperty('--p', spearRecall ? '1' : Math.max(0, spP).toFixed(3));
+  $('special-ring').classList.toggle('ready', spearRecall || (spP >= 1 && !player.boomerangOut));
   $('rage-fill').style.width = player.rage + '%';
   $('rage').classList.toggle('full', player.rage >= 100);
   // Đồng bộ vòng hồi chiêu, Nộ & Nhiệt Lưỡi trực tiếp lên cụm nút cảm ứng
@@ -2358,9 +2402,11 @@ function updateHud(realDt) {
   const cwHot = cwHz === 'hot' || cwHz === 'critical';
   const tSp = $('touch-special');
   if (tSp) {
-    tSp.style.setProperty('--p', Math.max(0, spP).toFixed(3));
-    tSp.classList.toggle('ready', spP >= 1 && !player.boomerangOut && player.stamina >= 18);
+    tSp.style.setProperty('--p', spearRecall ? '1' : Math.max(0, spP).toFixed(3));
+    tSp.classList.toggle('ready', spearRecall || (spP >= 1 && !player.boomerangOut && player.stamina >= 18));
     tSp.classList.toggle('hot', cwHot);
+    const spL = $('touch-sp-lbl');
+    if (spL) spL.textContent = spearRecall ? 'Thu!' : ({ sword: 'Đỡ', axe: 'Ném', greatsword: 'Tích', staff: 'Cầu', daggers: 'Dao', crossbow: 'Nổ', spear: 'Phóng', scythe: 'Gặt', hammer: 'Chấn', gauntlets: 'Đấm', whip: 'Kéo', chakram: 'Luân' }[player.activeSpecialType] || 'Chiêu');
   }
   const tUlt = $('touch-ult');
   if (tUlt) {
@@ -2393,6 +2439,52 @@ function updateHud(realDt) {
   }
   updateArrows();
   drawMinimap();
+  const mechEl = $('weapon-mech-hud');
+  if (mechEl) {
+    let mechHtml = '';
+    if (started && !paused && cw) {
+      if (cw.type === 'crossbow') {
+        if (player.reloadT > 0) {
+          const pct = Math.min(100, Math.max(0, Math.round((1 - player.reloadT / Math.max(0.1, player.reloadDur)) * 100)));
+          mechHtml = `<div class="wm-head"><span>Nạp Tên</span><span class="wm-sub">${player.activeReloadLocked ? 'Kẹt Cò!' : 'Bấm đúng vùng vàng!'}</span></div>`
+            + `<div class="wm-bar"><div class="wm-sweet" style="left:42%;width:28%"></div><div class="wm-fill${player.activeReloadLocked ? ' jam' : ''}" style="width:${pct}%"></div></div>`;
+        } else {
+          const maxB = player.bowMax || 5;
+          const emp = player.empoweredAmmo || 0;
+          const pips = Array.from({ length: maxB }, (_, k) => `<span class="wm-pip${k < player.bowAmmo ? (k < emp ? ' on emp' : ' on') : ''}"></span>`).join('');
+          mechHtml = `<div class="wm-head"><span>Tên Nỏ${emp > 0 ? ' · NẠP HOÀN HẢO!' : ''}</span><span class="wm-sub">${player.bowAmmo} / ${maxB}</span></div><div class="wm-pips">${pips}</div>`;
+        }
+      } else if (player.charging) {
+        const pct = Math.min(100, Math.round((player.chargeT / 1.45) * 100));
+        const sweet = player.chargeT >= 0.85 && player.chargeT <= 1.35;
+        mechHtml = `<div class="wm-head"><span>${sweet ? '★ TRẢM TUYỆT ĐỈNH!' : 'Tích Lực Đại Kiếm'}</span><span class="wm-sub">${player.chargeT.toFixed(2)}s</span></div>`
+          + `<div class="wm-bar"><div class="wm-sweet" style="left:58%;width:35%"></div><div class="wm-fill${sweet ? ' hot' : ''}" style="width:${pct}%"></div></div>`;
+      } else if (cw.type === 'scythe') {
+        const s = player.scytheSouls || 0;
+        const pips = Array.from({ length: 5 }, (_, k) => `<span class="wm-pip soul${k < s ? ' on' : ''}"></span>`).join('');
+        mechHtml = `<div class="wm-head"><span>Mảnh Hồn</span><span class="wm-sub">${s >= 3 ? 'Chuột phải Gặt Bóng!' : `${s} / 5`}</span></div><div class="wm-pips">${pips}</div>`;
+      } else if (cw.type === 'gauntlets' && player.fistFury > 0) {
+        const f = player.fistFury;
+        const pips = Array.from({ length: 5 }, (_, k) => `<span class="wm-pip${k < f ? ' on' : ''}"></span>`).join('');
+        mechHtml = `<div class="wm-head"><span>Liên Quyền ×${f}</span><span class="wm-sub">+${f * 8}% tốc đánh</span></div><div class="wm-pips">${pips}</div>`;
+      } else if (player.riposteT > 0) {
+        const pct = Math.min(100, Math.round((player.riposteT / 2.5) * 100));
+        mechHtml = `<div class="wm-head"><span>Phản Kiếm Sẵn Sàng!</span><span class="wm-sub">${player.riposteT.toFixed(1)}s</span></div><div class="wm-bar"><div class="wm-fill hot" style="width:${pct}%"></div></div>`;
+      } else if (player.boomerangOut || player.axeFury) {
+        mechHtml = `<div class="wm-head"><span>${player.axeFury ? 'Bổ Cuồng Nộ!' : 'Rìu Đang Bay'}</span><span class="wm-sub">${player.axeFury ? 'Đòn tới +65% ST' : 'Đánh gần để Bắt Rìu!'}</span></div>`;
+      } else if (player.lodgedSpear) {
+        mechHtml = `<div class="wm-head"><span>Thương Đã Cắm</span><span class="wm-sub">Chuột phải thu thương</span></div>`;
+      }
+      if (player.momentumStacks > 0) {
+        mechHtml += `<div class="wm-head"><span class="wm-sub">Đà Chiến ×${player.momentumStacks}</span><span class="wm-sub">+${player.momentumStacks * 4}% tốc đánh</span></div>`;
+      }
+    }
+    if (mechHtml !== _lastMechHtml) {
+      _lastMechHtml = mechHtml;
+      mechEl.innerHTML = mechHtml;
+      mechEl.classList.toggle('hidden', !mechHtml);
+    }
+  }
   $('lvl').textContent = player.level;
   $('xp-fill').style.width = Math.min(100, (player.xp / xpForLevel(player.level)) * 100) + '%';
   $('souls').textContent = meta.souls;
@@ -2792,6 +2884,7 @@ async function init() {
   run.pet = meta.pet || 'none';
   run.curses = [...(meta.curses || [])];
   ctx.player = player;
+  ctx.onRangedHit = (e, dealt, proj) => (proj?.owner?.onRangedHit ? proj.owner.onRangedHit(e, dealt, proj) : player?.onRangedHit?.(e, dealt, proj));
   ctx.recordDmg = (tag, amt) => {
     const k = runDmg[tag] !== undefined ? tag : 'basic';
     runDmg[k] += Math.max(0, Math.round(amt || 0));

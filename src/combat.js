@@ -33,7 +33,7 @@ export function dealDamage(enemy, dmg, weapon, dir, kb, crit, allowChain = true)
   if (_dmgDepth >= 3) allowChain = false;
   try {
   const els = [weapon.element, weapon.element2].filter((e) => e && e !== 'none');
-  let mult = 1;
+  let mult = enemy.shredT > 0 ? 1.2 : 1;
   // Tương tác với trạng thái Ướt (từ Vũng Nước / Băng tan trong Hóa Học Bề Mặt)
   if (enemy.wetT > 0) {
     for (const el of els) {
@@ -353,14 +353,13 @@ function getProjMat(key, make) {
   }
   return projMats.get(key);
 }
+const KEEP_PROJ = new Set(['boomerang', 'spear_fly', 'spear_lodged', 'spear_return', 'chakram', 'orbit_disc']);
 function capProjectiles(friendly) {
   let sideCount = 0;
   let oldestSide = -1;
-  let oldestAny = -1;
   for (let i = 0; i < projectiles.length; i++) {
     const p = projectiles[i];
-    if (p.kind === 'boomerang') continue;
-    if (oldestAny === -1) oldestAny = i;
+    if (KEEP_PROJ.has(p.kind)) continue;
     if (p.friendly === friendly) {
       sideCount++;
       if (oldestSide === -1) oldestSide = i;
@@ -368,7 +367,7 @@ function capProjectiles(friendly) {
   }
   if (sideCount >= MAX_SIDE_PROJ && oldestSide >= 0) removeProjectile(oldestSide);
   while (projectiles.length >= MAX_TOTAL_PROJ) {
-    const idx = projectiles.findIndex((p) => p.kind !== 'boomerang');
+    const idx = projectiles.findIndex((p) => !KEEP_PROJ.has(p.kind));
     if (idx < 0) break;
     removeProjectile(idx);
   }
@@ -377,12 +376,85 @@ function capProjectiles(friendly) {
 const blocked = (pos) => isBlocked(pos.x, pos.z, -0.6);
 const colorOf = (w) => (w.element === 'none' ? 0xc9b6ff : ELEMENTS[w.element].glow);
 
-// Cầu phép thường của trượng
+// ---------- Dư chấn trễ theo dt (Đại Kiếm Trảm Tuyệt Đỉnh, Chiến Chùy Dư Chấn) ----------
+const aftershocks = [];
+const MAX_AFTERSHOCKS = 16;
+export function scheduleAftershock(pos, delay, radius, dmg, weapon, opts = {}) {
+  if (aftershocks.length >= MAX_AFTERSHOCKS) aftershocks.shift();
+  aftershocks.push({
+    pos: pos.clone(), t: delay, radius, dmg, weapon: weapon || NONE,
+    kb: opts.kb ?? 10, color: opts.color ?? 0xffaa40, stun: opts.stun ?? 0, poiseMul: opts.poiseMul ?? 1.4,
+  });
+}
+function updateAftershocks(dt) {
+  for (let i = aftershocks.length - 1; i >= 0; i--) {
+    const a = aftershocks[i];
+    a.t -= dt;
+    if (a.t > 0) continue;
+    aftershocks.splice(i, 1);
+    spawnRing(ctx.scene, a.pos, a.radius, a.color, 0.42);
+    burst(a.pos.clone().setY(0.3), a.color, 18, { speed: 8, size: 0.16 });
+    addShake(0.32);
+    play('explode', { at: a.pos, vol: 0.55, rate: 1.3 });
+    for (const e of ctx.enemies) {
+      if (!e.alive || e.spawning) continue;
+      const dx = e.pos.x - a.pos.x, dz = e.pos.z - a.pos.z;
+      if (Math.hypot(dx, dz) < a.radius + e.radius) {
+        _tmpV.set(dx, 0, dz).normalize();
+        dealDamage(e, a.dmg, a.weapon, _tmpV, a.kb, true, false);
+        if (a.poiseMul > 1 && e.poiseMax && e.stunT <= 0) e.poise += a.dmg * (a.poiseMul - 1);
+        if (a.stun && !e.isBoss) e.stunT = Math.max(e.stunT, a.stun);
+      }
+    }
+  }
+}
+
+function tickEnemyMarks(dt) {
+  const list = ctx.enemies;
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i];
+    if (!e || !e.alive) continue;
+    if (e.shredT > 0) e.shredT = Math.max(0, e.shredT - dt);
+    if (e.arcaneMarkT > 0) {
+      e.arcaneMarkT = Math.max(0, e.arcaneMarkT - dt);
+      if (e.arcaneMarkT <= 0) e.arcaneMark = 0;
+    }
+    if (e.daggerMarkT > 0) {
+      e.daggerMarkT = Math.max(0, e.daggerMarkT - dt);
+      if (e.daggerMarkT <= 0) e.daggerMarks = 0;
+    }
+    if (e.slamWatchT > 0) {
+      e.slamWatchT = Math.max(0, e.slamWatchT - dt);
+      const kx = e.knock?.x || 0, kz = e.knock?.z || 0;
+      const hitWall = Math.hypot(kx, kz) > 2 && isBlocked(e.pos.x + kx * 0.04, e.pos.z + kz * 0.04, e.radius + 0.15);
+      let hitMob = false;
+      if (!hitWall && Math.hypot(kx, kz) > 2) {
+        for (let j = 0; j < list.length; j++) {
+          if (j === i) continue;
+          const o = list[j];
+          if (!o || !o.alive || o.spawning) continue;
+          if (Math.hypot(e.pos.x - o.pos.x, e.pos.z - o.pos.z) < e.radius + o.radius + 0.35) { hitMob = true; break; }
+        }
+      }
+      if (hitWall || hitMob) {
+        e.slamWatchT = 0;
+        const dVal = Math.max(12, Math.round(18 * (ctx.player?.stats?.dmg || 1)));
+        damageNumber(e.pos, 'Đập Dội!', 'react stun');
+        spawnRing(ctx.scene, e.pos, 2.8, 0xffcf4a, 0.35);
+        burst(e.pos.clone().setY(0.7), 0xffaa40, 14, { speed: 7, size: 0.15 });
+        play('hammer', { at: e.pos, rate: 1.15, vol: 0.6 });
+        if (!e.isBoss) e.stunT = Math.max(e.stunT, 1.0);
+        aoe(e.pos, 2.8, dVal, ctx.player?.weapon || NONE, 8);
+      }
+    }
+  }
+}
+
+// Cầu phép thường / mũi tên / phi dao
 export function spawnOrb(origin, dir, weapon, dmg, splash, speed, extra = {}) {
   capProjectiles(true);
   const color = colorOf(weapon);
   if (extra.bolt) {
-    // Tên nỏ / dao ném: xuyên qua quái, bay thẳng
     const baseCol = extra.knife ? 0xe0e8f0 : color;
     const mat = getProjMat('pbolt:' + baseCol, () => new THREE.MeshBasicMaterial({ color: new THREE.Color(baseCol).multiplyScalar(1.8) }));
     const mesh = new THREE.Mesh(arrowGeo, mat);
@@ -392,7 +464,12 @@ export function spawnOrb(origin, dir, weapon, dmg, splash, speed, extra = {}) {
     if (extra.explode) mesh.scale.setScalar(1.6);
     mesh.position.copy(origin);
     ctx.scene.add(mesh);
-    projectiles.push({ kind: 'pbolt', friendly: true, mesh, vel: dir.clone().multiplyScalar(speed), life: 0.9, weapon, dmg, splash: 0, color, pierce: extra.pierce || 0, explode: !!extra.explode, hitSet: new Set() });
+    projectiles.push({
+      kind: 'pbolt', friendly: true, mesh, vel: dir.clone().multiplyScalar(speed), life: 0.9,
+      weapon, dmg, splash: 0, color, pierce: extra.pierce || 0, explode: !!extra.explode,
+      explodeRadius: extra.explodeRadius || 0, crit: !!extra.crit, big: !!extra.big,
+      noProc: !!extra.noProc, detonateMarks: !!extra.detonateMarks, hitSet: new Set(),
+    });
     return;
   }
   const mat = getProjMat('orb:' + color, () => new THREE.MeshBasicMaterial({ color: new THREE.Color(color).lerp(new THREE.Color(1, 1, 1), 0.5).multiplyScalar(2) }));
@@ -402,10 +479,15 @@ export function spawnOrb(origin, dir, weapon, dmg, splash, speed, extra = {}) {
   if (extra.big) mesh.scale.setScalar(2.4);
   flash(origin, color, extra.big ? 2.2 : 1.1, 0.1, false);
   ctx.scene.add(mesh);
-  projectiles.push({ kind: extra.big ? 'bigorb' : 'orb', friendly: true, mesh, vel: dir.clone().multiplyScalar(speed), life: extra.big ? 1.4 : 1.3, weapon, dmg, splash, color, bounces: extra.bounces || 0, hitSet: new Set() });
+  projectiles.push({
+    kind: extra.big ? 'bigorb' : 'orb', friendly: true, mesh, vel: dir.clone().multiplyScalar(speed),
+    life: extra.big ? 1.4 : 1.3, weapon, dmg, splash, color, bounces: extra.bounces || 0,
+    crit: !!extra.crit, big: !!extra.big, noProc: !!extra.noProc,
+    markArcane: !!extra.markArcane, detonateT: 0, hitSet: new Set(),
+  });
 }
 
-// Rìu ném bay ra rồi quay về
+// Rìu ném bay ra rồi quay về + Bắt Rìu Hoàn Hảo
 export function spawnBoomerang(owner, dir, weapon, dmg) {
   const mesh = new THREE.Group();
   const w = buildWeaponMesh(weapon);
@@ -413,7 +495,99 @@ export function spawnBoomerang(owner, dir, weapon, dmg) {
   mesh.add(w);
   mesh.position.copy(owner.pos).setY(1);
   ctx.scene.add(mesh);
-  projectiles.push({ kind: 'boomerang', friendly: true, mesh, vel: dir.clone().multiplyScalar(16), life: 4, weapon, dmg, color: colorOf(weapon), out: 0.55, hitSet: new Set(), owner });
+  projectiles.push({ kind: 'boomerang', friendly: true, disposeGroupMat: true, mesh, vel: dir.clone().multiplyScalar(16), life: 4, weapon, dmg, color: colorOf(weapon), out: 0.55, hitSet: new Set(), owner });
+}
+
+export function tryCatchBoomerang(owner) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    if (p.kind !== 'boomerang' || p.owner !== owner || !p.returning) continue;
+    if (Math.hypot(p.mesh.position.x - owner.pos.x, p.mesh.position.z - owner.pos.z) <= 3.8) {
+      spawnRing(ctx.scene, owner.pos, 3.0, 0xffaa40, 0.35);
+      burst(owner.pos.clone().setY(1), 0xffaa40, 20, { speed: 7, size: 0.14 });
+      removeProjectile(i);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Thương: ném cắm sàn & thu thương xuyên ngược
+export const hasLodgedSpear = (owner) => projectiles.some((p) => p.owner === owner && (p.kind === 'spear_fly' || p.kind === 'spear_lodged'));
+export function spawnLodgedSpear(owner, origin, dir, weapon, dmg, opts = {}) {
+  const mesh = new THREE.Group();
+  const w = buildWeaponMesh({ ...weapon, type: 'spear' });
+  mesh.add(w);
+  mesh.position.copy(origin).setY(0.95);
+  mesh.rotation.y = Math.atan2(dir.x, dir.z);
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.75, 0.92, 24).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0xffe080, transparent: true, opacity: 0.7, depthWrite: false }),
+  );
+  ring.visible = false;
+  mesh.add(ring);
+  ctx.scene.add(mesh);
+  owner.lodgedSpear = true;
+  projectiles.push({
+    kind: 'spear_fly', friendly: true, disposeGroupMat: true, mesh, ring, wGroup: w,
+    vel: dir.clone().multiplyScalar(34), flyT: 0.42, life: 6.5,
+    weapon, dmg, color: colorOf(weapon), owner, hitSet: new Set(),
+    thunderAspect: !!opts.thunderAspect, noProc: false, crit: false, big: true,
+  });
+}
+export function recallLodgedSpear(owner) {
+  let found = false;
+  for (const p of projectiles) {
+    if (p.owner !== owner || (p.kind !== 'spear_fly' && p.kind !== 'spear_lodged')) continue;
+    p.kind = 'spear_return';
+    p.ring.visible = false;
+    p.wGroup.rotation.set(0, Math.PI, 0);
+    p.wGroup.position.set(0, 0, 0);
+    p.hitSet.clear();
+    p.life = 2.0;
+    found = true;
+  }
+  return found;
+}
+
+// Luân Kiếm (Chakram): ném bật nảy qua nhiều mục tiêu rồi bay về + Luân Quỹ Đạo
+export function spawnChakram(owner, origin, dir, weapon, dmg, opts = {}) {
+  const mesh = new THREE.Group();
+  const w = buildWeaponMesh({ ...weapon, type: 'chakram' });
+  w.position.z = -0.55;
+  mesh.add(w);
+  mesh.position.copy(origin).setY(0.95);
+  mesh.add(glowSprite(colorOf(weapon), 1.4));
+  ctx.scene.add(mesh);
+  projectiles.push({
+    kind: 'chakram', friendly: true, disposeGroupMat: true, mesh, owner,
+    vel: dir.clone().multiplyScalar(opts.speed || 22), life: 3.8,
+    weapon, dmg, color: colorOf(weapon), bounces: opts.bounces ?? 3,
+    crit: !!opts.crit, big: !!opts.big, noProc: !!opts.noProc,
+    returning: false, hitSet: new Set(),
+  });
+}
+
+export function spawnOrbitDiscs(owner, weapon, dmg, count = 2, radius = 2.8, dur = 4.2) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    if (projectiles[i].kind === 'orbit_disc' && projectiles[i].owner === owner) removeProjectile(i);
+  }
+  for (let k = 0; k < count; k++) {
+    const mesh = new THREE.Group();
+    const w = buildWeaponMesh({ ...weapon, type: 'chakram' });
+    w.scale.setScalar(0.85);
+    w.position.z = -0.45;
+    mesh.add(w);
+    mesh.add(glowSprite(colorOf(weapon), 1.3));
+    const angle = (k / count) * Math.PI * 2;
+    mesh.position.set(owner.pos.x + Math.cos(angle) * radius, 0.95, owner.pos.z + Math.sin(angle) * radius);
+    ctx.scene.add(mesh);
+    projectiles.push({
+      kind: 'orbit_disc', friendly: true, disposeGroupMat: true, mesh, owner,
+      angle, radius, life: dur, elapsed: 0, weapon, dmg, color: colorOf(weapon),
+      hitCd: new Map(), noProc: false, crit: false, big: false,
+    });
+  }
 }
 
 // Sóng kiếm: hình lưỡi liềm bay thẳng, xuyên qua quái
@@ -451,10 +625,17 @@ export function enemyShot(origin, dir, dmg = 8, kind = 'orb', speed = null) {
 
 function removeProjectile(i) {
   const p = projectiles[i];
+  if (!p) return;
   p.mesh.parent?.remove(p.mesh);
   if (p.mesh.material && !p.mesh.material.userData?.shared) p.mesh.material.dispose();
+  if (p.disposeGroupMat && p.mesh.isGroup) {
+    p.mesh.traverse((o) => { if (o.isMesh && o.material && !o.material.userData?.shared && !o.material.map) o.material.dispose(); });
+  }
   if (p.kind === 'boomerang' && p.owner) p.owner.boomerangOut = false;
+  const owner = p.owner;
+  const wasSpear = p.kind === 'spear_fly' || p.kind === 'spear_lodged' || p.kind === 'spear_return';
   projectiles.splice(i, 1);
+  if (wasSpear && owner) owner.lodgedSpear = hasLodgedSpear(owner);
 }
 
 function explodeBig(p) {
@@ -467,6 +648,8 @@ function explodeBig(p) {
 export function updateProjectiles(dt) {
   resetCombatFrame();
   const player = ctx.player;
+  tickEnemyMarks(dt);
+  updateAftershocks(dt);
   updateBombs(dt);
   updatePatches(dt);
   for (let i = projectiles.length - 1; i >= 0; i--) {
@@ -477,12 +660,12 @@ export function updateProjectiles(dt) {
     if (p.kind === 'boomerang') {
       p.out -= dt;
       if (p.out <= 0) {
-        // quay về tay người chơi
         if (!p.returning) { p.returning = true; p.hitSet.clear(); }
+        if (!p.owner || p.life <= 0) { removeProjectile(i); continue; }
         const to = new THREE.Vector3(p.owner.pos.x - pos.x, 0, p.owner.pos.z - pos.z);
         const d = to.length();
         p.vel.copy(to.normalize().multiplyScalar(18));
-        if (d < 0.9 || p.life <= 0) { removeProjectile(i); continue; }
+        if (d < 0.9) { removeProjectile(i); continue; }
       }
       pos.addScaledVector(p.vel, dt);
       p.mesh.rotation.y += dt * 22;
@@ -496,6 +679,141 @@ export function updateProjectiles(dt) {
         }
       }
       for (const b of ctx.barrels) if (b.alive && Math.hypot(b.pos.x - pos.x, b.pos.z - pos.z) < 1.2) b.hit(p.dmg);
+      continue;
+    }
+
+    if (p.kind === 'spear_fly') {
+      p.flyT -= dt;
+      const stepX = p.vel.x * dt, stepZ = p.vel.z * dt;
+      pos.x += stepX; pos.z += stepZ;
+      for (const e of ctx.enemies) {
+        if (!e.alive || e.spawning || p.hitSet.has(e)) continue;
+        if (Math.hypot(e.pos.x - pos.x, e.pos.z - pos.z) < e.radius + 0.65) {
+          p.hitSet.add(e);
+          const dealt = dealDamage(e, p.dmg, p.weapon, p.vel.clone().setY(0).normalize(), 8, p.crit);
+          if (dealt > 0 && !p.noProc) ctx.onRangedHit?.(e, dealt, p);
+          hitSpark(pos, p.color, false);
+        }
+      }
+      for (const b of ctx.barrels) if (b.alive && Math.hypot(b.pos.x - pos.x, b.pos.z - pos.z) < 1.0) b.hit(p.dmg);
+      if (p.flyT <= 0 || blocked(pos)) {
+        if (blocked(pos)) { pos.x -= stepX; pos.z -= stepZ; }
+        p.kind = 'spear_lodged';
+        pos.y = 0.05;
+        p.wGroup.rotation.set(-Math.PI / 2.2, 0, 0);
+        p.wGroup.position.y = 0.25;
+        p.ring.visible = true;
+        p.hitSet.clear();
+        play('hit', { at: pos, vol: 0.55, rate: 0.75 });
+        spawnRing(ctx.scene, pos, 2.2, p.color, 0.35);
+      }
+      continue;
+    }
+
+    if (p.kind === 'spear_lodged') {
+      p.ring.scale.setScalar(1 + 0.1 * Math.sin(p.life * 6));
+      if (p.life <= 0 || (p.owner && Math.hypot(p.owner.pos.x - pos.x, p.owner.pos.z - pos.z) < 1.25)) {
+        if (p.owner && p.life > 0) play('swap', { at: pos, rate: 1.3, vol: 0.45 });
+        removeProjectile(i);
+      }
+      continue;
+    }
+
+    if (p.kind === 'spear_return') {
+      if (!p.owner || p.life <= 0) { removeProjectile(i); continue; }
+      const to = _tmpD.set(p.owner.pos.x - pos.x, 0, p.owner.pos.z - pos.z);
+      const d = to.length();
+      if (d < 1.15) { play('swap', { at: pos, rate: 1.35, vol: 0.5 }); removeProjectile(i); continue; }
+      to.multiplyScalar(1 / d);
+      p.mesh.rotation.y = Math.atan2(to.x, to.z);
+      pos.addScaledVector(to, 38 * dt);
+      for (const e of ctx.enemies) {
+        if (!e.alive || e.spawning || p.hitSet.has(e)) continue;
+        if (Math.hypot(e.pos.x - pos.x, e.pos.z - pos.z) < e.radius + 0.8) {
+          p.hitSet.add(e);
+          if (!e.isBoss && e.knock) e.knock.addScaledVector(to, 10);
+          const dealt = dealDamage(e, Math.round(p.dmg * 1.25), p.weapon, to.clone(), 6, true);
+          if (dealt > 0 && !p.noProc) ctx.onRangedHit?.(e, dealt, p);
+          if (p.thunderAspect && e.alive) {
+            spawnBolt(ctx.scene, e.pos.clone().setY(8), e.pos.clone().setY(0.5), 0xffe14a);
+            play('zap', { at: e.pos, vol: 0.5 });
+            dealDamage(e, Math.round(p.dmg * 0.55), { element: 'lightning', element2: null }, null, 0, true, false);
+          }
+        }
+      }
+      continue;
+    }
+
+    if (p.kind === 'chakram') {
+      p.mesh.rotation.y += dt * 18;
+      if (!p.returning) {
+        pos.addScaledVector(p.vel, dt);
+        let hit = null;
+        for (const e of ctx.enemies) {
+          if (e.alive && !e.spawning && !p.hitSet.has(e) && Math.hypot(e.pos.x - pos.x, e.pos.z - pos.z) < e.radius + 0.7) { hit = e; break; }
+        }
+        if (hit) {
+          p.hitSet.add(hit);
+          const dir = p.vel.clone().setY(0).normalize();
+          const dealt = dealDamage(hit, p.dmg, p.weapon, dir, 5, p.crit);
+          if (dealt > 0 && !p.noProc) ctx.onRangedHit?.(hit, dealt, p);
+          hitSpark(pos, p.color, false);
+          play('hit', { at: pos, vol: 0.5, rate: 1.4 });
+          if (--p.bounces > 0) {
+            let next = null, bestD = 8.5;
+            for (const e of ctx.enemies) {
+              if (!e.alive || e.spawning || p.hitSet.has(e)) continue;
+              const d = Math.hypot(e.pos.x - pos.x, e.pos.z - pos.z);
+              if (d < bestD) { bestD = d; next = e; }
+            }
+            if (next) {
+              const spd = p.vel.length();
+              p.vel.set(next.pos.x - pos.x, 0, next.pos.z - pos.z).normalize().multiplyScalar(spd);
+            } else { p.returning = true; p.hitSet.clear(); }
+          } else { p.returning = true; p.hitSet.clear(); }
+        } else if (blocked(pos) || p.life <= 1.2) {
+          p.returning = true;
+          p.hitSet.clear();
+        }
+      } else {
+        if (!p.owner || p.life <= 0) { removeProjectile(i); continue; }
+        const to = _tmpD.set(p.owner.pos.x - pos.x, 0, p.owner.pos.z - pos.z);
+        const d = to.length();
+        if (d < 1.2) { p.owner.onCatchChakram?.(p); removeProjectile(i); continue; }
+        to.multiplyScalar(1 / d);
+        pos.addScaledVector(to, 24 * dt);
+        for (const e of ctx.enemies) {
+          if (!e.alive || e.spawning || p.hitSet.has(e)) continue;
+          if (Math.hypot(e.pos.x - pos.x, e.pos.z - pos.z) < e.radius + 0.7) {
+            p.hitSet.add(e);
+            const dealt = dealDamage(e, Math.round(p.dmg * 0.9), p.weapon, to.clone(), 4, p.crit);
+            if (dealt > 0 && !p.noProc) ctx.onRangedHit?.(e, dealt, p);
+          }
+        }
+      }
+      for (const b of ctx.barrels) if (b.alive && Math.hypot(b.pos.x - pos.x, b.pos.z - pos.z) < 1.1) b.hit(p.dmg);
+      continue;
+    }
+
+    if (p.kind === 'orbit_disc') {
+      if (!p.owner || p.owner.dead || p.life <= 0) { removeProjectile(i); continue; }
+      p.elapsed += dt;
+      p.angle += dt * 5.2;
+      p.mesh.rotation.y += dt * 20;
+      pos.set(p.owner.pos.x + Math.cos(p.angle) * p.radius, 0.95, p.owner.pos.z + Math.sin(p.angle) * p.radius);
+      for (const e of ctx.enemies) {
+        if (!e.alive || e.spawning) continue;
+        const last = p.hitCd.get(e) ?? -1;
+        if (p.elapsed - last < 0.35) continue;
+        if (Math.hypot(e.pos.x - pos.x, e.pos.z - pos.z) < e.radius + 0.65) {
+          p.hitCd.set(e, p.elapsed);
+          const dealt = dealDamage(e, p.dmg, p.weapon, null, 5, false);
+          if (dealt > 0 && !p.noProc) ctx.onRangedHit?.(e, dealt, p);
+          hitSpark(pos, p.color, false);
+          play('hit', { at: pos, vol: 0.4, rate: 1.5 });
+        }
+      }
+      for (const b of ctx.barrels) if (b.alive && Math.hypot(b.pos.x - pos.x, b.pos.z - pos.z) < 0.9) b.hit(p.dmg);
       continue;
     }
 
@@ -514,11 +832,28 @@ export function updateProjectiles(dt) {
     }
 
     pos.addScaledVector(p.vel, dt);
-    // Vệt sáng phía sau đạn
     if (p.kind === 'orb' || p.kind === 'bigorb') {
       const big = p.kind === 'bigorb';
       emit(pos, { frame: F.glow, color: p.color, size: big ? 1.4 : 0.6, size2: 0.05, life: big ? 0.35 : 0.22, alpha: 0.8 });
       if (Math.random() < (big ? 0.8 : 0.3)) emit(pos, { frame: F.sparkle, color: 0xffffff, color2: p.color, size: big ? 0.7 : 0.35, size2: 0, life: 0.4, vel: _tmpV.set((Math.random() - 0.5) * 2, Math.random(), (Math.random() - 0.5) * 2) });
+      // Cầu Phép Lớn bay ngang qua mục tiêu mang Ấn Phép -> kích nổ chuỗi năng lượng!
+      if (big && !p.noProc) {
+        p.detonateT -= dt;
+        if (p.detonateT <= 0) {
+          p.detonateT = 0.22;
+          for (const e of ctx.enemies) {
+            if (!e.alive || e.spawning || !(e.arcaneMark > 0)) continue;
+            if (Math.hypot(e.pos.x - pos.x, e.pos.z - pos.z) < 3.2 + e.radius) {
+              const stacks = e.arcaneMark;
+              e.arcaneMark = 0; e.arcaneMarkT = 0;
+              spawnBolt(ctx.scene, pos.clone(), e.pos.clone().setY(0.8), 0x8fe0ff);
+              damageNumber(e.pos, 'Nổ Ấn Phép!', 'react overload');
+              play('zap', { at: e.pos, rate: 1.2 });
+              aoe(e.pos, 2.6, Math.round(p.dmg * 0.55 * stacks), p.weapon, 8);
+            }
+          }
+        }
+      }
     } else if (p.kind === 'arrow' || p.kind === 'pbolt') {
       emit(pos, { frame: F.glow, color: 0xffe0a0, size: 0.35, size2: 0, life: 0.15, alpha: 0.6 });
     }
@@ -537,16 +872,30 @@ export function updateProjectiles(dt) {
       if (hit) {
         if (p.kind === 'bigorb') { explodeBig(p); removeProjectile(i); continue; }
         if (p.kind === 'pbolt') {
-          dealDamage(hit, p.dmg, p.weapon, p.vel.clone().setY(0).normalize(), p.explode ? 4 : 6, false);
+          const dir = p.vel.clone().setY(0).normalize();
+          const dealt = dealDamage(hit, p.dmg, p.weapon, dir, p.explode ? 4 : 6, p.crit);
+          if (dealt > 0 && !p.noProc) ctx.onRangedHit?.(hit, dealt, p);
+          if (p.detonateMarks && hit.alive && hit.daggerMarks > 0 && ctx.player?.detonateDaggerMarks) {
+            ctx.player.detonateDaggerMarks(hit, ctx.player.dmgMul());
+          }
           hitSpark(pos.clone(), p.color, false);
           play('hit', { at: pos, vol: 0.5, rate: 1.3 });
           if (p.explode) { explosion(pos, 2.8, p.color, { smoke: true, scorch: true }); aoe(pos, 2.8, Math.round(p.dmg * 0.7), p.weapon, 12, { exclude: hit }); play('explode', { at: pos, vol: 0.6 }); removeProjectile(i); continue; }
+          if (p.explodeRadius > 0) {
+            explosion(pos, p.explodeRadius, p.color, { smoke: false, scorch: false });
+            aoe(pos, p.explodeRadius, Math.round(p.dmg * 0.5), p.weapon, 8, { exclude: hit });
+          }
           p.hitSet.add(hit);
           if (p.pierce-- <= 0) removeProjectile(i);
           continue;
         }
         const dir = p.vel.clone().setY(0).normalize();
-        dealDamage(hit, p.dmg, p.weapon, dir, 5, p.crit);
+        const dealt = dealDamage(hit, p.dmg, p.weapon, dir, 5, p.crit);
+        if (dealt > 0 && !p.noProc) ctx.onRangedHit?.(hit, dealt, p);
+        if (p.markArcane && hit.alive) {
+          hit.arcaneMark = Math.min(3, (hit.arcaneMark || 0) + 1);
+          hit.arcaneMarkT = 6;
+        }
         for (const e of ctx.enemies) {
           if (e === hit || !e.alive || e.spawning) continue;
           const d = Math.hypot(e.pos.x - pos.x, e.pos.z - pos.z);
@@ -557,7 +906,6 @@ export function updateProjectiles(dt) {
         }
         burst(pos, p.color, 14, { speed: 6, size: 0.14 });
         play('hit', { at: pos, vol: 0.6 });
-        // Nảy sang quái khác (nội tại Pháp Sư)
         if (p.bounces > 0) {
           p.hitSet.add(hit);
           const next = ctx.enemies.filter((e) => e.alive && !e.spawning && !p.hitSet.has(e)).sort((a, b) => a.pos.distanceTo(pos) - b.pos.distanceTo(pos))[0];
@@ -572,13 +920,12 @@ export function updateProjectiles(dt) {
         removeProjectile(i);
       }
     } else {
-      const player = (ctx.players || [ctx.player]).find((pl) => !pl.dead && Math.hypot(pl.pos.x - pos.x, pl.pos.z - pos.z) < pl.radius + 0.25);
-      if (player) {
-        // Đỡ đòn: phản đạn ngược lại
-        if (player.parryT > 0) {
-          player.onParry(null);
+      const pl = (ctx.players || [ctx.player]).find((x) => !x.dead && Math.hypot(x.pos.x - pos.x, x.pos.z - pos.z) < x.radius + 0.25);
+      if (pl) {
+        if (pl.parryT > 0) {
+          pl.onParry(null);
           p.friendly = true;
-          p.weapon = player.weapon;
+          p.weapon = pl.weapon;
           p.dmg = p.dmg * 3;
           p.splash = 1;
           p.hitSet = new Set();
@@ -586,7 +933,7 @@ export function updateProjectiles(dt) {
           p.life = 2;
           continue;
         }
-        if (player.hurt(p.dmg)) damageNumber(player.pos, p.dmg, 'player');
+        if (pl.hurt(p.dmg)) damageNumber(pl.pos, p.dmg, 'player');
         burst(pos, p.color, 10, { speed: 4 });
         removeProjectile(i);
       }
@@ -626,6 +973,7 @@ export const debugProjectiles = () => projectiles.length;
 
 export function clearProjectiles() {
   resetCombatFrame();
+  aftershocks.length = 0;
   for (let i = projectiles.length - 1; i >= 0; i--) removeProjectile(i);
   bombs.length = 0;
   for (const f of patches) { ctx.scene.remove(f.mesh); f.mesh.material?.dispose(); }

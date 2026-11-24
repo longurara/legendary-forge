@@ -101,6 +101,7 @@
       </div>
       <div id="fps-meter" class="fps-meter hidden">60 FPS</div>
 
+      <div id="weapon-mech-hud" class="weapon-mech hidden"></div>
       <div id="slots">
         <div class="slot" id="slot0"></div>
         <div class="swap-hint"><span class="keycap">Q</span><i class="ico ico-swap"></i></div>
@@ -232,7 +233,7 @@
         <button id="btn-save" class="btn m-util" style="--accent:#9fd4ff"><i class="ico m-ico" style="--i:url('/ui/icons/x_locked-chest.svg')"></i><span>Save</span></button>
         <div class="credits-wrap">
           <button id="btn-credits" class="btn m-util m-info" type="button" title="Tác giả &amp; Tài nguyên">ⓘ</button>
-          <div id="credits-pop" class="credits-pop"><p class="credits">Model: KayKit (Kay Lousberg), Quaternius · Giao diện, âm thanh: Kenney, rubberduck · Nhạc: yd, CleytonRX, Juhani Junkala · Icon: Lorc, Delapouite, sbed, Skoll, Willdabeast, Zeromancer – game-icons.net (CC BY 3.0) · Font: Grenze Gotisch, Alegreya SC, Signika (OFL)</p></div>
+          <div id="credits-pop" class="credits-pop"><p class="credits">Model: KayKit (Kay Lousberg), Quaternius, iPoly3D, Poly by Google · Giao diện, âm thanh: Kenney, rubberduck · Nhạc: yd, CleytonRX, Juhani Junkala · Icon: Lorc, Delapouite, sbed, Skoll, Willdabeast, Zeromancer – game-icons.net (CC BY 3.0) · Font: Grenze Gotisch, Alegreya SC, Signika (OFL)</p></div>
         </div>
       </div>
     </div>
@@ -248,12 +249,12 @@
             <p class="touch-guide">Chạm nửa trái màn hình để kéo cần di chuyển thả nổi. Giữ nút <b>Đánh</b> hoặc <b>Chiêu</b> để tự ngắm quái gần nhất, hoặc <b>kéo hướng</b> trên nút để ngắm tự do. Nút <b>Lướt</b> nằm sát bên trái nút Đánh để né &amp; Phản Xuyên nhanh; bấm <b>Tôi/Đổi</b> khi nút sáng cam để Tôi Vũ Khí hoặc Biến Hình. Góc trên phải có nút <b>Bản đồ tầng</b> &amp; <b>Toàn màn hình</b>.</p>
             <div class="ctrl"><span><span class="keycap">W</span><span class="keycap">A</span><span class="keycap">S</span><span class="keycap">D</span></span>Di chuyển</div>
             <div class="ctrl"><span><span class="keycap wide">Chuột</span></span>Ngắm hướng đánh</div>
-            <div class="ctrl"><span><span class="keycap wide">Chuột trái</span></span>Tấn công (giữ để đánh liên tục)</div>
+            <div class="ctrl"><span><span class="keycap wide">Chuột trái</span></span>Tấn công · Mỗi vũ khí có Đòn Lướt &amp; cơ chế riêng (Nỏ: bấm đúng vùng vàng để Nạp Hoàn Hảo)</div>
             <div class="ctrl"><span><span class="keycap wide">Space</span></span>Lướt né, bất tử khi lướt</div>
             <div class="ctrl"><span><span class="keycap">E</span></span>Nhặt vũ khí / rèn ở đe</div>
             <div class="ctrl"><span><span class="keycap">Q</span></span>Đổi giữa 2 vũ khí</div>
             <div class="ctrl"><span><span class="keycap">Esc</span></span>Tạm dừng</div>
-            <div class="ctrl"><span><span class="keycap wide">Chuột phải</span></span>Kỹ năng vũ khí: kiếm đỡ đòn, rìu ném, đại kiếm giữ để tích lực, trượng bắn cầu lớn</div>
+            <div class="ctrl"><span><span class="keycap wide">Chuột phải</span></span>Kỹ năng 12 vũ khí: đỡ đòn, ném/bắt rìu, tụ lực, cắm/thu thương, gặt hồn, đấm móc, kéo xích, luân quỹ đạo…</div>
             <div class="ctrl"><span><span class="keycap">R</span></span>Tuyệt kỹ khi thanh Nộ đầy (theo nguyên tố vũ khí)</div>
             <div class="ctrl"><span><span class="keycap">X</span></span>Phân rã vũ khí trên sàn thành Mảnh Thép</div>
             <div class="ctrl"><span><span class="keycap">E</span></span>Kết liễu quái đang choáng hoặc sắp chết (hồi máu); boss đang choáng: Trọng Kích</div>
@@ -282,7 +283,7 @@
             <h3>Cơ Chế Nâng Cao</h3>
             <p class="muted small"><b>Nhiệt Lưỡi &amp; Tôi Vũ Khí:</b> Đánh liên tục làm nóng lưỡi (50°–85° tăng +25% sát thương &amp; phá choáng; chạm 100° sẽ Quá Nhiệt). Nhấn <span class="keycap">Q</span> để <b>Tôi Đổi Vũ Khí / Đòn Biến Hình</b>, dùng Chuột Phải để <b>Phóng Nhiệt</b>, hoặc lướt qua Băng/Nước để <b>Tôi Địa Hình</b> tạo sương mù che đạn.</p>
             <p class="muted small"><b>Tam Giác Phản Phá &amp; Phá Bộ Phận:</b> Đòn cảnh báo <b>Đỏ-Trắng</b>: lướt thẳng VÀO để <b>Phản Xuyên</b>! Đòn <b>Tím</b>: dùng Kỹ năng / Đòn nặng để <b>Cắt Chiêu</b>! Phá bộ phận Boss rơi <b>Lõi Boss</b> để rèn vũ khí độc quyền; hoàn thành thử thách trên vũ khí Huyền Thoại để <b>Thức Tỉnh</b> tuyệt kỹ riêng.</p>
-            <p class="muted small"><b>Hóa Học Bề Mặt · Ánh Lửa &amp; Tha Hóa · Bóng Ma:</b> Lửa làm tan băng thành Nước (Sét vào Nước tạo Điện Trường); Băng đông cứng Nham thành Obsidian; Gió cuốn Lửa/Độc thành Lốc; đòn nặng làm sập Cột Đá. Đấu trường rộng <b>18×18</b> tích hợp <b>Radar góc phải</b> với <b>6 Vùng Đất</b> (thêm Đầm Lầy Độc &amp; Thánh Điện Lôi), <b>9 loại vũ khí</b> (+Thương, Lưỡi Hái, Chiến Chùy), <b>7 Nhân vật</b>, <b>4 Bạn đồng hành</b>, <b>6 Thần Hộ Mệnh</b> (15 thẻ Song Thần), <b>30 Di Vật &amp; 4 Bộ Di Vật</b>, <b>25 chủng quái</b> và <b>11 Boss</b> (gồm <b>TRÙM CUỐI Tầng 5 · Thợ Rèn Sa Ngã</b> mở Chế Độ Vô Tận Tầng 6+!). Ngoài ra còn có <b>Phòng Tập Lò Rèn</b> đo DPS và <b>Thủ Thành Lò Lửa</b> (10 đợt xây Trụ Pháo)!</p>
+            <p class="muted small"><b>Hóa Học Bề Mặt · Ánh Lửa &amp; Tha Hóa · Bóng Ma:</b> Lửa làm tan băng thành Nước (Sét vào Nước tạo Điện Trường); Băng đông cứng Nham thành Obsidian; Gió cuốn Lửa/Độc thành Lốc; đòn nặng làm sập Cột Đá. Đấu trường rộng <b>18×18</b> tích hợp <b>Radar góc phải</b> với <b>6 Vùng Đất</b> (thêm Đầm Lầy Độc &amp; Thánh Điện Lôi), <b>12 loại vũ khí</b> (+Song Quyền, Xích Liềm, Luân Kiếm), <b>7 Nhân vật</b>, <b>4 Bạn đồng hành</b>, <b>6 Thần Hộ Mệnh</b> (15 thẻ Song Thần), <b>30 Di Vật &amp; 4 Bộ Di Vật</b>, <b>25 chủng quái</b> và <b>11 Boss</b> (gồm <b>TRÙM CUỐI Tầng 5 · Thợ Rèn Sa Ngã</b> mở Chế Độ Vô Tận Tầng 6+!). Ngoài ra còn có <b>Phòng Tập Lò Rèn</b> đo DPS và <b>Thủ Thành Lò Lửa</b> (10 đợt xây Trụ Pháo)!</p>
             <div class="rarities"><span class="r0">Thường</span><span class="r1">Hiếm</span><span class="r2">Sử thi</span><span class="r3">Huyền thoại</span></div>
           </div>
         </div>
@@ -306,6 +307,8 @@
         <p class="muted small">Dùng Hồn Thép thu được từ quái để nâng cấp vĩnh viễn cho mọi lượt chơi sau.</p>
         <div class="souls-have"><i class="ico ico-soul"></i><b id="forge-souls">0</b> Hồn Thép</div>
         <div id="forge-list" class="forge-list"></div>
+        <h3 class="sec">Biến Thể Vũ Khí (Weapon Aspects)</h3>
+        <div id="aspect-list" class="aspect-list"></div>
         <button class="btn primary" data-close="forge">Xong</button>
       </div>
     </div>

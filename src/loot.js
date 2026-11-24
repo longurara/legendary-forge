@@ -297,7 +297,7 @@ export class Loot {
     if (a) {
       a.rise = Math.min(1, a.rise + dt * 2);
       a.group.position.y = -1.2 * (1 - a.rise) * (1 - a.rise);
-      a.light.intensity = 12 + Math.sin(time * 9) * 3;
+      if (a.light) a.light.intensity = 12 + Math.sin(time * 9) * 3;
       a.ring.material.opacity = a.used ? 0.1 : 0.45 + Math.sin(time * 4) * 0.2;
       a.label.classList.toggle('near', this.nearAnvil(player.pos));
       placeLabel(a.label, a.pos, camera, 2.2);

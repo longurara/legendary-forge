@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { keys, pressed, mouse, pad, touch, haptic } from './input.js';
 import { collide } from './world.js';
-import { spawnSlash, burst, addShake, addHitStop, damageNumber, spawnRing, spawnBolt, smoke, flash, hitSpark, emit, F } from './fx.js';
+import { spawnSlash, spawnThrust, burst, addShake, addHitStop, damageNumber, spawnRing, spawnBolt, smoke, flash, hitSpark, emit, F } from './fx.js';
 import { TYPES, RARITY, makeWeapon, buildWeaponMesh, buildHeldWeapon, slashColor, applyAffixes, rollAffixes, swapWeaponForm, updateWeaponHeatVisual } from './weapons.js';
 import { onIce, onWater, spawnSteamCloud, reactSurface, damagePillars } from './hazards.js';
-import { ctx, dealDamage, spawnOrb, spawnBoomerang, spawnSwordWave, spawnFirePatch, spawnToxic, scheduleBomb, aoe } from './combat.js';
+import { ctx, dealDamage, spawnOrb, spawnBoomerang, spawnSwordWave, spawnFirePatch, spawnToxic, scheduleBomb, aoe, scheduleAftershock, tryCatchBoomerang, spawnLodgedSpear, recallLodgedSpear, hasLodgedSpear, spawnChakram, spawnOrbitDiscs } from './combat.js';
 import { fireRunes, progressAwakening } from './runes.js';
 import { flameState, flameTier, hasDynCurse, addFlame } from './corruption.js';
 import { models, fitModel, Animator } from './models.js';
@@ -31,6 +31,9 @@ export const SPECIALS = {
   spear: { name: 'Ném Thương', icon: 'x_arrows', cd: 2.8 },
   scythe: { name: 'Gặt Hồn', icon: 'x_death-zone', cd: 3.4 },
   hammer: { name: 'Chấn Động', icon: 'anvil', cd: 3.6 },
+  gauntlets: { name: 'Đấm Móc', icon: 'x_mailed-fist', cd: 2.6 },
+  whip: { name: 'Xích Kéo', icon: 'x_whip', cd: 3.0 },
+  chakram: { name: 'Luân Quỹ Đạo', icon: 'x_chakram', cd: 3.8 },
 };
 
 export class Player {
@@ -156,6 +159,25 @@ export class Player {
     this.nextCrit = false;
     this.hitCount = 0;
     this.leechAcc = 0;
+    this.riposteT = 0;
+    this.axeFury = false;
+    this.bowAmmo = 5;
+    this.bowMax = 5;
+    this.reloadT = 0;
+    this.reloadDur = 1.15;
+    this.empoweredAmmo = 0;
+    this.activeReloadLocked = false;
+    this.scytheSouls = 0;
+    this.fistFury = 0;
+    this.fistFuryT = 0;
+    this.momentumStacks = 0;
+    this.momentumT = 0;
+    this.lodgedSpear = false;
+    this.rangedCombo = 0;
+    this.novaCount = 0;
+    this.eclipsePhase = 0;
+    this.phoenixCount = 0;
+    this.pendingTimers = [];
     this.relicT = { frost: 0, quiver: 0, ember: 0, iceArmor: 0, tornado: 0 };
     const startLv = up.start || 0;
     const wType = this.char.weapon;
@@ -272,20 +294,59 @@ export class Player {
     }
   }
 
+  aspectOf(type = this.weapon?.type) {
+    return (this.meta && this.meta.aspects && this.meta.aspects[type]) || 'default';
+  }
+
+  effAtkSpd() {
+    let spd = this.stats.atk;
+    if (this.weapon?.type === 'gauntlets' && this.fistFury > 0) spd *= 1 + 0.08 * this.fistFury;
+    if (this.stats.momentum && this.momentumStacks > 0) spd *= 1 + 0.04 * this.momentumStacks;
+    if (this.weapon?.type === 'crossbow' && this.aspectOf('crossbow') === 'repeater') spd *= 1.45;
+    return spd;
+  }
+
+  later(sec, fn) {
+    if (!this.pendingTimers) this.pendingTimers = [];
+    this.pendingTimers.push({ t: sec, fn });
+  }
+
   equip(slot) {
     this.slot = slot;
     this.attack = null;
     this.comboIdx = 0;
+    this.rangedCombo = 0;
     this.charging = false;
+    this.axeFury = false;
     const T = TYPES[this.weapon.type];
+    this.reloadDur = T.reloadDur || 1.15;
+    if (this.weapon.type === 'crossbow') {
+      const aspect = this.aspectOf('crossbow');
+      this.bowMax = aspect === 'repeater' ? 8 : (T.mag || 5);
+      this.bowAmmo = this.bowMax;
+      this.reloadT = 0;
+      this.empoweredAmmo = 0;
+      this.activeReloadLocked = false;
+    } else {
+      this.reloadT = 0;
+      this.empoweredAmmo = 0;
+      this.activeReloadLocked = false;
+    }
     this.pivot.clear();
     if (this.held) { this.held.parent?.remove(this.held); this.held = null; }
     if (this.heldL) { this.heldL.parent?.remove(this.heldL); this.heldL = null; }
     if (this.animated && this.hand) {
       this.held = buildHeldWeapon(this.weapon);
       if (this.held) this.hand.add(this.held);
-      // Song Dao: thêm dao tay trái
-      if (T.dual && this.handL) { this.heldL = buildHeldWeapon(this.weapon); if (this.heldL) { this.heldL.rotation.set(0, 0, 0); this.handL.add(this.heldL); } }
+      // Song Dao / Song Quyền: thêm vũ khí tay trái (Song Quyền giữ góc nghiêng model)
+      if (T.dual && this.handL) {
+        this.heldL = buildHeldWeapon(this.weapon);
+        if (this.heldL) {
+          if (this.weapon.type === 'gauntlets') this.heldL.rotation.set(-Math.PI / 2, 0, Math.PI);
+          else this.heldL.rotation.set(0, 0, 0);
+          this.handL.add(this.heldL);
+        }
+      }
       if (this.shield) this.shield.visible = !!T.shield;
     }
     if (!this.held) {
@@ -337,6 +398,8 @@ export class Player {
   hurt(dmg) {
     if (this.dead || this.god) return false;
     dmg = Math.max(1, Math.round(dmg * (ctx.enemyDmgMul || 1) * (this.relics.includes('glass') ? 1.4 : 1) * (hasDynCurse('glass_wrath') ? 1.2 : 1)));
+    const hyperArmor = this.charging && (this.weapon?.type === 'greatsword' || this.activeSpecialType === 'greatsword');
+    if (hyperArmor) dmg = Math.max(1, Math.round(dmg * 0.5));
     if (this.parryT > 0) { this.onParry(); return false; }
     if (this.dashTime > 0 || this.dodgeWindow > 0) {
       if (!this.perfectUsed) this.onPerfectDodge();
@@ -415,7 +478,9 @@ export class Player {
     const hot = !!this.hotParry;
     this.hotParry = false;
     if (this.stats.shadowcrit) this.nextCrits = 3;
-    this.specialCd = Math.min(this.specialCd, 0.3);
+    this.specialCd = 0;
+    this.riposteT = 2.5;
+    this.stamina = Math.min(100, this.stamina + 30);
     this.slowmoT = Math.max(this.slowmoT, 0.4);
     this.iframes = 0.4;
     this.playOnce('Block_Attack', 0.45);
@@ -429,7 +494,13 @@ export class Player {
     const mul = RARITY[this.weapon.rarity].mul * this.stats.dmg * (hot ? 1.5 : 1);
     aoe(this.pos, hot ? 4.8 : 3, Math.round(25 * mul), hot ? { element: 'fire', element2: this.weapon.element } : this.weapon, hot ? 16 : 12, { barrels: true });
     if (hot) spawnFirePatch(this.pos, 2.8, 3.0, Math.round(14 * this.stats.dmg));
-    if (this.hasRelic('mirror')) this.specialCd *= 0.6;
+    if (this.weapon?.type === 'sword' && this.aspectOf('sword') === 'stormblade') {
+      const bA = this.facing;
+      for (const off of [-0.24, 0, 0.24]) {
+        const d = new THREE.Vector3(Math.sin(bA + off), 0, Math.cos(bA + off));
+        spawnOrb(this.pos.clone().addScaledVector(d, 0.9).setY(1.05), d, this.weapon, Math.round(16 * mul), 0, 28, { bolt: true, pierce: 2, crit: true });
+      }
+    }
     if (this.stats.parryHeal) this.heal(this.stats.parryHeal);
     this.gainRage(12);
     fireRunes(this, 'dodge', this.pos, this.aimDir(), Math.round(26 * mul));
@@ -459,25 +530,109 @@ export class Player {
     return mul;
   }
 
-  startAttack() {
+  startAttack(fromClick = false) {
     const w = this.weapon;
     const T = TYPES[w.type];
-    const spd = this.stats.atk;
+    const spd = this.effAtkSpd();
+    // Bắt Rìu Hoàn Hảo khi rìu đang bay về gần người chơi
+    if (w.type === 'axe' && this.boomerangOut && tryCatchBoomerang(this)) {
+      this.boomerangOut = false;
+      this.axeFury = true;
+      this.addHeat(18);
+      this.stamina = Math.min(100, this.stamina + 25);
+      this.specialCd = Math.min(this.specialCd, 0.5);
+      damageNumber(this.pos, 'Bắt Rìu Hoàn Hảo!', 'react perfect');
+      play('swap', { rate: 1.45 });
+      if (this.aspectOf('axe') === 'berserk_axe') {
+        const fDmg = Math.round(18 * this.dmgMul());
+        for (let k = 0; k < 4; k++) {
+          this.later(k * 0.42, () => {
+            if (this.dead) return;
+            spawnRing(this.scene, this.pos, 3.6, 0xff7a2a, 0.32);
+            aoe(this.pos, 3.6, fDmg, { element: 'fire', element2: null }, 6);
+          });
+        }
+      }
+    }
+    // Nỏ: nạp tên & Nạp Hoàn Hảo
+    if (T.ranged && w.type === 'crossbow') {
+      if (this.reloadT > 0) {
+        if (fromClick && !this.activeReloadLocked) {
+          const prog = 1 - this.reloadT / Math.max(0.1, this.reloadDur);
+          if (prog >= 0.42 && prog <= 0.70) {
+            this.reloadT = 0;
+            this.bowAmmo = this.bowMax;
+            this.empoweredAmmo = this.bowMax;
+            this.activeReloadLocked = false;
+            damageNumber(this.pos, 'Nạp Hoàn Hảo!', 'react perfect');
+            spawnRing(this.scene, this.pos, 2.8, 0xffcf4a, 0.3);
+            play('swap', { rate: 1.5 });
+            haptic(18);
+          } else {
+            this.activeReloadLocked = true;
+            this.reloadT = Math.min(this.reloadDur, this.reloadT + 0.25);
+            damageNumber(this.pos, 'Kẹt Cò!', 'burn');
+            play('uiBack', { vol: 0.45 });
+          }
+        }
+        return;
+      }
+      if (this.bowAmmo <= 0) {
+        this.reloadDur = Math.max(0.8, (T.reloadDur || 1.15) / Math.sqrt(Math.max(1, spd)));
+        this.reloadT = this.reloadDur;
+        this.activeReloadLocked = false;
+        damageNumber(this.pos, 'Đang nạp tên...', 'ui');
+        play('swap', { rate: 0.8 });
+        return;
+      }
+    }
     if (T.ranged) {
-      this.attack = { t: 0, dur: 0.22 / spd, hitAt: 0.12 / spd, ranged: true };
-      this.attackCd = T.shot.cooldown / spd;
+      if (this.postDash > 0) {
+        this.postDash = 0;
+        const dashMap = { staff: 'Sóng Hư Không!', crossbow: 'Trượt Bắn!', chakram: 'Quét Luân!' };
+        const dur = 0.24 / spd;
+        this.attack = { t: 0, dur, hitAt: 0.08 / spd, ranged: true, dashAtk: true, big: true };
+        this.attackCd = (T.shot.cooldown * 0.9) / spd;
+        this.playOnce(T.anim, 0.36 / spd);
+        damageNumber(this.pos, dashMap[w.type] || 'Lướt Bắn!', 'react perfect');
+        return;
+      }
+      const s = T.shots ? T.shots[this.rangedCombo % T.shots.length] : T.shot;
+      if (T.shots) this.rangedCombo = (this.rangedCombo + 1) % T.shots.length;
+      this.attack = { t: 0, dur: 0.22 / spd, hitAt: 0.12 / spd, ranged: true, shotSpec: s, big: !!s.big };
+      this.attackCd = s.cooldown / spd;
       this.playOnce(T.anim, 0.38 / spd);
       return;
     }
     let c = T.combo[this.comboIdx % T.combo.length];
     if (this.postDash > 0) {
-      // Đâm Lướt: đòn đâm xa, sát thương cao, hất văng mạnh
       this.postDash = 0;
-      c = { ...c, anim: '1H_Melee_Attack_Stab', arc: 1.0, range: c.range * 1.25, dmg: c.dmg * 1.7, kb: c.kb * 1.8 + 6, lunge: 9, thrust: true, big: true, dur: c.dur * 0.9, dashAtk: true };
-      damageNumber(this.pos, 'Đâm Lướt!', 'react perfect');
+      const dashTable = {
+        sword: { label: 'Xuyên Kiếm!', anim: '1H_Melee_Attack_Stab', arc: 1.0, range: 3.6, dmg: 18, kb: 12, dur: 0.24, lunge: 11, thrust: true, shake: 0.28, stop: 0.06 },
+        axe: { label: 'Bổ Xẻ Lướt!', anim: '2H_Melee_Attack_Chop', arc: 1.6, range: 3.6, dmg: 26, kb: 16, dur: 0.34, lunge: 8, from: 0.9, to: -0.9, poiseMul: 1.8, shake: 0.38, stop: 0.08 },
+        greatsword: { label: 'Càn Quét!', anim: '2H_Melee_Attack_Spin', arc: 4.4, range: 4.2, dmg: 30, kb: 18, dur: 0.38, lunge: 8.5, from: 1.4, to: -3.0, poiseMul: 1.6, shake: 0.45, stop: 0.1 },
+        daggers: { label: 'Liên Trảm Chéo!', anim: 'Dualwield_Melee_Attack_Slice', arc: 2.4, range: 2.9, dmg: 15, kb: 8, dur: 0.2, lunge: 8, from: 1.1, to: -1.1, doubleCross: true, shake: 0.22, stop: 0.05 },
+        spear: { label: 'Thương Phóng Lao!', anim: '2H_Melee_Attack_Stab', arc: 0.75, range: 5.8, dmg: 24, kb: 16, dur: 0.28, lunge: 12, thrust: true, shake: 0.35, stop: 0.08 },
+        scythe: { label: 'Vòng Xoáy Tử Thần!', anim: '2H_Melee_Attack_Spin', arc: Math.PI * 2, range: 4.2, dmg: 25, kb: -12, dur: 0.36, lunge: 7, from: 1.2, to: 1.2 - Math.PI * 2, pull: true, shake: 0.4, stop: 0.09 },
+        hammer: { label: 'Búa Dộng Đất!', anim: '2H_Melee_Attack_Chop', arc: Math.PI * 2, range: 3.9, dmg: 30, kb: 22, dur: 0.42, lunge: 7.5, from: 1.1, to: -1.1, poiseMul: 2.5, dashSlam: true, shake: 0.55, stop: 0.12 },
+        gauntlets: { label: 'Quyền Xung Kích!', anim: 'Dualwield_Melee_Attack_Stab', arc: 2.0, range: 2.8, dmg: 22, kb: 20, dur: 0.22, lunge: 11, thrust: true, poiseMul: 2.0, shake: 0.36, stop: 0.08 },
+        whip: { label: 'Roi Quất Ngược!', anim: '1H_Melee_Attack_Slice_Horizontal', arc: 2.6, range: 5.5, dmg: 20, kb: -12, dur: 0.3, lunge: 6, from: -1.3, to: 1.3, pull: true, shake: 0.3, stop: 0.07 },
+      };
+      const dc = dashTable[w.type] || { label: 'Đâm Lướt!', anim: '1H_Melee_Attack_Stab', arc: 1.0, range: c.range * 1.25, dmg: c.dmg * 1.7, kb: c.kb * 1.8 + 6, dur: c.dur * 0.9, lunge: 9, thrust: true, shake: 0.3, stop: 0.06 };
+      c = { ...c, ...dc, big: true, dashAtk: true };
+      damageNumber(this.pos, dc.label, 'react perfect');
+    } else if (w.type === 'sword' && this.riposteT > 0) {
+      this.riposteT = 0;
+      this.nextCrit = true;
+      c = { ...c, anim: '2H_Melee_Attack_Spin', arc: 3.4, range: 3.8, dmg: 30, kb: 16, dur: 0.3, lunge: 7, from: 1.2, to: -2.2, big: true, riposte: true, shake: 0.45, stop: 0.1 };
+      damageNumber(this.pos, 'Phản Kiếm!', 'react perfect');
+    } else if (w.type === 'axe' && this.axeFury) {
+      this.axeFury = false;
+      c = { ...c, anim: '2H_Melee_Attack_Chop', arc: 2.6, range: c.range * 1.2, dmg: Math.round(c.dmg * 1.65), kb: c.kb + 6, big: true, poiseMul: 2.0, axeFury: true, shake: 0.45, stop: 0.1 };
+      damageNumber(this.pos, 'Bổ Cuồng Nộ!', 'react melt');
     }
     const dur = c.dur / spd;
-    this.attack = { ...c, dur, range: c.range * this.stats.range, t: 0, hitAt: this.animated ? dur * 0.45 : 0, hit: false, big: !!c.big };
+    this.attack = { ...c, dur, range: c.range * this.stats.range, t: 0, hitAt: this.animated ? dur * 0.45 : 0, hit: false, big: !!c.big, isLastCombo: !c.dashAtk && !c.riposte && (this.comboIdx % T.combo.length === T.combo.length - 1) };
     this.playOnce(c.anim, dur * 1.35);
     this.comboIdx = (this.comboIdx + 1) % T.combo.length;
   }
@@ -529,8 +684,20 @@ export class Player {
     if (poiseExtra > 0 && e.poiseMax && e.stunT <= 0) e.poise += dmg * poiseExtra;
 
     const dealt = dealDamage(e, dmg, w0, dir, kb * (st.gust ? 1.7 : 1), big || crit);
+    this.applyOnHitProcs(e, dmg, dealt, dir, kb, big, crit, back, w0, opts);
+    return dealt;
+  }
 
-    if ((st.ignite || (back && st.shadowflame) || (hz === 'hot' && big)) && e.alive) {
+  onRangedHit(e, dealt, proj) {
+    if (!e || this.dead || proj?.noProc) return;
+    const w0 = proj?.weapon || this.weapon;
+    const dir = proj?.vel && proj.vel.lengthSq() > 0.01 ? proj.vel.clone().normalize() : this.aimDir();
+    this.applyOnHitProcs(e, Math.max(1, dealt || 1), Math.max(1, dealt || 1), dir, 4, !!proj?.big, !!proj?.crit, false, w0, { noBossProc: !!proj?.noBossProc });
+  }
+
+  applyOnHitProcs(e, dmg, dealt, dir, kb, big, crit, back, w0, opts = {}) {
+    const st = this.stats;
+    if ((st.ignite || (back && st.shadowflame) || (this.heatZone(w0) === 'hot' && big)) && e.alive) {
       e.burnT = Math.max(e.burnT, 3);
       e.burnDps = Math.max(e.burnDps, dmg * (back && st.shadowflame ? 0.5 : 0.25));
     }
@@ -559,16 +726,80 @@ export class Player {
     }
     if (crit && st.critchain) dealDamage(e, Math.max(1, Math.round(dmg * 0.25)), { element: 'lightning', element2: null }, null, 0, true, true);
     if (st.plasma && e.burnT > 0 && Math.random() < 0.3) { spawnRing(this.scene, e.pos, 2.2, 0xffb040, 0.3); aoe(e.pos, 2.2, Math.round(dmg * 0.5), { element: 'none', element2: null }, 10, { exclude: e }); }
+    // 6 Phụ tố mới
+    if (st.echoHit && !opts.noEcho && e.alive && Math.random() < 0.25) {
+      const target = e, eDmg = Math.max(1, Math.round(dmg * 0.45)), eDir = dir ? dir.clone() : this.aimDir();
+      this.later(0.18, () => {
+        if (this.dead || !target.alive) return;
+        flash(target.pos.clone().setY(0.9), 0xb8d8ff, 1.5, 0.12, false);
+        dealDamage(target, eDmg, w0, eDir, 2, false, false);
+      });
+    }
+    if (st.shred && e.alive) e.shredT = Math.max(e.shredT || 0, 4.0);
+    if (st.momentum) { this.momentumStacks = Math.min(5, (this.momentumStacks || 0) + 1); this.momentumT = 4.0; }
+    if (st.elemNova && ++this.novaCount % 5 === 0) {
+      const col = slashColor(w0);
+      spawnRing(this.scene, e.pos, 3.6, col, 0.38);
+      aoe(e.pos, 3.6, Math.max(10, Math.round(dmg * 0.85)), w0, 10, { exclude: e });
+      play('explode', { at: e.pos, vol: 0.45, rate: 1.4 });
+    }
     // Kiệt tác Tàn Hỏa: mỗi đòn thứ 2 bắn tia lửa xuyên giáp
     if (st.mwSpark && ++this.sparkCount % 2 === 0) {
       const sd = dir || this.aimDir();
       spawnOrb(this.pos.clone().addScaledVector(sd, 0.8).setY(1.0), sd, { element: 'fire', element2: null }, Math.round(dmg * 0.45), 0, 24, { bolt: true, pierce: 2 });
     }
-    // Vũ khí huyền thoại (công thức rèn & Lõi Boss)
+    // Vũ khí huyền thoại (12 công thức rèn & 11 Lõi Boss)
     const lg = w0.legend;
     if (lg === 'blizzard' && Math.random() < 0.2) { spawnRing(this.scene, e.pos, 2.5, 0xbff0ff, 0.4); for (const o of ctx.enemies) if (o.alive && o.pos.distanceTo(e.pos) < 2.5) { o.frozenT = 1.4; o.slowT = 2.5; } }
     if (lg === 'judgement' && crit) { spawnBolt(this.scene, e.pos.clone().setY(9), e.pos.clone().setY(0.5), 0xfff6d0); dealDamage(e, Math.round(dmg * 0.5), { element: 'holy', element2: null }, null, 0, true, false); }
     if (lg === 'plague') for (const o of ctx.enemies) if (o !== e && o.alive && o.pos.distanceTo(e.pos) < 3) { o.poisonStacks = Math.min(8, (o.poisonStacks || 0) + 1); o.poisonT = 4; o.poisonDps = Math.max(o.poisonDps || 0, dmg * 0.1); }
+    if (lg === 'phoenix' && ++this.phoenixCount % 4 === 0 && !opts.noBossProc) {
+      spawnRing(this.scene, e.pos, 3.2, 0xff7a2a, 0.4);
+      aoe(e.pos, 3.2, Math.round(dmg * 0.8), { element: 'fire', element2: 'wind' }, 10);
+      for (const o of ctx.enemies) if (o.alive && o.pos.distanceTo(e.pos) < 3.4) { o.burnT = Math.max(o.burnT || 0, 3.5); o.burnDps = Math.max(o.burnDps || 0, dmg * 0.25); }
+    }
+    if (lg === 'eclipse' && !opts.noBossProc && ++this.eclipsePhase % 2 === 0) {
+      const fireTurn = (this.eclipsePhase % 4) === 2;
+      spawnRing(this.scene, e.pos, 2.8, fireTurn ? 0xff7a2a : 0x7fdcff, 0.36);
+      aoe(e.pos, 2.8, Math.round(dmg * 0.65), { element: fireTurn ? 'fire' : 'ice', element2: null }, 8, { exclude: e });
+      if (!fireTurn && e.alive) e.slowT = Math.max(e.slowT || 0, 2.5);
+    }
+    if (lg === 'supernova' && (big || crit) && !opts.noBossProc) {
+      spawnRing(this.scene, e.pos, 2.8, 0xffb84a, 0.38);
+      aoe(e.pos, 2.8, Math.round(dmg * 0.75), { element: 'fire', element2: 'lightning' }, 12);
+      play('explode', { at: e.pos, vol: 0.45, rate: 1.3 });
+    }
+    if (lg === 'frostblood' && (e.frozenT > 0 || e.slowT > 0) && !opts.noBossProc) {
+      this.heal(3);
+      if (e.alive) dealDamage(e, Math.max(1, Math.round(dmg * 0.3)), { element: 'blood', element2: null }, null, 0, false, true);
+    }
+    if (lg === 'tempest' && !opts.noBossProc && Math.random() < 0.25) {
+      let c = 0;
+      for (const o of ctx.enemies) {
+        if (o === e || !o.alive || o.pos.distanceTo(e.pos) > 6) continue;
+        spawnBolt(this.scene, e.pos.clone().setY(1.0), o.pos.clone().setY(1.0), 0xffe14a);
+        dealDamage(o, Math.round(dmg * 0.55), { element: 'lightning', element2: 'wind' }, null, 4, true, false);
+        if (++c >= 3) break;
+      }
+    }
+    if (lg === 'hemotoxin' && !opts.noBossProc && e.alive && (e.poisonStacks || 0) >= 3) {
+      e.poisonStacks = Math.max(0, e.poisonStacks - 3);
+      const drain = Math.min(Math.round((e.hp || 0) * 0.18), Math.round(dmg * 2.2 + 40));
+      if (drain > 0) {
+        dealDamage(e, drain, { element: 'blood', element2: 'poison' }, null, 0, true, false);
+        this.heal(2);
+      }
+    }
+    if (lg === 'seraphim' && big && !opts.noBossProc) {
+      spawnRing(this.scene, e.pos, 3.0, 0xffe8a0, 0.4);
+      aoe(e.pos, 3.0, Math.round(dmg * 0.7), { element: 'fire', element2: 'holy' }, 10);
+      addFlame(2);
+    }
+    if (lg === 'aegis_frost' && crit && !opts.noBossProc) {
+      spawnRing(this.scene, e.pos, 2.8, 0x9fe8ff, 0.35);
+      for (const o of ctx.enemies) if (o.alive && o.pos.distanceTo(e.pos) < 2.8) { o.slowT = Math.max(o.slowT || 0, 2.5); o.frozenT = Math.max(o.frozenT || 0, 1.0); }
+      this.shieldHp = Math.min(24, (this.shieldHp || 0) + 4);
+    }
     if (lg === 'boss_slime' && !opts.noBossProc) {
       for (const side of [-0.5, 0.5]) {
         const a = Math.atan2((dir || this.aimDir()).x, (dir || this.aimDir()).z) + side;
@@ -578,12 +809,12 @@ export class Player {
     }
     if (lg === 'boss_shadow' && (crit || back) && e.alive && !opts.noBossProc) {
       const target = e, snapDmg = Math.round(dmg * 0.55), snapDir = (dir || this.aimDir()).clone();
-      setTimeout(() => {
+      this.later(0.24, () => {
         if (!target.alive || this.dead) return;
         smoke(target.pos.clone().setY(0.9), { count: 4, color: 0x3a2060, size: 0.9, life: 0.5, alpha: 0.6 });
         flash(target.pos.clone().setY(1.0), 0xb89aff, 2.0, 0.14, false);
         dealDamage(target, snapDmg, { element: 'blood', element2: 'wind' }, snapDir, 5, true, false);
-      }, 240);
+      });
     }
     if (lg === 'boss_golem' && (big || crit) && !opts.noBossProc) {
       spawnRing(this.scene, e.pos, 3.2, 0xff6a1a, 0.4);
@@ -619,6 +850,10 @@ export class Player {
       aoe(e.pos, 3.2, Math.round(dmg * 0.45), { element: 'fire', element2: 'holy' }, 10, { exclude: e });
       addFlame(4);
     }
+    if (w0.awakened && (big || crit) && !opts.noAwakenProc && e.alive && (this.awakenHitCount = (this.awakenHitCount || 0) + 1) % 3 === 0) {
+      spawnRing(this.scene, e.pos, 2.8, 0xffe8a0, 0.35);
+      aoe(e.pos, 2.8, Math.round(dmg * 0.55), w0, 8, { exclude: e });
+    }
     // Mạch Cổ Ngữ (cơ chế #3) & Thức Tỉnh (cơ chế #8)
     this.fourthCount++;
     if (crit) {
@@ -648,7 +883,22 @@ export class Player {
       play('zap', { at: e.pos });
       dealDamage(e, Math.round(40 * this.stats.dmg), { element: 'lightning', element2: null }, null, 0, true, false);
     }
-    return dealt;
+  }
+
+  detonateDaggerMarks(e, mul) {
+    const marks = e.daggerMarks || 0;
+    if (marks <= 0) return 0;
+    e.daggerMarks = 0;
+    e.daggerMarkT = 0;
+    const bonusDmg = Math.round((8 + 10 * marks) * mul);
+    damageNumber(e.pos, `Nổ ${marks} Sát Ấn!`, 'react ult');
+    spawnRing(this.scene, e.pos, 2.4, 0xff5a8a, 0.3);
+    burst(e.pos.clone().setY(1.0), 0xff5a8a, 12 + marks * 4, { speed: 6, size: 0.13 });
+    play('hitHeavy', { at: e.pos, rate: 1.3 });
+    dealDamage(e, bonusDmg, this.weapon, this.aimDir(), 6, true, true);
+    if (this.dashStock < this.stats.dashCharges) { this.dashStock++; this.dashCd = this.dashStock < this.stats.dashCharges ? this.dashCdMax : 0; }
+    else this.stamina = Math.min(100, this.stamina + 25);
+    return marks;
   }
 
   resolveHit(enemies) {
@@ -657,40 +907,122 @@ export class Player {
     const T = TYPES[w.type];
     const mul = this.dmgMul();
     if (a.ranged) {
-      const s = T.shot;
+      const s = a.shotSpec || T.shot;
       const dir = this.aimDir();
       const origin = this.pos.clone().addScaledVector(dir, 1.2).setY(1.0);
       const crit = this.rollCrit();
+      if (a.dashAtk) {
+        const dashDmg = Math.round(s.dmg * 1.45 * mul * (crit ? this.stats.critMult : 1));
+        if (w.type === 'staff') {
+          for (const e of enemies) {
+            if (!e.alive || e.spawning || e.pos.distanceTo(this.pos) > 3.6 + e.radius) continue;
+            const d = new THREE.Vector3(e.pos.x - this.pos.x, 0, e.pos.z - this.pos.z).normalize();
+            e.knock.addScaledVector(d, 10);
+          }
+          for (const off of [-0.24, 0, 0.24]) {
+            const ang = Math.atan2(dir.x, dir.z) + off;
+            spawnOrb(origin, new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang)), w, Math.round(dashDmg * 0.7), 1.3, s.speed * this.stats.range, { bounces: this.stats.bounce, markArcane: true, crit });
+          }
+        } else if (w.type === 'crossbow') {
+          const isEmp = (this.empoweredAmmo || 0) > 0;
+          if (isEmp) this.empoweredAmmo--;
+          this.bowAmmo = Math.max(0, (this.bowAmmo ?? this.bowMax) - 1);
+          const rep = this.aspectOf('crossbow') === 'repeater';
+          for (const off of [-0.14, 0, 0.14]) {
+            const ang = Math.atan2(dir.x, dir.z) + off;
+            spawnOrb(origin, new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang)), w, Math.round(dashDmg * (isEmp ? 0.8 : 0.65)), 0, s.speed * this.stats.range, { bolt: true, pierce: s.pierce + (this.stats.ricochet ? 1 : 0), explode: false, explodeRadius: isEmp && rep ? 2.4 : 0, crit, big: isEmp });
+          }
+          if (this.bowAmmo <= 0) {
+            this.reloadDur = Math.max(0.8, (T.reloadDur || 1.15) / Math.sqrt(Math.max(1, this.effAtkSpd())));
+            this.reloadT = this.reloadDur;
+            this.activeReloadLocked = false;
+          }
+        } else if (w.type === 'chakram') {
+          spawnSlash(this.scene, this.pos, this.facing, Math.PI * 2, 3.2, slashColor(w), false);
+          aoe(this.pos, 3.2, Math.round(12 * mul), w, 8);
+          const extraB = (this.aspectOf('chakram') === 'infinite_ring' ? 2 : 0) + (this.stats.ricochet ? 1 : 0);
+          spawnChakram(this, origin, dir, w, dashDmg, { bounces: 3 + extraB, speed: s.speed * this.stats.range, crit, big: true });
+        }
+        this.addHeat(4);
+        this.gainRage(6);
+        play('cast', { rate: 1.15 });
+        addShake(0.14);
+        return;
+      }
       const shotDmg = Math.round(s.dmg * mul * (crit ? this.stats.critMult : 1));
-      spawnOrb(origin, dir, w, shotDmg, s.splash, s.speed * this.stats.range, T.bolt ? { bolt: true, pierce: s.pierce } : { bounces: this.stats.bounce });
+      if (w.type === 'chakram') {
+        const extraB = (this.aspectOf('chakram') === 'infinite_ring' ? 2 : 0) + (this.stats.ricochet ? 1 : 0);
+        if (s.twinReturn) {
+          for (const off of [-0.22, 0.22]) {
+            const ang = Math.atan2(dir.x, dir.z) + off;
+            spawnChakram(this, origin, new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang)), w, shotDmg, { bounces: (s.bounces || 3) + extraB, speed: s.speed * this.stats.range, crit, big: true });
+          }
+        } else {
+          spawnChakram(this, origin, dir, w, shotDmg, { bounces: (s.bounces || 3) + extraB, speed: s.speed * this.stats.range, crit });
+        }
+      } else if (w.type === 'crossbow') {
+        this.bowAmmo = Math.max(0, (this.bowAmmo ?? this.bowMax) - 1);
+        const isEmp = (this.empoweredAmmo || 0) > 0;
+        if (isEmp) this.empoweredAmmo--;
+        const rep = this.aspectOf('crossbow') === 'repeater';
+        const pierce = s.pierce + (this.stats.ricochet ? 1 : 0) + (isEmp && !rep ? 2 : 0);
+        const bDmg = Math.round(shotDmg * (isEmp ? (rep ? 1.35 : 1.45) : 1));
+        spawnOrb(origin, dir, w, bDmg, 0, s.speed * this.stats.range, { bolt: true, pierce, explode: false, explodeRadius: isEmp && rep ? 2.5 : 0, crit: crit || isEmp, big: isEmp });
+        if (isEmp) burst(origin, 0xffcf4a, 6, { speed: 4, size: 0.1 });
+        if (this.bowAmmo <= 0) {
+          this.reloadDur = Math.max(0.8, (T.reloadDur || 1.15) / Math.sqrt(Math.max(1, this.effAtkSpd())));
+          this.reloadT = this.reloadDur;
+          this.activeReloadLocked = false;
+        }
+      } else if (s.volley) {
+        for (const off of [-0.2, 0, 0.2]) {
+          const ang = Math.atan2(dir.x, dir.z) + off;
+          spawnOrb(origin, new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang)), w, shotDmg, s.splash, s.speed * this.stats.range, { bounces: this.stats.bounce, markArcane: true, crit, big: true });
+        }
+        if (this.aspectOf('staff') === 'astral_spire') {
+          const near = enemies.filter((e) => e.alive && !e.spawning && e.pos.distanceTo(this.pos) < 14).sort((a2, b2) => a2.pos.distanceToSquared(this.pos) - b2.pos.distanceToSquared(this.pos))[0];
+          const baseA = near ? Math.atan2(near.pos.x - this.pos.x, near.pos.z - this.pos.z) : Math.atan2(dir.x, dir.z);
+          for (const off of [-0.14, 0, 0.14]) {
+            const ang = baseA + off;
+            spawnOrb(origin, new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang)), w, Math.round(shotDmg * 0.7), 0, 26, { bolt: true, pierce: 1, crit });
+          }
+        }
+      } else {
+        spawnOrb(origin, dir, w, shotDmg, s.splash, s.speed * this.stats.range, { bounces: this.stats.bounce, markArcane: true, crit });
+      }
       if (w.legend === 'boss_mage') {
         for (const off of [-0.25, 0.25]) {
           const ang = Math.atan2(dir.x, dir.z) + off;
-          spawnOrb(origin, new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang)), w, Math.round(shotDmg * 0.55), 0.8, s.speed * this.stats.range, { bounces: 2 });
+          spawnOrb(origin, new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang)), w, Math.round(shotDmg * 0.55), 0.8, s.speed * this.stats.range, { bounces: 2, noBossProc: true });
         }
       }
       if (w.legend === 'boss_dragon_ice') {
         for (const off of [-0.18, 0.18]) {
           const ang = Math.atan2(dir.x, dir.z) + off;
-          spawnOrb(origin, new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang)), { element: 'ice', element2: 'wind' }, Math.round(shotDmg * 0.55), 0, s.speed * this.stats.range, { bolt: true, pierce: 2 });
+          spawnOrb(origin, new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang)), { element: 'ice', element2: 'wind' }, Math.round(shotDmg * 0.55), 0, s.speed * this.stats.range, { bolt: true, pierce: 2, noBossProc: true });
         }
       }
       if (w.legend === 'boss_plague') {
         for (const off of [-0.2, 0.2]) {
           const ang = Math.atan2(dir.x, dir.z) + off;
-          spawnOrb(origin, new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang)), { element: 'poison', element2: 'blood' }, Math.round(shotDmg * 0.45), 1.6, s.speed * 0.9 * this.stats.range, {});
+          spawnOrb(origin, new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang)), { element: 'poison', element2: 'blood' }, Math.round(shotDmg * 0.45), 1.6, s.speed * 0.9 * this.stats.range, { noBossProc: true });
         }
       }
-      this.addHeat(3.2 / Math.sqrt(Math.max(1, this.stats.atk || 1)));
-      if (crit) { fireRunes(this, 'crit', origin, dir, shotDmg); progressAwakening(this, 'crit'); }
+      this.addHeat(3.2 / Math.sqrt(Math.max(1, this.effAtkSpd())));
       this.gainRage(3);
       play('cast');
       addShake(0.05);
       return;
     }
     this.lunge = a.lunge;
-    play('swing', { rate: w.type === 'sword' ? 1 : 0.8 });
-    spawnSlash(this.scene, this.pos, this.facing, a.arc, a.range, slashColor(w), !a.thrust && a.from < a.to);
+    play('swing', { rate: w.type === 'sword' || w.type === 'gauntlets' ? 1.15 : 0.8 });
+    const col = slashColor(w);
+    if (a.thrust) spawnThrust(this.scene, this.pos, this.facing, a.range, col);
+    else if (a.doubleCross) {
+      spawnSlash(this.scene, this.pos, this.facing, a.arc, a.range, col, true);
+      spawnSlash(this.scene, this.pos, this.facing, a.arc, a.range, col, false);
+    } else spawnSlash(this.scene, this.pos, this.facing, a.arc, a.range, col, a.from < a.to);
+
     const aimD = this.aimDir();
     // Hóa học bề mặt & Phá cột đá bằng đòn nặng (Chiến Chùy phá cột ngay cả bằng đòn thường!)
     const surfPos = this.pos.clone().addScaledVector(aimD, a.range * 0.65);
@@ -698,6 +1030,10 @@ export class Player {
     if (a.big || w.type === 'greatsword' || T.heavy) damagePillars(surfPos, a.range * 0.55, aimD, a.big || T.heavy);
 
     let hitAny = false;
+    let maxMarksDetonated = 0;
+    let farthestMarked = null;
+    let farthestDist = -1;
+    let chainCount = 0;
     for (const e of enemies) {
       if (!e.alive || e.spawning) continue;
       const dx = e.pos.x - this.pos.x, dz = e.pos.z - this.pos.z;
@@ -710,11 +1046,91 @@ export class Player {
         if (Math.abs(diff) > a.arc / 2 + tol) continue;
       }
       if (a.dashAtk) e.lastDashHit = performance.now();
+      let sweetMul = 1;
+      // Điểm Ngọt đầu mũi Thương & Xích Liềm (38% đầu mút tầm đánh)
+      if ((w.type === 'spear' || w.type === 'whip') && dist >= a.range * 0.62) {
+        sweetMul = 1.35;
+        this.nextCrit = true;
+        damageNumber(e.pos, w.type === 'spear' ? 'Điểm Ngọt!' : 'Quất Trúng Đỉnh!', 'react perfect');
+        if (w.type === 'whip' && this.aspectOf('whip') === 'storm_lash' && chainCount < 2) {
+          let c = 0;
+          for (const o of enemies) {
+            if (o === e || !o.alive || o.pos.distanceTo(e.pos) > 4.5) continue;
+            spawnBolt(this.scene, e.pos.clone().setY(0.9), o.pos.clone().setY(0.9), 0xffe14a);
+            dealDamage(o, Math.round(a.dmg * mul * 0.7), { element: 'lightning', element2: null }, null, 4, true, false);
+            chainCount++;
+            if (++c >= 2) break;
+          }
+        }
+      }
+      // Song Dao: tích Sát Ấn (tối đa 4) & kích nổ ở đòn cuối / đòn lướt
+      if (w.type === 'daggers') {
+        if (a.isLastCombo || a.dashAtk) {
+          const det = this.detonateDaggerMarks(e, mul);
+          if (det > maxMarksDetonated) maxMarksDetonated = det;
+          if (det >= 3 && dist > farthestDist) { farthestDist = dist; farthestMarked = e; }
+        } else if (e.alive) {
+          e.daggerMarks = Math.min(4, (e.daggerMarks || 0) + 1);
+          e.daggerMarkT = 6.0;
+        }
+      }
       const hitDir = new THREE.Vector3(dx, 0, dz).normalize();
-      this.strike(e, a.dmg * mul, a.pull ? hitDir.clone().negate() : hitDir, Math.abs(a.kb), a.big, { canInterrupt: a.big || T.heavy, poiseMul: a.poiseMul || 1 });
+      this.strike(e, a.dmg * mul * sweetMul, a.pull ? hitDir.clone().negate() : hitDir, Math.abs(a.kb), a.big, { canInterrupt: a.big || T.heavy, poiseMul: a.poiseMul || 1 });
+      if ((w.type === 'hammer' || a.dashSlam) && e.alive) e.slamWatchT = 0.55;
       hitAny = true;
     }
     this.hitBarrels(a.range, a.arc);
+    if (hitAny) {
+      if (w.type === 'gauntlets') {
+        this.fistFury = Math.min(5, (this.fistFury || 0) + 1);
+        this.fistFuryT = 3.5;
+      }
+      if (w.type === 'scythe') {
+        this.scytheSouls = Math.min(5, (this.scytheSouls || 0) + 1);
+        if (this.scytheSouls >= 5 && this.aspectOf('scythe') === 'void_reaper') {
+          const near = enemies.filter((e) => e.alive && !e.spawning).sort((a2, b2) => a2.pos.distanceToSquared(this.pos) - b2.pos.distanceToSquared(this.pos))[0];
+          const wDir = near ? new THREE.Vector3(near.pos.x - this.pos.x, 0, near.pos.z - this.pos.z).normalize() : aimD;
+          spawnSwordWave(this.pos.clone().addScaledVector(wDir, 0.9), wDir, { ...w, element: 'blood' }, Math.round(a.dmg * mul * 0.7), 1.15);
+        }
+      }
+    }
+    if (w.type === 'daggers' && maxMarksDetonated >= 3 && this.aspectOf('daggers') === 'shadow_fang' && farthestMarked?.alive) {
+      const fTarget = farthestMarked;
+      this.later(0.08, () => {
+        if (this.dead || !fTarget.alive) return;
+        const backOff = fTarget.facing != null ? new THREE.Vector3(-Math.sin(fTarget.facing), 0, -Math.cos(fTarget.facing)) : aimD.clone().negate();
+        const dest = fTarget.pos.clone().addScaledVector(backOff, 1.3);
+        collide(dest, this.radius);
+        this.pos.copy(dest);
+        this.facing = Math.atan2(fTarget.pos.x - this.pos.x, fTarget.pos.z - this.pos.z);
+        this.nextCrit = true;
+        spawnSlash(this.scene, this.pos, this.facing, 2.2, 2.8, 0xff5a8a, true);
+        this.strike(fTarget, 22 * mul, this.aimDir(), 6, true, { noBossProc: true });
+      });
+    }
+    if ((w.type === 'hammer' && a.isLastCombo) || a.dashSlam) {
+      const colossus = this.aspectOf('hammer') === 'forge_colossus';
+      const aCenter = this.pos.clone().addScaledVector(aimD, a.range * 0.55);
+      scheduleAftershock(aCenter, 0.45, 3.4, Math.round(a.dmg * mul * 0.55), w, { stun: 0.7, poiseMul: colossus ? 2.4 : 1.6, color: 0xffcf4a });
+      if (colossus) scheduleAftershock(aCenter, 0.85, 4.4, Math.round(a.dmg * mul * 0.65), w, { stun: 0.9, poiseMul: 2.6, color: 0xff8a2a });
+    }
+    if (a.riposte || (w.type === 'sword' && this.aspectOf('sword') === 'stormblade' && this.comboIdx === 2)) {
+      spawnSwordWave(this.pos.clone().addScaledVector(aimD, 0.9), aimD, w, Math.round(a.dmg * mul * (a.riposte ? 0.85 : 0.65)), a.riposte ? 1.35 : 1.15);
+    }
+    if (a.isLastCombo && this.stats.vortexFinisher) {
+      spawnRing(this.scene, surfPos, 4.5, 0x9fe8d0, 0.35);
+      for (const e of enemies) {
+        if (!e.alive || e.isBoss || e.pos.distanceTo(surfPos) > 5.5) continue;
+        e.knock.set(surfPos.x - e.pos.x, 0, surfPos.z - e.pos.z).normalize().multiplyScalar(11);
+      }
+    }
+    if (a.isLastCombo && this.stats.ricochet) {
+      const baseA = Math.atan2(aimD.x, aimD.z);
+      for (const off of [-0.25, 0.25]) {
+        const d = new THREE.Vector3(Math.sin(baseA + off), 0, Math.cos(baseA + off));
+        spawnOrb(this.pos.clone().addScaledVector(d, 0.8).setY(1.0), d, w, Math.round(a.dmg * mul * 0.45), 0, 22, { bolt: true, pierce: 1 });
+      }
+    }
     if (a.big) {
       if (this.stats.swordWave) spawnSwordWave(this.pos.clone().addScaledVector(aimD, 0.8), aimD, w, Math.round(a.dmg * mul * 0.6));
       if (this.stats.titan) {
@@ -827,7 +1243,18 @@ export class Player {
     }
   }
 
-  // ---------- Kỹ năng chuột phải (hỗ trợ 9 vũ khí + Ghép Chiêu & Phóng Nhiệt) ----------
+  onCatchChakram(p) {
+    if (this.dead) return;
+    this.attackCd = Math.min(this.attackCd, 0.08);
+    this.stamina = Math.min(100, this.stamina + 12);
+    this.nextCrit = true;
+    this.gainRage(4);
+    burst(this.pos.clone().setY(1.0), 0xffe2a0, 8, { speed: 4, size: 0.1 });
+    play('swap', { rate: 1.48, vol: 0.45 });
+    damageNumber(this.pos, 'Bắt Luân!', 'react perfect');
+  }
+
+  // ---------- Kỹ năng chuột phải (hỗ trợ 12 vũ khí + Ghép Chiêu & Phóng Nhiệt) ----------
   useSpecial(enemies) {
     const prevTag = ctx.dmgTag;
     ctx.dmgTag = 'special';
@@ -837,6 +1264,13 @@ export class Player {
     const w = this.weapon;
     const spType = this.activeSpecialType;
     if (spType === 'axe' && this.boomerangOut) return;
+    if (spType === 'spear' && hasLodgedSpear(this)) {
+      recallLodgedSpear(this);
+      this.specialCd = this.specialCdMax;
+      play('swap', { rate: 1.4 });
+      damageNumber(this.pos, 'Thu Thương!', 'react perfect');
+      return;
+    }
     const hz = this.heatZone(w);
     const hot = hz === 'hot' || hz === 'critical';
     let mul = this.dmgMul() * (this.stats.specialPower || 1);
@@ -885,7 +1319,7 @@ export class Player {
       play('swing', { rate: 0.7 });
     } else if (spType === 'staff') {
       const dir = this.aimDir();
-      spawnOrb(this.pos.clone().addScaledVector(dir, 1.3).setY(1.1), dir, fireW, Math.round(32 * mul), 0, 10, { big: true });
+      spawnOrb(this.pos.clone().addScaledVector(dir, 1.3).setY(1.1), dir, fireW, Math.round(32 * mul), 0, 10, { big: true, crit: hot });
       if (hot) {
         // Phóng Nhiệt Trượng: hút quái về trước mặt
         const center = this.pos.clone().addScaledVector(dir, 5);
@@ -900,33 +1334,36 @@ export class Player {
       const half = hot ? 4 : 2;
       for (let k = -half; k <= half; k++) {
         const a = base + k * (hot ? 0.13 : 0.16), dir = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
-        spawnOrb(this.pos.clone().addScaledVector(dir, 0.8).setY(1.1), dir, fireW, Math.round(9 * mul), 0, 26, { bolt: true, pierce: hot ? 2 : 1, knife: true });
+        spawnOrb(this.pos.clone().addScaledVector(dir, 0.8).setY(1.1), dir, fireW, Math.round(9 * mul), 0, 26, { bolt: true, pierce: hot ? 2 : 1, knife: true, detonateMarks: true });
       }
       this.specialCd = this.specialCdMax;
       this.playOnce('Throw', 0.3, 1.4);
       play('swing', { rate: 1.5 });
     } else if (spType === 'crossbow') {
       const dir = this.aimDir();
-      spawnOrb(this.pos.clone().addScaledVector(dir, 1).setY(1.1), dir, fireW, Math.round(30 * mul), 0, 24, { bolt: true, pierce: 0, explode: true });
+      spawnOrb(this.pos.clone().addScaledVector(dir, 1).setY(1.1), dir, fireW, Math.round(30 * mul), 0, 24, { bolt: true, pierce: 0, explode: true, explodeRadius: 3.2, crit: hot, big: true });
       if (hot) spawnFirePatch(this.pos.clone().addScaledVector(dir, 4.5), 2.5, 3.2, Math.round(14 * this.stats.dmg));
       this.specialCd = this.specialCdMax;
       this.playOnce('2H_Ranged_Shoot', 0.4, 0.8);
       play('swing', { rate: 0.6 });
     } else if (spType === 'greatsword') {
       this.charging = true;
-      this.chargeT = hot ? 0.6 : 0; // Phóng Nhiệt rút ngắn nửa thời gian tích lực!
+      this.chargeT = hot ? 0.55 : 0; // Phóng Nhiệt rút ngắn thời gian tích lực
       this.hotCharge = hot;
     } else if (spType === 'spear') {
-      // Ném Thương Xuyên Thấu: xuyên toàn hàng quái + nổ vòng năng lượng
+      // Ném Thương Cắm Sàn (bấm Chuột Phải lần 2 thu thương xuyên ngược!)
       const dir = this.aimDir();
-      spawnOrb(this.pos.clone().addScaledVector(dir, 1.1).setY(1.1), dir, fireW, Math.round(28 * mul), 0, 32, { bolt: true, pierce: hot ? 8 : 5, explode: hot });
+      spawnLodgedSpear(this, this.pos.clone().addScaledVector(dir, 1.0), dir, fireW, Math.round(28 * mul), { thunderAspect: this.aspectOf('spear') === 'thunder_lance' });
       if (hot) spawnSwordWave(this.pos.clone().addScaledVector(dir, 1.2), dir, fireW, Math.round(24 * mul), 1.3);
-      this.specialCd = this.specialCdMax;
+      this.specialCd = 0.25;
       this.playOnce('Throw', 0.35, 1.2);
       play('swing', { rate: 1.35 });
     } else if (spType === 'scythe') {
-      // Gặt Hồn: chém 360° rộng 4.4m, gây +80% ST lên quái dưới 45% máu & hồi +12 Ánh Lửa
-      const R = hot ? 5.2 : 4.4;
+      // Gặt Hồn: tiêu thụ Mảnh Hồn tăng tầm & ST; ≥3 Mảnh gọi Chém Bóng Tối trễ
+      const souls = this.scytheSouls || 0;
+      this.scytheSouls = 0;
+      const R = (hot ? 5.2 : 4.4) + souls * 0.22;
+      const sMul = 1 + souls * 0.16;
       spawnSlash(this.scene, this.pos, this.facing, Math.PI * 2, R, hot ? 0xff7a2a : 0xd080ff, false);
       spawnRing(this.scene, this.pos, R, hot ? 0xff7a2a : 0xc070ff, 0.45);
       addFlame(12);
@@ -935,15 +1372,25 @@ export class Player {
         if (!e.alive || e.spawning || e.pos.distanceTo(this.pos) > R + e.radius) continue;
         const low = e.hp < (e.maxHpEff || e.maxHp || e.hp) * 0.45;
         const d = new THREE.Vector3(this.pos.x - e.pos.x, 0, this.pos.z - e.pos.z).normalize();
-        this.strike(e, (low ? 42 : 24) * mul, d, 8, true, { canInterrupt: true, noHeat: hot });
+        this.strike(e, (low ? 42 : 24) * sMul * mul, d, 8, true, { canInterrupt: true, noHeat: hot });
         hitC++;
       }
-      if (hitC > 0) this.heal(Math.min(14, hitC * 3));
+      if (souls >= 3) {
+        damageNumber(this.pos, `Gặt ${souls} Hồn!`, 'react ult');
+        this.later(0.36, () => {
+          if (this.dead) return;
+          spawnSlash(this.scene, this.pos, this.facing + 1.2, Math.PI * 2, R * 1.1, 0xb870ff, true);
+          spawnRing(this.scene, this.pos, R * 1.1, 0xb870ff, 0.4);
+          aoe(this.pos, R * 1.1, Math.round(28 * sMul * mul), { ...fireW, element: 'blood' }, 8);
+          play('hitHeavy', { at: this.pos, rate: 1.1 });
+        });
+      }
+      if (hitC > 0 || souls > 0) this.heal(Math.min(18, hitC * 3 + souls * 2));
       this.specialCd = this.specialCdMax;
       this.playOnce('2H_Melee_Attack_Spin', 0.42);
       play('hitHeavy', { rate: 0.9 }); addShake(0.42);
     } else if (spType === 'hammer') {
-      // Chấn Động Lò Rèn: đập đất tạo sóng chấn động 4.8m choáng & đập sập cột đá!
+      // Chấn Động Lò Rèn: đập đất tạo sóng chấn động 4.8m + Dư Chấn trễ & đập sập cột đá
       const R = hot ? 5.6 : 4.8;
       const aimD = this.aimDir();
       const center = this.pos.clone().addScaledVector(aimD, 1.4);
@@ -957,10 +1404,75 @@ export class Player {
         this.strike(e, 34 * mul, d, 16, true, { canInterrupt: true, poiseMul: 2.6, noHeat: hot });
         if (!e.isBoss) e.stunT = Math.max(e.stunT, 1.4);
       }
+      const colossus = this.aspectOf('hammer') === 'forge_colossus';
+      scheduleAftershock(center, 0.42, R * 0.9, Math.round(24 * mul), fireW, { stun: 1.0, poiseMul: colossus ? 2.8 : 2.0, color: 0xffcf4a });
+      if (colossus) scheduleAftershock(center, 0.85, R * 1.15, Math.round(28 * mul), fireW, { stun: 1.2, poiseMul: 3.0, color: 0xff8a2a });
       this.hitBarrels(R, Math.PI * 2);
       this.specialCd = this.specialCdMax;
       this.playOnce('2H_Melee_Attack_Chop', 0.45);
       play('explode', { at: center, rate: 0.8, vol: 0.75 }); addShake(0.6);
+    } else if (spType === 'gauntlets') {
+      // Đấm Móc: xung kích hất văng kích Đập Dội; cường hóa theo Liên Quyền
+      const fury = this.fistFury || 0;
+      const fMul = 1 + fury * 0.15;
+      const aimD = this.aimDir();
+      this.lunge = 10;
+      const center = this.pos.clone().addScaledVector(aimD, 1.8);
+      spawnThrust(this.scene, this.pos, this.facing, 3.6, hot ? 0xff7a2a : slashColor(w));
+      spawnRing(this.scene, center, 3.2, 0xffb84a, 0.38);
+      burst(center.clone().setY(0.8), 0xffcf4a, 24, { speed: 9, size: 0.16 });
+      damageNumber(this.pos, fury > 0 ? `Đấm Móc ×${fury}!` : 'Đấm Móc!', 'react perfect');
+      for (const e of enemies) {
+        if (!e.alive || e.spawning || e.pos.distanceTo(center) > 3.2 + e.radius) continue;
+        const d = new THREE.Vector3(e.pos.x - this.pos.x, 0, e.pos.z - this.pos.z).normalize();
+        this.strike(e, 30 * fMul * mul, d, 22, true, { canInterrupt: true, poiseMul: 2.4, noHeat: hot });
+        if (e.alive) e.slamWatchT = 0.75;
+      }
+      if (this.aspectOf('gauntlets') === 'meteor_fist') {
+        const mCenter = this.pos.clone().addScaledVector(aimD, 3.2);
+        scheduleAftershock(mCenter, 0.4, 4.2, Math.round(34 * fMul * mul), { ...fireW, element: 'fire' }, { stun: 1.1, poiseMul: 2.4, color: 0xff5a1a });
+        spawnFirePatch(mCenter, 2.5, 3.5, Math.round(14 * this.stats.dmg));
+      }
+      this.hitBarrels(3.6, 2.2);
+      this.specialCd = this.specialCdMax;
+      this.playOnce('Dualwield_Melee_Attack_Stab', 0.34);
+      play('hitHeavy', { rate: 1.15 }); addShake(0.48);
+    } else if (spType === 'whip') {
+      // Xích Kéo: quất tầm xa 7.2m kéo gom toàn bộ quái về trước mặt & làm choáng
+      const R = (hot ? 8.2 : 7.2) * this.stats.range;
+      const aimD = this.aimDir();
+      spawnThrust(this.scene, this.pos, this.facing, R, hot ? 0xff7a2a : slashColor(w));
+      spawnSlash(this.scene, this.pos, this.facing, 1.5, R * 0.85, hot ? 0xff7a2a : 0xffd080, false);
+      damageNumber(this.pos, 'Xích Kéo!', 'react perfect');
+      const gather = this.pos.clone().addScaledVector(aimD, 2.0);
+      for (const e of enemies) {
+        if (!e.alive || e.spawning) continue;
+        const dx = e.pos.x - this.pos.x, dz = e.pos.z - this.pos.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist > R + e.radius) continue;
+        let diff = Math.atan2(dx, dz) - this.facing;
+        diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+        if (Math.abs(diff) > 0.82 + Math.atan2(e.radius, Math.max(dist, 0.1))) continue;
+        if (!e.isBoss) {
+          const dest = gather.clone();
+          collide(dest, e.radius);
+          e.pos.copy(dest);
+          e.stunT = Math.max(e.stunT, 0.9);
+        }
+        const pullD = new THREE.Vector3(this.pos.x - e.pos.x, 0, this.pos.z - e.pos.z).normalize();
+        this.strike(e, 24 * mul, pullD, 4, true, { canInterrupt: true, noHeat: hot });
+      }
+      this.specialCd = this.specialCdMax;
+      this.playOnce('1H_Melee_Attack_Slice_Horizontal', 0.38);
+      play('swing', { rate: 1.25 }); addShake(0.32);
+    } else if (spType === 'chakram') {
+      // Luân Quỹ Đạo: gọi đĩa quay quanh thân cắt địch liên tục
+      const inf = this.aspectOf('chakram') === 'infinite_ring';
+      spawnOrbitDiscs(this, fireW, Math.round(14 * mul), hot ? 3 : 2, inf ? 3.6 : 2.8, 4.5);
+      damageNumber(this.pos, 'Luân Quỹ Đạo!', 'react ult');
+      this.specialCd = this.specialCdMax;
+      this.playOnce('Spellcast_Long', 0.42, 2.0);
+      play('cast', { rate: 1.25 });
     }
   }
 
@@ -968,18 +1480,20 @@ export class Player {
     this.charging = false;
     const hot = !!this.hotCharge;
     this.hotCharge = false;
+    const sweet = this.chargeT >= 0.85 && this.chargeT <= 1.35;
     const k = Math.min(1, this.chargeT / 1.2);
-    const mul = this.dmgMul() * (this.stats.specialPower || 1) * (hot ? 1.35 : 1);
+    const mul = this.dmgMul() * (this.stats.specialPower || 1) * (hot ? 1.35 : 1) * (sweet ? 1.5 : 1);
+    if (sweet) { this.nextCrit = true; damageNumber(this.pos, 'Trảm Tuyệt Đỉnh!', 'react ult'); }
     const range = 4.6 * this.stats.range, arc = 2.4;
     this.specialCd = this.specialCdMax;
     this.playOnce('2H_Melee_Attack_Slice', 0.45);
-    spawnSlash(this.scene, this.pos, this.facing, arc, range, hot ? 0xff7a2a : slashColor(this.weapon), false);
-    play(k > 0.8 ? 'hitHeavy' : 'swing', { rate: 0.7 });
+    spawnSlash(this.scene, this.pos, this.facing, arc, range, sweet ? 0xffe2a0 : hot ? 0xff7a2a : slashColor(this.weapon), false);
+    play(k > 0.8 || sweet ? 'hitHeavy' : 'swing', { rate: 0.7 });
     addShake(0.2 + k * 0.5);
     this.lunge = 6 + k * 6;
     const aimD = this.aimDir();
     const hitCenter = this.pos.clone().addScaledVector(aimD, range * 0.6);
-    damagePillars(hitCenter, range * 0.65, aimD, k > 0.5);
+    damagePillars(hitCenter, range * 0.65, aimD, k > 0.5 || sweet);
     for (const el of [this.weapon.element, this.weapon.element2]) if (el && el !== 'none') reactSurface(hitCenter, range * 0.6, el, aimD, (20 + 45 * k) * mul);
     if (hot) spawnFirePatch(hitCenter, 2.6, 3.5, Math.round(18 * this.stats.dmg));
     for (const e of enemies) {
@@ -990,10 +1504,22 @@ export class Player {
       let diff = Math.atan2(dx, dz) - this.facing;
       diff = Math.atan2(Math.sin(diff), Math.cos(diff));
       if (Math.abs(diff) > arc / 2 + 0.2) continue;
-      this.strike(e, (20 + 45 * k) * mul, new THREE.Vector3(dx, 0, dz).normalize(), 8 + 14 * k, k > 0.5, { canInterrupt: true });
+      this.strike(e, (20 + 45 * k) * mul, new THREE.Vector3(dx, 0, dz).normalize(), 8 + 14 * k, k > 0.5 || sweet, { canInterrupt: true });
     }
     this.hitBarrels(range, arc);
-    if (k > 0.95) { addHitStop(0.1); spawnSwordWave(this.pos.clone().addScaledVector(aimD, 1), aimD, this.weapon, Math.round(30 * mul), 1.4); }
+    if (sweet) scheduleAftershock(hitCenter, 0.35, 3.8, Math.round(26 * mul), this.weapon, { stun: 0.9, poiseMul: 2.0, color: 0xffe2a0 });
+    if (k > 0.88 || sweet) {
+      addHitStop(0.1);
+      if (this.aspectOf('greatsword') === 'mountain_cleaver') {
+        const bA = Math.atan2(aimD.x, aimD.z);
+        for (const off of [-0.28, 0, 0.28]) {
+          const d = new THREE.Vector3(Math.sin(bA + off), 0, Math.cos(bA + off));
+          spawnSwordWave(this.pos.clone().addScaledVector(d, 1), d, this.weapon, Math.round(24 * mul), 1.3);
+        }
+      } else {
+        spawnSwordWave(this.pos.clone().addScaledVector(aimD, 1), aimD, this.weapon, Math.round(30 * mul), 1.4);
+      }
+    }
   }
 
   // ---------- Di vật chạy theo thời gian ----------
@@ -1053,8 +1579,36 @@ export class Player {
   update(dt, aim, enemies, time = 0) {
     if (this.anim) this.anim.update(dt);
     if (this.dead) return;
+    if (this.pendingTimers && this.pendingTimers.length) {
+      for (let i = this.pendingTimers.length - 1; i >= 0; i--) {
+        const pt = this.pendingTimers[i];
+        pt.t -= dt;
+        if (pt.t <= 0) {
+          this.pendingTimers.splice(i, 1);
+          pt.fn();
+        }
+      }
+    }
     this.iframes = Math.max(0, this.iframes - dt);
     this.parryT = Math.max(0, this.parryT - dt);
+    this.riposteT = Math.max(0, (this.riposteT || 0) - dt);
+    if (this.fistFuryT > 0) {
+      this.fistFuryT -= dt;
+      if (this.fistFuryT <= 0) this.fistFury = 0;
+    }
+    if (this.momentumT > 0) {
+      this.momentumT -= dt;
+      if (this.momentumT <= 0) this.momentumStacks = 0;
+    }
+    if (this.reloadT > 0) {
+      this.reloadT = Math.max(0, this.reloadT - dt);
+      if (this.reloadT <= 0) {
+        this.bowAmmo = this.bowMax || 5;
+        this.empoweredAmmo = 0;
+        this.activeReloadLocked = false;
+        play('swap', { rate: 1.1, vol: 0.4 });
+      }
+    }
     // Buff Thép Tôi & làm nguội Nhiệt Lưỡi (cơ chế #1)
     if (this.temperedT > 0) {
       this.temperedT = Math.max(0, this.temperedT - dt);
@@ -1197,13 +1751,19 @@ export class Player {
       castUltimate(this);
     }
 
-    // Kỹ năng chuột phải
+    // Kỹ năng chuột phải (bao gồm Thu Thương không tốn cooldown/thể lực nếu đã cắm thương)
     const rightDown = mouse.rdown || touch.special || pad.special;
-    if (mouse.rclicked && this.specialCd <= 0 && this.stamina < 18) { this.stamWarn = 0.4; }
-    if (mouse.rclicked && this.specialCd <= 0 && this.stamina >= 18 && !this.attack && this.dashTime <= 0 && !this.charging) { this.stamina -= 18; this.stamDelay = 0.5; this.useSpecial(enemies); }
+    if (mouse.rclicked && this.activeSpecialType === 'spear' && hasLodgedSpear(this) && !this.attack && this.dashTime <= 0 && !this.charging) {
+      this.useSpecial(enemies);
+    } else {
+      if (mouse.rclicked && this.specialCd <= 0 && this.stamina < 18) { this.stamWarn = 0.4; }
+      if (mouse.rclicked && this.specialCd <= 0 && this.stamina >= 18 && !this.attack && this.dashTime <= 0 && !this.charging) { this.stamina -= 18; this.stamDelay = 0.5; this.useSpecial(enemies); }
+    }
     if (this.charging) {
-      this.chargeT += dt;
-      if (Math.random() < 0.5) burst(this.pos.clone().setY(1.2), this.chargeT >= 1.2 ? 0xffe2a0 : 0xffa040, 1, { speed: 2, up: 1, gravity: 0, life: 0.3, size: 0.12 });
+      const chMul = this.aspectOf('greatsword') === 'mountain_cleaver' ? 1.3 : 1;
+      this.chargeT += dt * chMul;
+      const inSweet = this.chargeT >= 0.85 && this.chargeT <= 1.35;
+      if (Math.random() < 0.55) burst(this.pos.clone().setY(1.2), inSweet ? 0xfff6a0 : this.chargeT >= 1.2 ? 0xffe2a0 : 0xffa040, 1, { speed: 2, up: 1, gravity: 0, life: 0.3, size: inSweet ? 0.17 : 0.12 });
       if (this.anim && this.animLock <= 0) this.anim.play('2H_Melee_Idle', { fade: 0.1 });
       if (!rightDown || mouse.rreleased) this.releaseCharge(enemies);
     }
@@ -1214,7 +1774,7 @@ export class Player {
     if ((mouse.clicked || attackHeld || this.queued) && !this.attack && this.dashTime <= 0 && this.attackCd <= 0 && !this.charging) {
       this.queued = false;
       if (this.comboTimer <= 0) this.comboIdx = 0;
-      this.startAttack();
+      this.startAttack(!!mouse.clicked);
     }
 
     if (this.attack) {
@@ -1238,7 +1798,7 @@ export class Player {
       this.pivot.rotation.y = r + (T.rest - r) * Math.min(1, dt * 10);
     }
     if (!this.attack && this.comboTimer <= 0) this.comboIdx = 0;
-    if (this.held) this.held.visible = !this.boomerangOut;
+    if (this.held) this.held.visible = !(this.weapon.type === 'axe' && this.boomerangOut) && !(this.weapon.type === 'spear' && this.lodgedSpear);
 
     // Di chuyển
     if (this.dashTime > 0) {

@@ -1831,3 +1831,52 @@ body.hud-compact .slot-tip .st-runes { font-size: 11px; color: #9fe8ff; margin-t
   .menu-footer-dock .vol-slider { width: 58px; }
   #start .btn.m-util { padding: 4px 7px; font-size: 11px; }
 }
+
+/* ===== HUD Cơ Chế Vũ Khí & Biến Thể Vũ Khí (Lò Rèn) ===== */
+.weapon-mech {
+  position: absolute; left: 12px; bottom: 108px; width: 256px; z-index: 6;
+  padding: 6px 10px; border-radius: 7px;
+  background: rgba(14, 10, 8, .88); border: 1px solid rgba(226, 184, 108, .35);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .45); pointer-events: none;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.weapon-mech.hidden { display: none; }
+.wm-head { display: flex; justify-content: space-between; align-items: center; font: 700 12px var(--f-label); color: var(--gold-hi); letter-spacing: .3px; }
+.wm-sub { font: 600 11px var(--f-body); color: var(--muted); }
+.wm-bar { position: relative; height: 8px; border-radius: 4px; background: rgba(255, 255, 255, .1); overflow: hidden; }
+.wm-fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #ff9a3c, #ffe070); transition: width .04s linear; }
+.wm-fill.hot { background: linear-gradient(90deg, #ff5a3a, #ffcf4a); box-shadow: 0 0 8px rgba(255, 207, 74, .65); }
+.wm-fill.jam { background: #8a4a4a; }
+.wm-sweet { position: absolute; top: 0; bottom: 0; background: rgba(255, 232, 120, .38); border-left: 1px solid #fff6c0; border-right: 1px solid #fff6c0; }
+.wm-pips { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.wm-pip { width: 14px; height: 6px; border-radius: 2px; background: rgba(255, 255, 255, .14); border: 1px solid rgba(255, 255, 255, .2); }
+.wm-pip.on { background: #ffcf4a; border-color: #fff2b0; box-shadow: 0 0 6px rgba(255, 207, 74, .55); }
+.wm-pip.emp { background: #ff7a3a; border-color: #ffe2a0; box-shadow: 0 0 7px rgba(255, 122, 58, .75); }
+.wm-pip.soul.on { background: #c078ff; border-color: #f0d0ff; box-shadow: 0 0 6px rgba(192, 120, 255, .65); }
+body.hud-compact .weapon-mech { bottom: 92px; width: 232px; padding: 5px 8px; }
+@media (max-width: 820px), (pointer: coarse) and (orientation: landscape) {
+  .weapon-mech { left: var(--left-edge, 12px); top: calc(var(--top-edge, 12px) + 162px); bottom: auto; width: min(26vw, 200px); }
+}
+
+#forge .panel.big > * { flex-shrink: 0; }
+#forge h3.sec { margin: 8px 0 2px; font: 700 18px var(--f-label); color: var(--gold-hi); text-align: left; }
+.aspect-list {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px; flex: 0 0 auto; margin: 4px 0 10px;
+}
+.aspect-card {
+  display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; text-align: left;
+  background: rgba(0, 0, 0, .35); border: 1px solid rgba(226, 184, 108, .22); border-radius: 7px;
+}
+.aspect-card.active { border-color: rgba(255, 207, 74, .7); background: rgba(42, 26, 14, .55); }
+.aspect-top { display: flex; align-items: center; gap: 7px; }
+.aspect-top .ico { width: 22px; height: 22px; flex: none; }
+.aspect-top b { font: 700 13px var(--f-label); color: var(--gold-hi); flex: 1; }
+.aspect-card p { font-size: 11px; color: var(--muted); line-height: 1.35; margin: 0; flex: 1; }
+.aspect-btns { display: flex; gap: 5px; margin-top: 2px; }
+.panel.big .aspect-btns .btn {
+  min-width: 0; align-self: stretch; flex: 1; padding: 4px 8px; font-size: 11px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.panel.big .aspect-btns .btn .ico { width: 13px; height: 13px; }
+.aspect-btns .btn.on { border-color: var(--gold-hi); color: var(--gold-hi); background: rgba(255, 207, 74, .14); }

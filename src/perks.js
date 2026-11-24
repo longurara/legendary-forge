@@ -68,10 +68,10 @@ export const META = [
 
 const KEY = 'lorenh_meta';
 export function loadMeta() {
-  const base = () => ({ souls: 0, up: {}, stats: {}, ach: {}, codex: {}, relicsSeen: {}, daily: {}, char: 'knight', curses: [] });
+  const base = () => ({ souls: 0, up: {}, stats: {}, ach: {}, codex: {}, relicsSeen: {}, daily: {}, char: 'knight', curses: [], aspectsUnlocked: {}, aspects: {} });
   try {
     const m = { ...base(), ...JSON.parse(localStorage.getItem(KEY) || '{}') };
-    for (const k of ['stats', 'ach', 'codex', 'relicsSeen', 'daily', 'up']) m[k] = m[k] || {};
+    for (const k of ['stats', 'ach', 'codex', 'relicsSeen', 'daily', 'up', 'aspectsUnlocked', 'aspects']) m[k] = m[k] || {};
     m.curses = m.curses || [];
     return m;
   } catch { return base(); }

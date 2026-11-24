@@ -19,6 +19,7 @@ export const MODEL_NAMES = [
   'prop_skel_blade', 'prop_skel_axe', 'prop_skel_shield', 'prop_potion', 'prop_chest',
   'char_barbarian', 'char_mage', 'char_rogue', 'npc_merchant', 'enemy_rogue', 'prop_skel_crossbow', 'prop_spellbook',
   'weapon_sword', 'weapon_axe', 'weapon_greatsword', 'weapon_staff', 'weapon_dagger',
+  'weapon_gauntlets', 'weapon_whip', 'weapon_chakram',
   // CC0 Quaternius Monsters & Fantasy Weapons
   'mon_dragon', 'mon_ogre', 'mon_mushroom_king', 'mon_orc', 'mon_goblin', 'mon_imp',
   'mon_drake', 'mon_glub', 'mon_spider', 'mon_wasp', 'mon_snake', 'mon_crab',

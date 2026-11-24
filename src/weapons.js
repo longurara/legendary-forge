@@ -38,8 +38,9 @@ export const TYPES = {
   axe: {
     name: 'Rìu', rest: 1.3, idle: '2H_Melee_Idle',
     combo: [
-      { anim: '2H_Melee_Attack_Spin', arc: TAU, range: 3.2, dmg: 12, kb: 9, dur: 0.4, lunge: 1, from: 1.3, to: 1.3 - TAU, shake: 0.22, stop: 0.05 },
-      { anim: '2H_Melee_Attack_Spin', arc: TAU, range: 3.4, dmg: 16, kb: 12, dur: 0.42, lunge: 1.5, from: 1.3 - TAU, to: 1.3, shake: 0.3, stop: 0.07, big: true },
+      { anim: '2H_Melee_Attack_Slice', arc: 2.5, range: 3.1, dmg: 13, kb: 9, dur: 0.34, lunge: 2.5, from: 1.3, to: -1.3, shake: 0.2, stop: 0.05 },
+      { anim: '2H_Melee_Attack_Chop', arc: 1.5, range: 3.4, dmg: 17, kb: 12, dur: 0.36, lunge: 3.5, from: 0.8, to: -0.8, shake: 0.28, stop: 0.06, poiseMul: 1.4 },
+      { anim: '2H_Melee_Attack_Spin', arc: TAU, range: 3.6, dmg: 24, kb: 15, dur: 0.42, lunge: 2, from: 1.3, to: 1.3 - TAU, shake: 0.36, stop: 0.08, big: true },
     ],
   },
   greatsword: {
@@ -52,7 +53,12 @@ export const TYPES = {
   },
   staff: {
     name: 'Trượng', rest: 0.5, idle: 'Idle', ranged: true, anim: 'Spellcast_Shoot',
-    shot: { dmg: 9, cooldown: 0.3, speed: 17, splash: 1.4 },
+    shot: { dmg: 9, cooldown: 0.28, speed: 18, splash: 1.4 },
+    shots: [
+      { dmg: 9, cooldown: 0.26, speed: 18, splash: 1.2 },
+      { dmg: 10, cooldown: 0.26, speed: 19, splash: 1.2 },
+      { dmg: 8, cooldown: 0.36, speed: 20, splash: 1.5, volley: 3, big: true },
+    ],
   },
   // Song Dao: đánh rất nhanh, sát thương thấp mỗi nhát, đòn cuối đâm chí mạng cao
   daggers: {
@@ -64,12 +70,13 @@ export const TYPES = {
       { anim: 'Dualwield_Melee_Attack_Stab', arc: 0.9, range: 3.0, dmg: 15, kb: 9, dur: 0.28, lunge: 6, thrust: true, shake: 0.25, stop: 0.06, big: true },
     ],
   },
-  // Nỏ: bắn chậm, tên xuyên qua quái
+  // Nỏ: băng đạn 5 tên + Nạp Hoàn Hảo
   crossbow: {
     name: 'Nỏ', rest: 0.5, idle: '2H_Ranged_Aiming', ranged: true, anim: '2H_Ranged_Shoot', bolt: true,
-    shot: { dmg: 17, cooldown: 0.55, speed: 30, splash: 0, pierce: 2 },
+    mag: 5, reloadDur: 1.15,
+    shot: { dmg: 16, cooldown: 0.34, speed: 32, splash: 0, pierce: 2 },
   },
-  // Thương Chiến: đâm tầm siêu xa, tốc độ gọn, xuyên hàng quái
+  // Thương Chiến: đâm tầm siêu xa, Điểm Ngọt 35% đầu mũi
   spear: {
     name: 'Thương', rest: 0.55, idle: '2H_Melee_Idle',
     combo: [
@@ -87,7 +94,7 @@ export const TYPES = {
       { anim: '2H_Melee_Attack_Spin', arc: TAU, range: 3.9, dmg: 24, kb: -10, dur: 0.42, lunge: 3, from: 1.2, to: 1.2 - TAU, shake: 0.42, stop: 0.1, big: true, pull: true },
     ],
   },
-  // Chiến Chùy: phá thanh Choáng ×2, đập sập cột đá bằng đòn thường
+  // Chiến Chùy: phá thanh Choáng ×2, đập dội tường & Dư Chấn
   hammer: {
     name: 'Chiến Chùy', rest: 0.8, idle: '2H_Melee_Idle', heavy: true,
     combo: [
@@ -95,11 +102,42 @@ export const TYPES = {
       { anim: '2H_Melee_Attack_Spin', arc: TAU, range: 3.6, dmg: 30, kb: 22, dur: 0.5, lunge: 4.5, from: 1.2, to: 1.2 - TAU, shake: 0.52, stop: 0.12, big: true, poiseMul: 2.2 },
     ],
   },
+  // Song Quyền: liên hoàn đấm 5 nhịp siêu nhanh, tích Liên Quyền tăng tốc đánh
+  gauntlets: {
+    name: 'Song Quyền', rest: 0.4, idle: 'Idle', dual: true,
+    combo: [
+      { anim: 'Dualwield_Melee_Attack_Chop', arc: 1.6, range: 2.2, dmg: 7, kb: 4, dur: 0.16, lunge: 4.5, from: 0.8, to: -0.8, shake: 0.1, stop: 0.02 },
+      { anim: 'Dualwield_Melee_Attack_Slice', arc: 1.8, range: 2.2, dmg: 7, kb: 4, dur: 0.16, lunge: 4.5, from: -0.8, to: 0.8, shake: 0.1, stop: 0.02 },
+      { anim: 'Dualwield_Melee_Attack_Chop', arc: 1.7, range: 2.3, dmg: 8, kb: 5, dur: 0.17, lunge: 5, from: 0.85, to: -0.85, shake: 0.12, stop: 0.03 },
+      { anim: 'Dualwield_Melee_Attack_Slice', arc: 1.9, range: 2.4, dmg: 9, kb: 6, dur: 0.19, lunge: 5.5, from: -0.9, to: 0.9, shake: 0.14, stop: 0.03 },
+      { anim: 'Dualwield_Melee_Attack_Stab', arc: 2.2, range: 2.8, dmg: 18, kb: 14, dur: 0.3, lunge: 7, thrust: true, shake: 0.34, stop: 0.08, poiseMul: 1.8, big: true },
+    ],
+  },
+  // Xích Liềm: tầm quét tầm trung dài nhất, Quất Trúng Đỉnh ở rìa xa
+  whip: {
+    name: 'Xích Liềm', rest: 1.0, idle: 'Idle',
+    combo: [
+      { anim: '1H_Melee_Attack_Slice_Diagonal', arc: 2.1, range: 4.8, dmg: 10, kb: 5, dur: 0.3, lunge: 2, from: 1.1, to: -1.1, shake: 0.18, stop: 0.04 },
+      { anim: '1H_Melee_Attack_Slice_Horizontal', arc: 2.1, range: 5.0, dmg: 12, kb: 6, dur: 0.3, lunge: 2, from: -1.1, to: 1.1, shake: 0.2, stop: 0.04 },
+      { anim: '1H_Melee_Attack_Stab', arc: 0.9, range: 5.6, dmg: 17, kb: 10, dur: 0.36, lunge: 3.5, thrust: true, shake: 0.3, stop: 0.07, big: true },
+    ],
+  },
+  // Luân Kiếm: ném đĩa bật nảy giữa bầy quái rồi quay về tay
+  chakram: {
+    name: 'Luân Kiếm', rest: 0.6, idle: 'Idle', ranged: true, thrown: true, anim: 'Throw',
+    shot: { dmg: 12, cooldown: 0.34, speed: 22, bounces: 3 },
+    shots: [
+      { dmg: 12, cooldown: 0.32, speed: 22, bounces: 3 },
+      { dmg: 13, cooldown: 0.32, speed: 23, bounces: 3 },
+      { dmg: 11, cooldown: 0.42, speed: 24, bounces: 4, twinReturn: true, big: true },
+    ],
+  },
 };
 // Model dùng cho từng loại vũ khí
 export const modelFor = (type) => ({
   daggers: 'weapon_dagger', crossbow: 'prop_skel_crossbow',
   spear: 'prop_spear', scythe: 'prop_scythe', hammer: 'prop_hammer_gold',
+  gauntlets: 'weapon_gauntlets', whip: 'weapon_whip', chakram: 'weapon_chakram',
 }[type] || 'weapon_' + type);
 const TYPE_KEYS = Object.keys(TYPES);
 
@@ -113,6 +151,12 @@ export const AFFIXES = [
   { id: 'wave', name: 'Đòn cuối combo bắn sóng kiếm', apply: (s) => { s.swordWave = true; } },
   { id: 'execute', name: 'Kết liễu quái dưới 15% máu', apply: (s) => { s.execute = 0.15; } },
   { id: 'rage', name: '+30% tích Nộ', apply: (s) => { s.rageGain += 0.3; } },
+  { id: 'echo', name: '25% tạo Dư Ảnh đánh bồi 45% ST', apply: (s) => { s.echoHit = true; } },
+  { id: 'shred', name: 'Xuyên Giáp: địch nhận thêm +20% ST', apply: (s) => { s.shred = true; } },
+  { id: 'vortex', name: 'Đòn cuối combo hút quái vào tâm', apply: (s) => { s.vortexFinisher = true; } },
+  { id: 'ricochet', name: 'Đạn +1 nảy/xuyên · Cận chiến bắn 2 tia', apply: (s) => { s.ricochet = true; s.bounce = (s.bounce || 0) + 1; } },
+  { id: 'momentum', name: 'Đánh trúng tích +4% tốc đánh (tối đa ×5)', apply: (s) => { s.momentum = true; } },
+  { id: 'nova', name: 'Mỗi 5 đòn nổ Sóng Nguyên Tố', apply: (s) => { s.elemNova = true; } },
 ];
 export const affixById = (id) => AFFIXES.find((a) => a.id === id);
 
@@ -190,12 +234,20 @@ export const GEMS = {
 };
 export const socketsOf = (w) => Math.min(4, ([2, 2, 3, 4][w.rarity] || 2) + ((w.masterworks || []).includes('mw_socket') ? 1 : 0));
 
-// ---------- Công thức rèn đặc biệt: đúng cặp nguyên tố → vũ khí huyền thoại có hiệu ứng riêng ----------
+// ---------- Công thức rèn đặc biệt: đúng cặp nguyên tố → vũ khí huyền thoại có hiệu ứng riêng (12 công thức) ----------
 export const RECIPES = [
   { els: ['ice', 'lightning'], title: 'Búa Bão Tuyết', legend: 'blizzard', text: '20% đòn đánh tạo vụ nổ băng đóng băng quái xung quanh' },
   { els: ['blood', 'fire'], title: 'Huyết Hỏa Thần Binh', legend: 'bloodfire', text: 'Hạ quái hồi 3 máu, quái đang cháy chịu thêm 25% sát thương' },
   { els: ['holy', 'lightning'], title: 'Thánh Khí Phán Xét', legend: 'judgement', text: 'Chí mạng gọi thánh lôi giáng xuống mục tiêu' },
   { els: ['poison', 'wind'], title: 'Dịch Hạch Phong Ba', legend: 'plague', text: 'Đòn đánh lây độc sang quái trong 3m' },
+  { els: ['fire', 'wind'], title: 'Phượng Hoàng Bão Lửa', legend: 'phoenix', text: 'Mỗi đòn thứ 4 thổi lốc lửa 3.2m cuốn & đốt cháy quái' },
+  { els: ['fire', 'ice'], title: 'Nhật Nguyệt Tương Phản', legend: 'eclipse', text: 'Đòn đánh luân phiên nổ Bỏng Lửa / Băng Hàn mỗi 2 nhịp' },
+  { els: ['fire', 'lightning'], title: 'Lôi Hỏa Phá Thiên', legend: 'supernova', text: 'Đòn nặng & chí mạng kích nổ Quá Tải 2.8m quanh mục tiêu' },
+  { els: ['blood', 'ice'], title: 'Huyết Băng Đóng Đông', legend: 'frostblood', text: 'Đánh quái bị chậm/đóng băng hút thêm +3 máu & +30% ST' },
+  { els: ['lightning', 'wind'], title: 'Lôi Vân Phá Trận', legend: 'tempest', text: '25% phóng cầu sét dội giữa 3 quái trên diện rộng' },
+  { els: ['blood', 'poison'], title: 'Huyết Độc Thực Hồn', legend: 'hemotoxin', text: 'Quái mang ≥3 tầng Độc khi trúng đòn rút 18% máu hiện tại (hồi 2 HP)' },
+  { els: ['fire', 'holy'], title: 'Thánh Hỏa Thanh Tẩy', legend: 'seraphim', text: 'Đòn nặng giáng vòng thánh hỏa 3m, hồi +2 Ánh Lửa' },
+  { els: ['holy', 'ice'], title: 'Thánh Băng Vĩnh Cửu', legend: 'aegis_frost', text: 'Chí mạng đóng băng xung quanh & tích +4 giáp ảo (tối đa 24)' },
 ];
 export function applyRecipe(result, a, b) {
   const els = [...new Set([a.element, a.element2, b.element, b.element2].filter((e) => e && e !== 'none'))].sort();
@@ -204,6 +256,59 @@ export function applyRecipe(result, a, b) {
   result.rarity = 3; result.title = TYPES[result.type].name + ' · ' + r.title; result.legend = r.legend; result.legendText = r.text;
   return r;
 }
+
+// ---------- Biến Thể Vũ Khí (Weapon Aspects — mở khóa & đổi tại Lò Rèn) ----------
+export const WEAPON_ASPECTS = {
+  sword: [
+    { id: 'default', name: 'Bản Chuẩn', cost: 0, desc: 'Thế Kiếm cân bằng: Đỡ Đòn mở khóa Phản Kiếm chí mạng.' },
+    { id: 'stormblade', name: 'Kiếm Khí Lôi Đình', cost: 90, desc: 'Mỗi đòn thứ 2 phóng sóng kiếm; Đỡ Đòn bắn chùm tia xuyên.' },
+  ],
+  axe: [
+    { id: 'default', name: 'Bản Chuẩn', cost: 0, desc: 'Bắt Rìu Hoàn Hảo nạp nhiệt Nóng Đỏ & cường hóa đòn bổ.' },
+    { id: 'berserk_axe', name: 'Rìu Đao Điên Cuồng', cost: 100, desc: 'Bắt Rìu Hoàn Hảo gọi Lốc Lửa xoáy quanh thân suốt 1.8s.' },
+  ],
+  greatsword: [
+    { id: 'default', name: 'Bản Chuẩn', cost: 0, desc: 'Giáp chịu đòn khi tụ lực; Trảm Tuyệt Đỉnh tạo Dư Chấn.' },
+    { id: 'mountain_cleaver', name: 'Đại Kiếm Đoạn Sơn', cost: 110, desc: 'Tụ lực nhanh +30%; Trảm Tuyệt Đỉnh phóng 3 sóng nứt đất.' },
+  ],
+  daggers: [
+    { id: 'default', name: 'Bản Chuẩn', cost: 0, desc: 'Tích Sát Ấn (tối đa 4) và kích nổ hoàn hồi nhịp Lướt.' },
+    { id: 'shadow_fang', name: 'Dao Ám Sát Huyết', cost: 110, desc: 'Nổ ≥3 Sát Ấn dịch chuyển ra sau mục tiêu xa nhất & chém chí mạng.' },
+  ],
+  spear: [
+    { id: 'default', name: 'Bản Chuẩn', cost: 0, desc: 'Điểm Ngọt đầu mũi chí mạng; Ném cắm Thương rồi bấm lần 2 thu về.' },
+    { id: 'thunder_lance', name: 'Thương Thần Truy Hồn', cost: 105, desc: 'Thu Thương gọi Thiên Lôi giáng xuống mỗi kẻ địch trúng dọc đường.' },
+  ],
+  scythe: [
+    { id: 'default', name: 'Bản Chuẩn', cost: 0, desc: 'Tích 5 Mảnh Hồn; Gặt Hồn ≥3 Mảnh gọi chém bóng tối trễ.' },
+    { id: 'void_reaper', name: 'Hái Thần Hư Không', cost: 115, desc: 'Khi đủ 5 Mảnh Hồn, mọi đòn đánh tự phóng lưỡi hái tìm địch.' },
+  ],
+  hammer: [
+    { id: 'default', name: 'Bản Chuẩn', cost: 0, desc: 'Đập Dội tường/quái khác & gọi Dư Chấn địa chấn.' },
+    { id: 'forge_colossus', name: 'Chùy Lò Cổ', cost: 120, desc: 'Dư Chấn nổ liên hoàn 2 vòng mở rộng gây +50% sát thương Choáng.' },
+  ],
+  staff: [
+    { id: 'default', name: 'Bản Chuẩn', cost: 0, desc: 'Combo 3 nhịp gắn Ấn Phép; Cầu Lớn kích nổ Ấn khi bay ngang.' },
+    { id: 'astral_spire', name: 'Trượng Hư Tinh', cost: 100, desc: 'Nhịp 3 gọi cầu tinh vân phóng 3 tia phép tự tìm mục tiêu.' },
+  ],
+  crossbow: [
+    { id: 'default', name: 'Bản Chuẩn', cost: 0, desc: 'Băng 5 tên; bấm đúng vùng vàng khi nạp kích Nạp Hoàn Hảo.' },
+    { id: 'repeater', name: 'Nỏ Liên Thanh', cost: 115, desc: 'Băng đạn 8 tên, tốc bắn +45%, Nạp Hoàn Hảo biến 8 mũi thành tên nổ.' },
+  ],
+  gauntlets: [
+    { id: 'default', name: 'Bản Chuẩn', cost: 0, desc: '5 nhịp Liên Quyền tích tốc đánh; Đấm Móc hất tung Đập Dội.' },
+    { id: 'meteor_fist', name: 'Quyền Nộ Hỏa Thần', cost: 125, desc: 'Đấm Móc gọi thiên thạch giáng xuống điểm va chạm 4.2m.' },
+  ],
+  whip: [
+    { id: 'default', name: 'Bản Chuẩn', cost: 0, desc: 'Quất Trúng Đỉnh ở rìa xa & Xích Kéo gom địch.' },
+    { id: 'storm_lash', name: 'Roi Lôi Xích', cost: 110, desc: 'Quất Trúng Đỉnh phóng sét chuỗi lan sang 2 quái gần.' },
+  ],
+  chakram: [
+    { id: 'default', name: 'Bản Chuẩn', cost: 0, desc: 'Ném nảy nhiều mục tiêu & Bắt Luân; Luân Quỹ Đạo xoay quanh thân.' },
+    { id: 'infinite_ring', name: 'Thiên Luân Vô Cực', cost: 130, desc: '+2 lần nảy cho mọi luân kiếm & Luân Quỹ Đạo mở rộng +30% bán kính.' },
+  ],
+};
+export const aspectById = (type, id = 'default') => (WEAPON_ASPECTS[type] || []).find((a) => a.id === id) || WEAPON_ASPECTS[type]?.[0] || null;
 
 // Giá trị phân rã (Mảnh Thép) và giá cường hóa
 export const scrapValue = (w) => [1, 3, 6, 12][w.rarity] + (w.affixes?.length || 0) + (w.plus || 0) * 2;
@@ -323,7 +428,7 @@ export function buildWeaponMesh(w) {
 
   const custom = models[modelFor(w.type)];
   if (custom) {
-    const len = { sword: 1.75, axe: 1.9, greatsword: 2.3, staff: 1.9, daggers: 1.0, crossbow: 1.3, spear: 2.45, scythe: 2.2, hammer: 2.0 }[w.type] || 1.8;
+    const len = { sword: 1.75, axe: 1.9, greatsword: 2.3, staff: 1.9, daggers: 1.0, crossbow: 1.3, spear: 2.45, scythe: 2.2, hammer: 2.0, gauntlets: 0.85, whip: 2.0, chakram: 1.1 }[w.type] || 1.8;
     const m = fitModel(custom, len, 'weapon');
     tintWeapon(m, w);
     g.add(m);
@@ -378,6 +483,21 @@ export function buildWeaponMesh(w) {
     add(new THREE.CylinderGeometry(0.045, 0.05, 1.85, 6), wood, 0, 0, 0.85, Math.PI / 2);
     add(new THREE.BoxGeometry(0.72, 0.34, 0.38), gold, 0, 0, 1.72);
     add(new THREE.BoxGeometry(0.78, 0.24, 0.26), metal, 0, 0, 1.72);
+  } else if (w.type === 'gauntlets') {
+    add(new THREE.BoxGeometry(0.32, 0.22, 0.34), metal, 0, 0, 0.22);
+    add(new THREE.BoxGeometry(0.36, 0.12, 0.12), gold, 0, 0.04, 0.42);
+    for (const sx of [-0.12, 0, 0.12]) add(new THREE.ConeGeometry(0.04, 0.12, 4), accent, sx, 0.05, 0.52, Math.PI / 2);
+  } else if (w.type === 'whip') {
+    add(new THREE.CylinderGeometry(0.045, 0.04, 0.42, 6), wood, 0, 0, 0.2, Math.PI / 2);
+    for (let k = 0; k < 6; k++) add(new THREE.TorusGeometry(0.06, 0.018, 6, 10), k % 2 ? metal : accent, (k % 2 ? 0.05 : -0.05), 0, 0.55 + k * 0.22, k % 2 ? Math.PI / 2 : 0);
+    add(new THREE.ConeGeometry(0.08, 0.26, 4), gold, 0, 0, 1.9, Math.PI / 2);
+  } else if (w.type === 'chakram') {
+    add(new THREE.TorusGeometry(0.42, 0.055, 6, 20), metal, 0, 0, 0.48, Math.PI / 2);
+    add(new THREE.TorusGeometry(0.32, 0.025, 6, 18), gold, 0, 0, 0.48, Math.PI / 2);
+    for (let k = 0; k < 4; k++) {
+      const a = (k / 4) * Math.PI * 2;
+      add(new THREE.ConeGeometry(0.06, 0.2, 4), accent, Math.cos(a) * 0.48, 0, 0.48 + Math.sin(a) * 0.48, Math.PI / 2, 0, -a - Math.PI / 2);
+    }
   }
   g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   return g;
@@ -435,6 +555,14 @@ export function updateWeaponHeatVisual(held, w, time = 0) {
 export function buildHeldWeapon(w) {
   const custom = models[modelFor(w.type)];
   if (!custom) return null;
+  const handLen = { gauntlets: 0.56, whip: 1.7, chakram: 0.88 }[w.type];
+  if (handLen) {
+    const m = fitModel(custom, handLen, 'weapon');
+    tintWeapon(m, w);
+    m.rotation.set(-Math.PI / 2, 0, 0);
+    m.position.set(0, w.type === 'gauntlets' ? -0.14 : 0.0333, 0);
+    return m;
+  }
   const m = custom.scene.clone(true);
   tintWeapon(m, w);
   const scale = { spear: 0.25, scythe: 0.34, hammer: 0.62 }[w.type] || 1;
