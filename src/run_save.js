@@ -1,5 +1,5 @@
 // Lưu tự động giữa lượt chơi (Tiếp tục lượt khi F5 / đóng tab) + Bảng xem nhanh Build & Chỉ số trong menu Tạm Dừng
-import { charById } from './content.js';
+import { charById, diffById } from './content.js';
 
 const RUN_SAVE_KEY = 'lorenh_run_save';
 
@@ -35,8 +35,9 @@ export function clearRunState() {
 export function describeSavedRun(s) {
   if (!s) return '';
   const ch = charById(s.run?.char || 'knight')?.name || 'Hiệp Sĩ';
+  const diff = s.run?.difficulty && s.run.difficulty !== 'normal' ? ` · ${diffById(s.run.difficulty).name}` : '';
   const endlessTag = s.run?.endless ? ' · Vô Tận' : s.run?.daily ? ' · Hằng Ngày' : '';
-  return `Tầng ${s.floor} · Đợt ${s.wave} · ${ch}${endlessTag}`;
+  return `Tầng ${s.floor} · Đợt ${s.wave} · ${ch}${diff}${endlessTag}`;
 }
 
 export function renderPauseBuildHtml(player, refs = {}) {
@@ -83,7 +84,7 @@ export function renderPauseBuildHtml(player, refs = {}) {
     : '<span class="muted small">Chưa có di vật</span>';
 
   const runLine = refs?.runStats
-    ? `<div class="pb-line">Hạ gục: <b>${refs.runStats.kills ?? 0}</b> · Kỷ lục: <b>${refs.runStats.best ?? 0}</b> · Hồn Thép: <b>${refs.runStats.souls ?? 0}</b></div>`
+    ? `<div class="pb-line">Hạ gục: <b>${refs.runStats.kills ?? 0}</b> · Kỷ lục: <b>${refs.runStats.best ?? 0}</b> · Hồn Thép: <b>${refs.runStats.souls ?? 0}</b>${refs.runStats.diffName ? ` · Độ khó: <b style="color:${refs.runStats.diffColor || '#ffcf4a'}">${refs.runStats.diffName}</b>` : ''}</div>`
     : '';
 
   return `

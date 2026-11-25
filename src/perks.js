@@ -68,11 +68,17 @@ export const META = [
 
 const KEY = 'lorenh_meta';
 export function loadMeta() {
-  const base = () => ({ souls: 0, up: {}, stats: {}, ach: {}, codex: {}, relicsSeen: {}, daily: {}, char: 'knight', curses: [], aspectsUnlocked: {}, aspects: {} });
+  const base = () => ({
+    souls: 0, up: {}, stats: {}, ach: {}, codex: {}, relicsSeen: {}, daily: {},
+    char: 'knight', curses: [], difficulty: 'normal',
+    aspectsUnlocked: {}, aspects: {},
+    ores: {}, orders: null, blueprints: {}, craftedWeapon: null, craftedBuff: null,
+  });
   try {
     const m = { ...base(), ...JSON.parse(localStorage.getItem(KEY) || '{}') };
-    for (const k of ['stats', 'ach', 'codex', 'relicsSeen', 'daily', 'up', 'aspectsUnlocked', 'aspects']) m[k] = m[k] || {};
+    for (const k of ['stats', 'ach', 'codex', 'relicsSeen', 'daily', 'up', 'aspectsUnlocked', 'aspects', 'ores', 'blueprints']) m[k] = m[k] || {};
     m.curses = m.curses || [];
+    if (!['easy', 'normal', 'hard'].includes(m.difficulty)) m.difficulty = 'normal';
     return m;
   } catch { return base(); }
 }

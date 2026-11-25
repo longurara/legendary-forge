@@ -1,6 +1,12 @@
 import * as THREE from 'three';
 import { endFrame, pressed, mouse, pollGamepad, pad, resetTouch, keys, coop, touch as touchIn, getTouchCfg, setTouchCfg, haptic } from './input.js';
 import { buildWorld, updateWorld, isBlocked, isPit, ROOM_HALF, pillars, boxes, pits, spawnExit, removeExit, exitPos, floorTheme, setDark, setDarkHook, setFlameLevel } from './world.js';
+import { VillageHub } from './hub.js';
+import {
+  ORES, ORE_BY_ID, oreForBiome, addOre, hasOres, spendOres, formatOreCost,
+  HUB_BUFFS, buffById, canDualCraft, craftCostFor, buildCraftPreview, craftStarterWeapon,
+  ensureOrders, canClaimOrder, countReadyOrders, recordOrderProgress, claimOrder,
+} from './crafting.js';
 import { Player, SPECIALS } from './player.js';
 import { Slime, Mage } from './enemies.js';
 import { Healer, ShieldBearer, Bomber, Wraith, ShadowLord } from './enemies_new.js';
@@ -35,7 +41,7 @@ import { loadModels, models, fitModel } from './models.js';
 import { randomWeapon, forgeWeapons, weaponName, weaponIcons, makeWeapon, rollAffixes, affixById, codexKey, RARITY, TYPES, ELEMENTS, WEAPON_ASPECTS, aspectById, scrapValue, MAX_PLUS, enhanceCost, weaponScore } from './weapons.js';
 import { weaponIcon, $, show } from './ui.js';
 import { PERKS, EVOLUTIONS, baseStats, rollPerks, xpForLevel, META, loadMeta, saveMeta } from './perks.js';
-import { RELICS, relicById, activeRelicSets, PETS, petById, CHARACTERS, charById, CURSES, EVENTS, ACHIEVEMENTS, DEPTHS } from './content.js';
+import { RELICS, relicById, activeRelicSets, PETS, petById, CHARACTERS, charById, CURSES, EVENTS, ACHIEVEMENTS, DEPTHS, DIFFICULTIES, diffById } from './content.js';
 import { makeElite, updateEliteLabels } from './elites.js';
 import { buildHazards, updateHazards, clearHazards } from './hazards.js';
 import * as hazards from './hazards.js';
@@ -265,8 +271,9 @@ function renderRelics() {
 }
 
 // ================= Trạng thái =================
-let player, loot, rewards, companions, sandbox, defense, objectives;
+let player, loot, rewards, companions, sandbox, defense, objectives, villageHub;
 let enemies = [];
+let runOres = {};
 let wave = 0;
 let kills = 0;
 let intermission = 1.2;
@@ -365,7 +372,7 @@ let hurtFlash = 0;
 let lastHp = 100;
 let best = Number(localStorage.getItem('lorenh_best') || 0);
 // Lượt chơi
-let run = { char: 'knight', pet: 'none', curses: [], daily: false, mode: 'normal', endless: false };
+let run = { char: 'knight', pet: 'none', curses: [], daily: false, depth: 0, difficulty: 'normal', mode: 'normal', endless: false };
 let choosingReward = false;      // đang chờ người chơi chọn bệ phần thưởng
 let nextReward = null;           // phần thưởng nhận khi dọn xong đợt tới
 let challengeWave = false;
@@ -404,7 +411,8 @@ let reinforceTrigger = 0;
 let reinforcePool = [];
 
 const hasCurse = (id) => run.curses.includes(id);
-const soulMult = () => (1 + run.curses.reduce((s, id) => s + (CURSES.find((c) => c.id === id)?.bonus || 0), 0) + (run.depth || 0) * 0.15) * (player?.stats.hoard ? 2 : 1);
+const curDiff = () => diffById(run.difficulty || 'normal');
+const soulMult = () => (1 + run.curses.reduce((s, id) => s + (CURSES.find((c) => c.id === id)?.bonus || 0), 0) + (run.depth || 0) * 0.15) * (player?.stats.hoard ? 2 : 1) * curDiff().soulMul;
 const deep = (n) => (run.depth || 0) >= n;
 
 function spawnPos(minDist = 6.5, r = Math.random) {
@@ -432,11 +440,13 @@ function playerPower() {
 // Độ khó theo tầng/đợt: sát thương quái, tốc độ quái
 function applyDifficulty() {
   const ember = flameTier() === 'ember';
-  ctx.enemyDmgMul = 1.35 * (1 + (floor - 1) * 0.18 + (wave - 1) * 0.012) * (deep(2) ? 1.15 : 1) * (1 + extraDmgCurse) * (ember ? 1.15 : 1);
+  const d = curDiff();
+  ctx.diff = d;
+  ctx.enemyDmgMul = 1.35 * (1 + (floor - 1) * 0.18 + (wave - 1) * 0.012) * d.enemyDmgMul * (deep(2) ? 1.15 : 1) * (1 + extraDmgCurse) * (ember ? 1.15 : 1);
   ctx.bossBane = bossBane;
   ctx.floor = floor;
   ctx.depth = run.depth || 0;
-  ctx.enemySpeed = (ctx.enemySpeed || 1) * (deep(5) ? 1.1 : 1) * (deep(10) ? 1.1 : 1) * (ember ? 1.18 : 1);
+  ctx.enemySpeed = (ctx.enemySpeed || 1) * d.enemySpeedMul * (deep(5) ? 1.1 : 1) * (deep(10) ? 1.1 : 1) * (ember ? 1.18 : 1);
   dmgScale.player = ctx.enemyDmgMul;
 }
 
@@ -461,10 +471,11 @@ function addEnemy(e, opts = {}) {
   if (be[0] && Math.random() < 0.8) { e.resist = be[0]; e.weak = be[1]; }
   if (!e.isBoss && !e.isDummy) {
     const r = opts.r || Math.random;
+    const d = curDiff();
     if (player.hasRelic('greed')) e.hp *= 1.25;
-    e.hp = Math.round(e.hp * (1 + (wave - 1) * 0.08) * (1 + (floor - 1) * 0.3) * Math.pow(playerPower(), 0.22) * (hasCurse('tough') ? 1.5 : 1) * (deep(1) ? 1.2 : 1) * (opts.hpMul || 1));
+    e.hp = Math.round(e.hp * (1 + (wave - 1) * 0.08) * (1 + (floor - 1) * 0.3) * d.enemyHpMul * Math.pow(playerPower(), d.powerExpMob) * (hasCurse('tough') ? 1.5 : 1) * (deep(1) ? 1.2 : 1) * (opts.hpMul || 1));
     if (floor >= 3) e.eliteSpeed = (e.eliteSpeed || 1) * (1 + Math.min(0.25, (floor - 2) * 0.06));
-    const baseChance = wave >= 3 || deep(3) ? Math.min(0.3, 0.04 + wave * 0.02) * (deep(3) ? 2 : 1) : 0;
+    const baseChance = wave >= d.eliteMinWave || deep(3) ? Math.min(0.45, (0.04 + wave * 0.02) * d.eliteChanceMul) * (deep(3) ? 2 : 1) : 0;
     const eliteChance = challengeWave || anchorWave || event?.id === 'elites' ? 1 : baseChance;
     if (r() < eliteChance) {
       makeElite(e, deep(4) ? 2 + (r() < 0.3 ? 1 : 0) : null, r);
@@ -511,7 +522,8 @@ function spawnBossWave() {
   const kind = isTrueFinal ? 10 : nextBossKind(rngFor(6));
   const bosses = createBosses(kind, level);
   applyDifficulty();
-  const hpMul = (1 + 0.4 * (floor - 1)) * Math.pow(playerPower(), 0.55) * (deep(9) ? 1.3 : 1);
+  const d = curDiff();
+  const hpMul = (1 + 0.4 * (floor - 1)) * d.bossHpMul * Math.pow(playerPower(), d.powerExpBoss) * (deep(9) ? 1.3 : 1);
   const intactAnchors = activeBossAnchors(floorMap);
   for (const boss of bosses) {
     boss.spawnT = -0.4;
@@ -558,7 +570,7 @@ function spawnBossWave() {
 // Đợt quái riêng cho Chế Độ Thủ Thành Lò Lửa (10 đợt từ bốn phía tràn vào Lò Trung Tâm)
 function spawnDefenseWave() {
   applyDifficulty();
-  const count = 8 + wave * 3;
+  const count = Math.max(6, Math.round((8 + wave * 3) * curDiff().spawnMult));
   const pool = ['normal', 'goblin', 'minion', 'spider', 'viper', 'orc', 'archer', 'imp', 'wasp', 'lancer', 'pyro', 'frostguard', 'berserker', 'bomber', 'crab', 'glub', 'wraith'];
   const maxIdx = Math.min(pool.length, 4 + wave * 2);
   for (let i = 0; i < count; i++) {
@@ -592,7 +604,7 @@ function spawnDefenseWave() {
 function spawnReinforcements() {
   if (reinforceLeft <= 0 || !reinforcePool.length) return;
   reinforceLeft--;
-  const count = Math.min(8, 4 + Math.floor(floor / 2) + Math.floor(wave / 3));
+  const count = Math.max(2, Math.min(9, Math.round((4 + Math.floor(floor / 2) + Math.floor(wave / 3)) * curDiff().spawnMult)));
   for (let i = 0; i < count; i++) {
     const kind = reinforcePool[Math.floor(Math.random() * reinforcePool.length)];
     const [x, z] = spawnPos(9);
@@ -628,11 +640,13 @@ function spawnWave() {
     if (event.id === 'dark') setDark(true);
     if (event.id === 'arena') { arenaT = 30; arenaSpawn = 3; arenaWave = true; }
   }
-  let mult = hasCurse('swarm') ? 1.4 : 1;
+  const d = curDiff();
+  let mult = (hasCurse('swarm') ? 1.4 : 1) * d.spawnMult;
   let hpMul = 1;
   if (event?.id === 'horde') { mult *= 1.85; hpMul = 0.62; }
   const biome = floorTheme(floor).biome.id;
-  const { units, squadNames, escortPairs } = composeWaveSquads({ wave, floor, biome, mult, arenaWave, rng: R, playerPos: player.pos });
+  const minCount = (floor === 1 && wave === 1 && d.wave1MinCount) ? d.wave1MinCount : d.minWaveCount;
+  const { units, squadNames, escortPairs } = composeWaveSquads({ wave, floor, biome, mult, arenaWave, rng: R, playerPos: player.pos, minCount, maxCap: d.maxWaveCap });
   const spawned = [];
   for (const u of units) {
     const e = MAKE_ENEMY[u.kind] ? new MAKE_ENEMY[u.kind](scene, u.x, u.z) : new Slime(scene, u.x, u.z, u.kind);
@@ -783,7 +797,7 @@ function renderEvent() {
 }
 
 function onWaveCleared() {
-  if (run.mode === 'sandbox') return;
+  if (run.mode === 'sandbox' || run.mode === 'hub') return;
   objectives?.clear();
   resetTactics();
   loot.vacuumAll();
@@ -881,6 +895,7 @@ function onWaveCleared() {
     showBanner('Đe Rèn xuất hiện!', 'Mang 2 vũ khí tới đe, bấm E để rèn', 2.6, '#ffa040');
   }
   if (!hasCurse('nopot') && meta.up.regen) player.heal(meta.up.regen * 6);
+  if (!hasCurse('nopot') && curDiff().waveHeal > 0) player.heal(curDiff().waveHeal);
   // Bệ phần thưởng cho đợt sau
   offerRewards();
   checkAchievements();
@@ -1086,6 +1101,7 @@ function autoSaveRun() {
     floorMap,
     flame: { ...flameState, curses: [...(flameState.curses || [])] },
     runDmg: { ...runDmg },
+    runOres: { ...runOres },
     runeBag: [...runeBag],
     bossCores: [...bossCores],
     player: {
@@ -1106,20 +1122,17 @@ function autoSaveRun() {
 
 function syncContinueBtn() {
   const btn = $('btn-continue');
-  const playBtn = $('btn-play');
-  const playLbl = $('btn-play-label');
+  const hubBtn = $('btn-hub');
   const s = loadRunState();
   if (!btn) return;
   if (s) {
     btn.classList.remove('hidden');
     const info = $('continue-info');
     if (info) info.textContent = describeSavedRun(s);
-    playBtn?.classList.remove('primary');
-    if (playLbl) playLbl.textContent = 'Lượt mới';
+    hubBtn?.classList.remove('primary');
   } else {
     btn.classList.add('hidden');
-    playBtn?.classList.add('primary');
-    if (playLbl) playLbl.textContent = 'Bắt đầu';
+    hubBtn?.classList.add('primary');
   }
 }
 
@@ -1138,6 +1151,11 @@ let patronTimer = null, questTimer = null;
 function restart() {
   clearTimeout(patronTimer); clearTimeout(questTimer);
   patronTimer = questTimer = null;
+  if (run.mode === 'hub') run.mode = 'normal';
+  villageHub?.clear();
+  document.body?.classList?.remove('in-hub');
+  show('hub-bar', false);
+  ctx.diff = curDiff();
   setupP2();
   floorMap = genFloorMap(Math.random);
   const isSpecialMode = run.mode === 'sandbox' || run.mode === 'defense';
@@ -1158,6 +1176,7 @@ function restart() {
   resetTactics();
   resetFlameState();
   runDmg = { basic: 0, special: 0, react: 0, rune: 0, ult: 0, pet: 0 };
+  runOres = {};
   victoryShown = false;
   run.victory = false;
   run.endless = false;
@@ -1254,15 +1273,22 @@ function setPaused(p) {
     applyFxQuality();
     syncExtraSettingsUI();
     syncSoundUI();
+    const d = curDiff();
+    const rb = $('btn-restart');
+    if (rb) rb.style.display = run.mode === 'hub' ? 'none' : '';
     const pb = $('pause-build');
-    if (pb) pb.innerHTML = renderPauseBuildHtml(player, { PERKS, EVOLUTIONS, BOONS, DUOS, GODS, RELICS, activeRelicSets, RUNES, describeCircuit, runStats: { kills, best, souls: meta.souls } });
+    if (pb) pb.innerHTML = renderPauseBuildHtml(player, {
+      PERKS, EVOLUTIONS, BOONS, DUOS, GODS, RELICS, activeRelicSets, RUNES, describeCircuit,
+      runStats: { kills, best, souls: meta.souls, diffName: run.mode === 'hub' || run.mode === 'sandbox' ? '' : d.name, diffColor: d.color },
+    });
   }
   show('pause', p);
   play(p ? 'uiOpen' : 'uiClose');
   if (!p) show('howto', false);
   setMode(p ? 'menu' : 'playing');
 }
-const inShopOpen = () => !$('shop').classList.contains('hidden') || !$('eventroom').classList.contains('hidden') || !$('floormap').classList.contains('hidden') || !$('victory').classList.contains('hidden') || !$('bestiary').classList.contains('hidden') || !$('save-modal').classList.contains('hidden') || isAnvilOpen();
+const inShopOpen = () => !['shop', 'eventroom', 'floormap', 'victory', 'bestiary', 'save-modal', 'prep', 'village', 'forge', 'workshop', 'npc-dialog', 'achievements', 'codex', 'board', 'story']
+  .every((id) => $(id)?.classList?.contains('hidden') !== false) || isAnvilOpen();
 
 // ================= Xuống tầng =================
 function descend() {
@@ -1278,7 +1304,7 @@ function descend() {
     clearRunes();
     echoMgr?.clear();
     meta.stats.maxFloor = Math.max(meta.stats.maxFloor || 0, floor);
-    if (floor === 5 && !run.daily && (run.depth || 0) >= (meta.depthMax || 0) && (meta.depthMax || 0) < 10) {
+    if (floor === 5 && !run.daily && curDiff().unlocksDepth && (run.depth || 0) >= (meta.depthMax || 0) && (meta.depthMax || 0) < 10) {
       meta.depthMax = (run.depth || 0) + 1;
       setTimeout(() => toast('x_skull-signet', `Mở khóa Bậc Hầm Sâu ${meta.depthMax}`, 'Chọn ở màn chuẩn bị trước khi vào hầm'), 1500);
     }
@@ -1301,7 +1327,7 @@ function descend() {
     maybeSpawnEchoGrave();
     addFlame(30);
     player.pos.set(0, 0, ROOM_HALF - 4);
-    player.heal(Math.round(player.maxHp * 0.3));
+    player.heal(Math.round(player.maxHp * curDiff().floorHealPct));
     for (const w of player.weapons) { w.dur = 100; w.warnedBroken = false; }
     renderSlots();
     if (run.pet && run.pet !== 'none') companions?.setPet(run.pet, player.pos);
@@ -1401,7 +1427,7 @@ function drawMinimap() {
   const wrap = $('minimap-wrap');
   const cv = $('minimap');
   if (!wrap || !cv) return;
-  const visible = started && !player.dead;
+  const visible = started && !player.dead && run.mode !== 'hub';
   wrap.classList.toggle('hidden', !visible);
   if (!visible) return;
   const nowMs = performance.now();
@@ -1551,8 +1577,17 @@ function onKill(e, opts = {}) {
     showBanner('Hạ Bóng Ma Thợ Rèn!', 'Lại gần Quả Cầu Hồn Khí (E) để đoạt di sản', 2.6, '#9fe8ff');
   }
   // Bình máu
-  const potionChance = hasCurse('nopot') || deep(7) ? (e.isBoss && !deep(7) ? 1 : 0) : e.isBoss ? 1 : 0.03 * (1 + st.luck) * dropMult;
+  const potionChance = hasCurse('nopot') || deep(7) ? (e.isBoss && !deep(7) ? 1 : 0) : e.isBoss ? 1 : 0.03 * (1 + st.luck) * dropMult * curDiff().potionDropMul;
   if (Math.random() < potionChance) loot.spawnPickup('potion', e.pos.x, e.pos.z);
+  // Quặng theo Vùng Đất (Boss & Tinh Anh rơi)
+  if (e.isBoss) {
+    const bOre = oreForBiome(floorTheme(floor).biome.id).id;
+    const oCount = 2 + (Math.random() < 0.5 ? 1 : 0);
+    for (let i = 0; i < oCount; i++) loot.spawnPickup('ore', e.pos.x + (Math.random() - 0.5) * 1.4, e.pos.z + (Math.random() - 0.5) * 1.4, bOre);
+    if (floor >= 3 && Math.random() < 0.55) loot.spawnPickup('ore', e.pos.x + 0.8, e.pos.z, 'thunder');
+  } else if (e.elite && Math.random() < 0.25 * dropMult) {
+    loot.spawnPickup('ore', e.pos.x, e.pos.z, oreForBiome(floorTheme(floor).biome.id).id);
+  }
   // Vũ khí rơi
   if (e.isBoss) {
     const otherBossAlive = enemies.some((o) => o !== e && o.isBoss && !o.dead);
@@ -1564,6 +1599,7 @@ function onKill(e, opts = {}) {
       loot.drop(w, e.pos.x, e.pos.z);
       rewards.spawnChest(e.pos.x + 2, e.pos.z);
       meta.stats.bossKills = (meta.stats.bossKills || 0) + 1;
+      progressOrders('boss', 1);
       if (e.twinGroup === 'twins') meta.stats.twinsKilled = (meta.stats.twinsKilled || 0) + 1;
       runInfo().bossKilled = true;
       run.bossKilled = true;
@@ -1579,7 +1615,10 @@ function onKill(e, opts = {}) {
     if (weaponScore(w) < best * 0.8 || dropsThisWave >= 2 + Math.floor(st.luck * 2) || loot.drops.length >= 4) loot.spawnPickup('scrap', e.pos.x, e.pos.z, scrapValue(w));
     else { loot.drop(w, e.pos.x, e.pos.z); dropsThisWave++; }
   } else if (Math.random() < 0.12 * dropMult) loot.spawnPickup('scrap', e.pos.x, e.pos.z, e.elite ? 3 : 1);
-  if (e.elite) questProgress('elites');
+  if (e.elite) {
+    questProgress('elites');
+    progressOrders('elite', 1);
+  }
   if (e.lastDashHit && performance.now() - e.lastDashHit < 400) questProgress('dashkill');
   if (e.nemesis) { run.nemesisLv = 0; addGold(80); addSouls(30); rewards.spawnChest(e.pos.x - 1.5, e.pos.z); showBanner('Đã hạ Kẻ Săn Đầu!', '+80 vàng · +30 Hồn Thép · rương di vật', 2.6, '#ff5a8a'); }
   if (e.miniBoss && !e.nemesis) { rewards.spawnChest(e.pos.x, e.pos.z); for (let i = 0; i < 5; i++) loot.spawnPickup('gold', e.pos.x, e.pos.z, 5); showBanner('Đã hạ Thủ Lĩnh!', 'Rơi rương di vật', 2, '#ff8a4a'); }
@@ -1795,6 +1834,45 @@ function renderForge() {
 }
 
 function renderPrep() {
+  run.difficulty = run.difficulty || meta.difficulty || 'normal';
+  const curD = diffById(run.difficulty);
+  const diffEl = $('diff-list');
+  if (diffEl) {
+    diffEl.innerHTML = DIFFICULTIES.map((d) => `<button class="diff-card${run.difficulty === d.id ? ' sel' : ''}" data-diff="${d.id}" style="--dc:${d.color}">
+      <div class="diff-head"><i class="ico" style="--i:url('/ui/icons/${d.icon}.svg')"></i><h4>${d.name}</h4><span class="diff-tag">${d.tag}</span></div>
+      <p>${d.desc}</p>
+      <ul class="diff-bullets">${d.bullets.map((b) => `<li>${b}</li>`).join('')}</ul>
+    </button>`).join('');
+    for (const b of diffEl.querySelectorAll('.diff-card')) {
+      b.onclick = () => {
+        run.difficulty = b.dataset.diff;
+        meta.difficulty = run.difficulty;
+        if (!diffById(run.difficulty).allowDepthCurses) {
+          run.depth = 0; meta.depth = 0;
+          run.curses = []; meta.curses = [];
+        }
+        saveMeta(meta);
+        play('uiClick');
+        renderPrep();
+      };
+    }
+  }
+  const gearEl = $('prep-gear-summary');
+  if (gearEl) {
+    const cw = meta.craftedWeapon;
+    const cb = meta.craftedBuff ? buffById(meta.craftedBuff) : null;
+    if (cw || cb) {
+      const parts = [];
+      if (cw) parts.push(`<span><i class="ico ico-anvil"></i> Vũ khí tự rèn: <b style="color:${RARITY[cw.rarity].css}">${weaponName(cw)}</b> ${weaponIcons(cw)}</span>`);
+      if (cb) parts.push(`<span><i class="ico" style="--i:url('/ui/icons/${cb.icon}.svg');color:${cb.color}"></i> Bùa: <b style="color:${cb.color}">${cb.name}</b></span>`);
+      gearEl.innerHTML = parts.join('<span class="sep">·</span>');
+      gearEl.classList.remove('hidden');
+    } else {
+      gearEl.classList.add('hidden');
+      gearEl.innerHTML = '';
+    }
+  }
+
   if (!isUnlocked(charById(run.char))) run.char = 'knight';
   $('char-list').innerHTML = CHARACTERS.map((c) => {
     const open = isUnlocked(c);
@@ -1805,7 +1883,14 @@ function renderPrep() {
       <div class="muted small">${open ? `${c.hp} máu · ${TYPES[c.weapon].name}` : 'Khóa'}</div>
       <p>${open ? c.passive : `Mở khóa: ${req?.desc || 'Hoàn thành thành tựu'}`}</p></button>`;
   }).join('');
-  for (const b of $('char-list').querySelectorAll('.char-card')) b.onclick = () => { run.char = b.dataset.id; meta.char = run.char; saveMeta(meta); if (!started) syncMenuStage(); play('uiClick'); renderPrep(); };
+  for (const b of $('char-list').querySelectorAll('.char-card')) b.onclick = () => {
+    run.char = b.dataset.id; meta.char = run.char; saveMeta(meta);
+    if (!started || run.mode === 'hub') {
+      if (run.mode === 'hub') { player.setCharacter(run.char); syncHubWeaponPreview(); }
+      else syncMenuStage();
+    }
+    play('uiClick'); renderPrep();
+  };
   const petEl = $('pet-list');
   if (petEl) {
     run.pet = run.pet || meta.pet || 'none';
@@ -1815,25 +1900,32 @@ function renderPrep() {
       <p>${p.desc}</p></button>`).join('');
     for (const b of petEl.querySelectorAll('.pet-card')) b.onclick = () => { run.pet = b.dataset.pet; meta.pet = run.pet; saveMeta(meta); play('uiClick'); renderPrep(); };
   }
-  $('curse-list').innerHTML = CURSES.map((c) => `<button class="curse${run.curses.includes(c.id) ? ' on' : ''}" data-id="${c.id}">
+  $('curse-list').innerHTML = CURSES.map((c) => `<button class="curse${run.curses.includes(c.id) ? ' on' : ''}" data-id="${c.id}" ${curD.allowDepthCurses ? '' : 'disabled'}>
     <i class="ico" style="--i:url('/ui/icons/${c.icon}.svg')"></i><div><h4>${c.name} <span class="bonus">+${Math.round(c.bonus * 100)}%</span></h4><p>${c.desc}</p></div></button>`).join('');
   for (const b of $('curse-list').querySelectorAll('.curse')) b.onclick = () => {
+    if (!curD.allowDepthCurses) return;
     const id = b.dataset.id;
     run.curses = run.curses.includes(id) ? run.curses.filter((x) => x !== id) : [...run.curses, id];
     meta.curses = run.curses; saveMeta(meta);
     play('uiClick'); renderPrep();
   };
-  const maxD = meta.depthMax || 0;
-  run.depth = Math.min(run.depth ?? meta.depth ?? 0, maxD);
+  const maxD = curD.allowDepthCurses ? (meta.depthMax || 0) : 0;
+  run.depth = curD.allowDepthCurses ? Math.min(run.depth ?? meta.depth ?? 0, maxD) : 0;
   $('depth-val').textContent = run.depth;
-  $('depth-max').textContent = maxD ? `(đã mở tới bậc ${maxD})` : '(hạ boss tầng 4 để mở bậc 1)';
-  $('depth-minus').disabled = run.depth <= 0;
-  $('depth-plus').disabled = run.depth >= maxD;
+  $('depth-max').textContent = maxD ? `(đã mở tới bậc ${maxD})` : '(vượt Tầng 4 ở mức Chuẩn/Khó để mở bậc 1)';
+  $('depth-minus').disabled = !curD.allowDepthCurses || run.depth <= 0;
+  $('depth-plus').disabled = !curD.allowDepthCurses || run.depth >= maxD;
   $('depth-rules').innerHTML = run.depth ? DEPTHS.filter((d) => d.n <= run.depth).map((d) => `<li><b>${d.n}</b> ${d.text}</li>`).join('') : '<li class="muted">Không có luật thêm</li>';
   $('depth-minus').onclick = () => { run.depth = Math.max(0, run.depth - 1); meta.depth = run.depth; saveMeta(meta); play('uiClick'); renderPrep(); };
   $('depth-plus').onclick = () => { run.depth = Math.min(maxD, run.depth + 1); meta.depth = run.depth; saveMeta(meta); play('uiClick'); renderPrep(); };
+  $('prep-depth-wrap')?.classList?.toggle('prep-locked-sec', !curD.allowDepthCurses);
+  $('prep-curse-wrap')?.classList?.toggle('prep-locked-sec', !curD.allowDepthCurses);
+  $('prep-easy-lock')?.classList?.toggle('hidden', curD.allowDepthCurses);
   const bonus = run.curses.reduce((s, id) => s + CURSES.find((c) => c.id === id).bonus, 0) + run.depth * 0.15;
-  $('curse-bonus').textContent = bonus ? `Hồn Thép nhận được +${Math.round(bonus * 100)}%` : 'Không có lời nguyền';
+  $('curse-bonus').textContent = !curD.allowDepthCurses
+    ? 'Học Việc: Hồn Thép ×0.85 · không áp dụng Bậc Hầm Sâu & Lời nguyền'
+    : bonus ? `Hồn Thép nhận được +${Math.round(bonus * 100)}% (độ khó ${curD.name}: ×${curD.soulMul})`
+      : curD.soulMul !== 1 ? `Độ khó ${curD.name}: Hồn Thép ×${curD.soulMul}` : 'Không có lời nguyền';
 }
 
 function renderAchievements() {
@@ -1879,6 +1971,72 @@ function updateAim() {
 // ================= Tương tác (phím E) =================
 const touchActions = Object.fromEntries([...document.querySelectorAll("[data-action]")].map(button => [button.dataset.action, button]));
 function handleInteract() {
+  const E = pressed.has('KeyE');
+  if (run.mode === 'hub' && villageHub?.active) {
+    const near = villageHub.nearestInteractable(player.pos);
+    let text = '';
+    let interactLabel = '';
+    if (near) {
+      if (near.id === 'gate') {
+        interactLabel = 'Vào Hầm';
+        text = '<span class="keycap">E</span> Mở <b>Cổng Hầm Ngục</b> · Chọn Độ Khó &amp; Nhân Vật';
+        if (E) { renderPrep(); show('prep', true); setMode('menu'); play('uiOpen'); }
+      } else if (near.id === 'workshop') {
+        interactLabel = 'Xưởng Rèn';
+        const rdy = countReadyOrders(meta);
+        text = `<span class="keycap">E</span> Mở <b>Xưởng Rèn Làng</b>${rdy ? ` <span class="hub-badge-ex">${rdy} Hoàn thành!</span>` : ' · Đơn Hàng · Rèn Quặng'}`;
+        if (E) openWorkshop('orders');
+      } else if (near.id === 'master_smith') {
+        interactLabel = 'Nói chuyện';
+        text = '<span class="keycap">E</span> Nói chuyện với <b>Thợ Cả Hàn</b>';
+        if (E) openNpcDialog('master_smith');
+      } else if (near.id === 'builder') {
+        interactLabel = 'Xây Làng';
+        text = '<span class="keycap">E</span> Gặp <b>Thương Nhân Xây Làng</b> · Nâng cấp công trình';
+        if (E) { renderVillage(); show('village', true); setMode('menu'); play('uiOpen'); }
+      } else if (near.id === 'board') {
+        interactLabel = 'Thư Viện';
+        text = '<span class="keycap">E</span> Xem <b>Thành Tựu · Sổ Rèn · BXH</b>';
+        if (E) openNpcDialog('board');
+      } else if (near.id === 'traveler') {
+        interactLabel = 'Lữ Khách';
+        text = '<span class="keycap">E</span> Trò chuyện cùng <b>Lữ Khách Quán Trọ</b>';
+        if (E) openNpcDialog('traveler');
+      } else if (near.id === 'shrine') {
+        interactLabel = 'Đền Thần';
+        text = '<span class="keycap">E</span> Chiêm bái <b>Đền Thần Làng</b>';
+        if (E) openNpcDialog('shrine');
+      } else if (near.id === 'scholar') {
+        interactLabel = 'Học Giả';
+        text = '<span class="keycap">E</span> Gặp <b>Học Giả Thư Viện</b>';
+        if (E) openNpcDialog('scholar');
+      }
+    }
+    const touchInteract = $('touch-interact');
+    if (touchInteract) {
+      touchInteract.hidden = !interactLabel;
+      touchInteract.classList.remove('urgent');
+      const lbl = $('touch-interact-lbl');
+      if (lbl && interactLabel && lbl.textContent !== interactLabel) lbl.textContent = interactLabel;
+      const ico = $('touch-interact-ico');
+      if (ico && interactLabel) {
+        const iName = interactLabel === 'Xưởng Rèn' ? 'anvil'
+          : interactLabel === 'Xây Làng' ? 'x_shop'
+            : interactLabel === 'Vào Hầm' ? 'upgrade' : 'x_scroll';
+        ico.style.setProperty('--i', `url('/ui/icons/${iName}.svg')`);
+      }
+      if (touchActions.KeyX) touchActions.KeyX.hidden = true;
+      if (touchActions.KeyF) touchActions.KeyF.hidden = true;
+      if (touchActions.KeyQ) touchActions.KeyQ.hidden = player.weapons.length < 2 && !player.weapon?.altForm;
+    }
+    if (text !== _lastPromptHtml) {
+      _lastPromptHtml = text;
+      hud.prompt.innerHTML = text;
+      hud.prompt.classList.toggle('show', !!text);
+    }
+    return;
+  }
+
   let drop = loot.nearest(player.pos);
   const atAnvil = loot.nearAnvil(player.pos);
   const ex = exitOpen && exitPos();
@@ -1886,7 +2044,6 @@ function handleInteract() {
   const pedestal = choosingReward && rewards.nearestPedestal(player.pos);
   const chest = rewards.nearestChest(player.pos);
   const atMerchant = inShop && rewards.nearMerchant(player.pos);
-  const E = pressed.has('KeyE');
   let text = '';
   let interactLabel = '';
   // Kết liễu: quái đang choáng hoặc còn dưới 15% máu (24% với Di vật Lưỡi Hái Đao Phủ), đứng gần
@@ -2023,6 +2180,7 @@ function handleInteract() {
         fxRing(scene, loot.anvil.pos, 2.2, 0xffcf4a, 0.4);
         fxFlash(loot.anvil.pos.clone().setY(1.2), 0xffcf4a, 2.5, 0.2);
         showBanner(weaponName(cw), `Cường hóa +${cw.plus} · +${cw.plus * 12}% sát thương`, 1.6, '#ffcf4a');
+        progressOrders('temper', 1);
       } else { play('uiBack'); showBanner('Thiếu Mảnh Thép', `Cần ${cost}, đang có ${scrap}. Phân rã vũ khí thừa bằng phím X`, 1.6, '#c9c9c9'); }
     }
     interactLabel = 'Xưởng Đe';
@@ -2045,6 +2203,13 @@ function handleInteract() {
       play('pickup');
       loot.remove(drop);
       if (old) loot.drop(old, player.pos.x, player.pos.z);
+    }
+  } else {
+    const vein = hazards.nearestOreVein?.(player.pos);
+    if (vein) {
+      interactLabel = 'Đập Quặng';
+      text = `<span class="keycap">E</span> Đập <b style="color:${vein.ore.color}">${vein.ore.name}</b> <span class="muted small">(${vein.hp}/3 · hoặc đánh thường)</span>`;
+      if (E) vein.hit();
     }
   }
   const touchInteract = $('touch-interact');
@@ -2099,10 +2264,15 @@ function update(realDt, render = true) {
     toast('x_scroll', fxSettings.compactHud ? 'HUD: Gọn' : 'HUD: Đầy đủ', 'Nhấn H để chuyển nhanh');
     play('uiClick');
   }
-  if (pressed.has('Tab') && started && !player.dead && !choosing) toggleMap();
+  if (pressed.has('Tab') && started && !player.dead && !choosing && run.mode !== 'hub') toggleMap();
   if (pressed.has('Escape')) {
     if (inShopOpen()) leaveShopPanel();
     else if (started && !player.dead && !choosing) setPaused(!paused);
+  }
+  if (started && run.mode === 'hub' && !paused && !choosing && !inShopOpen()) {
+    if (pressed.has('KeyF')) openWorkshop('orders');
+    else if (pressed.has('KeyB')) { renderVillage(); show('village', true); setMode('menu'); play('uiOpen'); }
+    else if (pressed.has('Enter')) { renderPrep(); show('prep', true); setMode('menu'); play('uiOpen'); }
   }
 
   if (started && !paused && !choosing && !inShopOpen()) {
@@ -2171,16 +2341,17 @@ function update(realDt, render = true) {
         onDeath();
       }
     }
-    if (run.mode !== 'sandbox') updateHazards(dt, event?.id === 'firerain');
+    if (run.mode !== 'sandbox' && run.mode !== 'hub') updateHazards(dt, event?.id === 'firerain');
+    if (run.mode === 'hub') villageHub?.update(dt, time, camera, player.pos, meta);
     // Cơn Thịnh Nộ của vị thần bị từ chối trong Song Tượng Thần (cơ chế #7)
     if (trialState && enemies.some((e) => e.alive)) {
       tickGodWrath(trialState.spurnedGod.id, dt, trialState.wrathState, scene, player, enemies);
     }
     // Ánh Lửa giảm dần khi giao chiến (cơ chế #6 · Chén Lửa -35%, giảm 55% khi đấu Boss)
-    if (run.mode !== 'sandbox' && enemies.some((e) => e.alive && !e.isDummy) && !player.dead) {
+    if (run.mode !== 'sandbox' && run.mode !== 'hub' && enemies.some((e) => e.alive && !e.isDummy) && !player.dead) {
       const flameMul = player.stats.chalice ? 0.65 : 1;
       const bossSlow = enemies.some((e) => e.isBoss && e.alive) ? 0.45 : 1;
-      addFlame(-dt * (0.95 + (floor - 1) * 0.18) * flameMul * bossSlow);
+      addFlame(-dt * (0.95 + (floor - 1) * 0.18) * flameMul * bossSlow * curDiff().flameDrainMul);
     }
 
     const born = [];
@@ -2215,7 +2386,8 @@ function update(realDt, render = true) {
     const fighting = run.mode === 'normal' && enemies.some((e) => e.alive && !e.isBoss && !e.isDummy) && !enemies.some((e) => e.isBoss) && arenaT <= 0 && !player.dead;
     if (fighting) {
       waveTime += dt;
-      const limit = deep(10) ? 40 : 60;
+      const baseLim = curDiff().creepLimit;
+      const limit = deep(10) ? Math.max(35, baseLim - 15) : baseLim;
       if (!creeping && waveTime >= limit) {
         creeping = true;
         showBanner('Bóng Tối Lan!', 'Đánh nhanh lên: bóng tối đang nuốt căn phòng', 2.4, '#9a6aff');
@@ -2254,7 +2426,7 @@ function update(realDt, render = true) {
       }
       if (arenaT <= 0) showBanner('Hết giờ!', 'Dọn sạch số quái còn lại', 1.6, '#ffb040');
     }
-    if (!player.dead && run.mode !== 'sandbox' && enemies.length === 0 && arenaT <= 0) {
+    if (!player.dead && run.mode !== 'sandbox' && run.mode !== 'hub' && enemies.length === 0 && arenaT <= 0) {
       if (intermission === null) onWaveCleared();
       if (intermission !== null && isFinite(intermission)) {
         if (pressed.has('KeyG') && !choosingReward && !inShop && !exitOpen && intermission > 0.3) intermission = 0.25;
@@ -2284,8 +2456,11 @@ function update(realDt, render = true) {
         if (hasDynCurse('blood_gold') && !player.hasRelic('fury') && player.weapon?.corrupted !== 'c_finisher') player.heal(2);
         play('drop', { vol: 0.5, rate: 1.45 * pRate });
       } else if (p.kind === 'potion') {
-        if (!player.hasRelic('fury') && player.weapon?.corrupted !== 'c_finisher') player.heal(25);
+        if (!player.hasRelic('fury') && player.weapon?.corrupted !== 'c_finisher') player.heal(curDiff().potionHeal);
         play('heal');
+      } else if (p.kind === 'ore') {
+        pickOre(p.value, 1);
+        play('dropRare', { vol: 0.55, rate: 1.3 });
       } else if (p.kind === 'gem') pickGem(p.value);
       else if (p.kind === 'rune') pickRune(typeof p.value === 'string' ? p.value : p.value?.id);
       else if (p.kind === 'core') pickCore(typeof p.value === 'string' ? p.value : p.value?.id);
@@ -2333,7 +2508,8 @@ function update(realDt, render = true) {
 
   // Nhạc nền theo trạng thái
   const bossAlive = enemies.some((e) => e.isBoss && !e.dead);
-  setMusic(!started ? 'calm' : bossAlive ? 'boss' : enemies.length ? 'battle' : 'calm');
+  const combatAlive = enemies.some((e) => e.alive && !e.isDummy);
+  setMusic(!started || run.mode === 'hub' ? 'calm' : bossAlive ? 'boss' : combatAlive ? 'battle' : 'calm');
   updateMusic(realDt);
 
   // Camera (zoom gần khi hạ boss, tụ lực, phản đòn & look-ahead theo hướng chuột)
@@ -2525,8 +2701,23 @@ function updateHud(realDt) {
   }
   $('gold').textContent = gold;
   const alive = enemies.filter((e) => !e.dead && !e.isDummy).length;
-  hud.left.textContent = run.mode === 'sandbox' ? '· Phòng Tập' : alive ? `· còn ${alive} quái` : '';
+  hud.left.textContent = run.mode === 'sandbox' ? '· Phòng Tập' : run.mode === 'hub' ? '· Làng' : alive ? `· còn ${alive} quái` : '';
   $('floor').textContent = floor;
+  const diffBadge = $('hud-diff');
+  if (diffBadge) {
+    const showDiff = started && run.mode !== 'hub' && run.mode !== 'sandbox';
+    diffBadge.classList.toggle('hidden', !showDiff);
+    if (showDiff) {
+      const d = curDiff();
+      diffBadge.textContent = d.name;
+      diffBadge.style.color = d.color;
+      diffBadge.style.borderColor = d.color;
+    }
+  }
+  if (run.mode === 'hub' && player) {
+    player.hp = player.maxHp;
+    for (const w of player.weapons || []) w.dur = 100;
+  }
   if (sandbox?.active) {
     const st = sandbox.getDpsStats();
     if ($('sb-dps')) $('sb-dps').textContent = st.dps.toLocaleString('vi-VN');
@@ -2651,7 +2842,8 @@ function updateHud(realDt) {
   document.body?.classList?.toggle('hud-idle', idle || inShop || exitOpen);
   $('hint')?.classList?.toggle('hint-auto-hide', !!fxSettings.compactHud && wave >= 2);
   $('quest-chip')?.classList?.toggle('quest-quiet', !!fxSettings.compactHud && (choosingReward || inShop || exitOpen || !!boss));
-  const creepLimit = deep(10) ? 40 : 60;
+  const baseLim = curDiff().creepLimit;
+  const creepLimit = deep(10) ? Math.max(35, baseLim - 15) : baseLim;
   const objHud = !idle && started ? objectives?.hudText?.() : '';
   const baseT = creeping ? '<i class="ico ico-hourglass"></i> <span style="color:#b89aff">Bóng Tối Lan!</span>'
     : waveTime > creepLimit - 15 && enemies.length ? `<i class="ico ico-hourglass"></i> Bóng Tối Lan sau ${Math.ceil(creepLimit - waveTime)} giây`
@@ -2674,7 +2866,7 @@ function showVictory(reason = 'story') {
   victoryShown = true;
   run.victory = true;
   const modeLbl = reason === 'defense' ? 'Thủ Thành' : run.daily ? 'Hằng ngày' : '';
-  submitRun({ floor, wave, kills, char: run.char, depth: run.depth || 0, boss: true, victory: true, date: todayKey(), mode: modeLbl });
+  submitRun({ floor, wave, kills, char: run.char, difficulty: run.difficulty || 'normal', depth: run.depth || 0, boss: true, victory: true, date: todayKey(), mode: modeLbl });
   checkAchievements();
   saveMeta(meta);
   setTimeout(() => {
@@ -2684,7 +2876,7 @@ function showVictory(reason = 'story') {
     $('vic-wave').textContent = reason === 'defense' ? `${wave} / ${DEFENSE_MAX_WAVES}` : `${floor} / ${wave}`;
     $('vic-kills').textContent = kills;
     $('vic-souls').textContent = runSouls;
-    $('vic-summary').innerHTML = renderRunSummaryHtml(runDmg, player, run);
+    $('vic-summary').innerHTML = renderRunSummaryHtml(runDmg, player, run, runOres);
     const btnEnd = $('btn-endless');
     if (btnEnd) btnEnd.style.display = reason === 'defense' ? 'none' : '';
     show('victory', true);
@@ -2710,7 +2902,7 @@ function onDeath() {
   const bestW = [...(player.weapons || [])].sort((a, b) => weaponScore(b) - weaponScore(a))[0];
   if (bestW && run.mode === 'normal') recordEcho(meta, floor, run.char, bestW, player.patron);
   const rank = run.mode !== 'sandbox'
-    ? submitRun({ floor, wave, kills, char: run.char, depth: run.depth || 0, boss: !!run.bossKilled, date: todayKey(), mode: run.mode === 'defense' ? 'Thủ Thành' : run.bossrush ? 'Boss Rush' : run.daily ? 'Hằng ngày' : '' })
+    ? submitRun({ floor, wave, kills, char: run.char, difficulty: run.difficulty || 'normal', depth: run.depth || 0, boss: !!run.bossKilled, date: todayKey(), mode: run.mode === 'defense' ? 'Thủ Thành' : run.bossrush ? 'Boss Rush' : run.daily ? 'Hằng ngày' : '' })
     : 0;
   checkAchievements();
   saveMeta(meta);
@@ -2722,7 +2914,7 @@ function onDeath() {
     const w = player.weapon;
     $('go-souls').innerHTML = `<i class="ico ico-soul"></i> Nhận được <b>${runSouls}</b> Hồn Thép · Tầng ${floor} · Cấp ${player.level}${run.mode === 'defense' ? ' · Thủ Thành' : run.daily ? ' · Thử thách hằng ngày' : ''}${rank ? ` · <b style="color:var(--gold)">Hạng #${rank}</b> bảng xếp hạng` : ''}`;
     $('go-weapon').innerHTML = `Vũ khí cuối cùng: <span style="color:${RARITY[w.rarity].css}">${weaponName(w)}</span> ${weaponIcons(w)}`;
-    if ($('go-summary')) $('go-summary').innerHTML = renderRunSummaryHtml(runDmg, player, run);
+    if ($('go-summary')) $('go-summary').innerHTML = renderRunSummaryHtml(runDmg, player, run, runOres);
     show('gameover', true);
     setMode('menu');
     playStory();
@@ -2742,20 +2934,26 @@ function tick(now) {
 }
 
 function startGame(opts = {}) {
-  if (started) return;
+  if (started && run.mode !== 'hub') return;
   unlockAudio();
   unlockMusic();
   play('uiConfirm');
+  villageHub?.clear();
+  document.body?.classList?.remove('in-hub');
+  show('hub-bar', false);
   const mode = opts.sandbox ? 'sandbox' : opts.defense ? 'defense' : 'normal';
   const curPet = run.pet || meta.pet || 'none';
+  const diffId = opts.daily || mode === 'sandbox' ? 'normal' : (run.difficulty || meta.difficulty || 'normal');
+  const dCfg = diffById(diffId);
   run = opts.daily
-    ? { char: 'knight', pet: curPet, curses: [], daily: true, depth: 0, mode: 'normal', endless: false }
+    ? { char: 'knight', pet: curPet, curses: [], daily: true, depth: 0, difficulty: 'normal', mode: 'normal', endless: false }
     : {
         char: run.char || meta.char || 'knight',
         pet: curPet,
-        curses: opts.bossrush || mode !== 'normal' ? [] : [...run.curses],
+        curses: opts.bossrush || mode !== 'normal' || !dCfg.allowDepthCurses ? [] : [...run.curses],
         daily: false,
-        depth: opts.bossrush || mode !== 'normal' ? 0 : run.depth || 0,
+        depth: opts.bossrush || mode !== 'normal' || !dCfg.allowDepthCurses ? 0 : run.depth || 0,
+        difficulty: diffId,
         bossrush: !!opts.bossrush,
         coop: !!opts.coop,
         mode,
@@ -2767,25 +2965,52 @@ function startGame(opts = {}) {
   started = true;
   menuTransitionT = 0.65;
   if (darkLight) { darkLight.color.set(0xffd8a0); darkLight.intensity = 0; }
-  for (const id of ['start', 'howto', 'prep', 'bestiary', 'save-modal', 'victory']) show(id, false);
+  for (const id of ['start', 'howto', 'prep', 'bestiary', 'save-modal', 'victory', 'gameover', 'workshop', 'npc-dialog', 'village', 'forge']) show(id, false);
   restart();
+  if (run.mode === 'normal' && !run.daily && !run.bossrush) {
+    let dirtyMeta = false;
+    if (meta.craftedWeapon) {
+      const cw = JSON.parse(JSON.stringify(meta.craftedWeapon));
+      cw.dur = 100; cw.heat = 0; cw.overheatT = 0;
+      player.setWeapons([cw], 0);
+      recordCodex(cw);
+      renderSlots();
+      toast('anvil', 'Mang Theo Vũ Khí Tự Rèn!', weaponName(cw));
+      meta.craftedWeapon = null;
+      dirtyMeta = true;
+    }
+    if (meta.craftedBuff) {
+      const b = buffById(meta.craftedBuff);
+      if (b?.id === 'iron_aegis') player.shieldHp = (player.shieldHp || 0) + 35;
+      else if (b?.id === 'frost_stride') { player.base.dashCd *= 0.85; player.recalc(); }
+      else if (b?.id === 'magma_heart') { flameState.flame = 100; player.base.magmaHeart = true; player.recalc(); renderFlameHud(); }
+      else if (b?.id === 'ancient_relic') { setTimeout(() => { if (started && !player.dead) grantRelic(); }, 650); }
+      if (b) toast(b.icon, `Kích Hoạt Bùa: ${b.name}`, b.desc);
+      meta.craftedBuff = null;
+      dirtyMeta = true;
+    }
+    if (dirtyMeta) saveMeta(meta);
+  }
   syncMenuStage();
   setMode('playing');
 }
 
 function continueSavedRun() {
-  if (started) return;
+  if (started && run.mode !== 'hub') return;
   const s = loadRunState();
   if (!s) return;
   unlockAudio();
   unlockMusic();
   play('uiConfirm');
-  run = { char: 'knight', pet: meta.pet || 'none', curses: [], daily: false, depth: 0, mode: 'normal', endless: false, ...(s.run || {}), coop: false };
+  villageHub?.clear();
+  document.body?.classList?.remove('in-hub');
+  show('hub-bar', false);
+  run = { char: 'knight', pet: meta.pet || 'none', curses: [], daily: false, depth: 0, difficulty: 'normal', mode: 'normal', endless: false, ...(s.run || {}), coop: false };
   coop.on = false;
   setSeed(run.daily ? daySeed() : null);
   started = true;
   if (darkLight) { darkLight.color.set(0xffd8a0); darkLight.intensity = 0; }
-  for (const id of ['start', 'howto', 'prep', 'bestiary', 'save-modal', 'victory']) show(id, false);
+  for (const id of ['start', 'howto', 'prep', 'bestiary', 'save-modal', 'victory', 'gameover', 'workshop', 'npc-dialog', 'village', 'forge']) show(id, false);
   restart();
   clearTimeout(patronTimer);
   patronTimer = null;
@@ -2810,6 +3035,7 @@ function continueSavedRun() {
   runeBag = Array.isArray(s.runeBag) ? [...s.runeBag] : [];
   bossCores = Array.isArray(s.bossCores) ? [...s.bossCores] : [];
   if (s.runDmg) runDmg = { ...runDmg, ...s.runDmg };
+  if (s.runOres) runOres = { ...s.runOres };
   if (s.flame) {
     flameState.flame = s.flame.flame ?? 100;
     flameState.corruption = s.flame.corruption ?? 0;
@@ -2863,6 +3089,9 @@ function continueSavedRun() {
 function toMenu() {
   setSeed(null);
   updateMenuSouls();
+  villageHub?.clear();
+  document.body?.classList?.remove('in-hub');
+  show('hub-bar', false);
   started = false;
   run.daily = false;
   run.coop = false; coop.on = false;
@@ -2903,8 +3132,14 @@ function renderDaily() {
 
 function leaveShopPanel() {
   if (isAnvilOpen()) { closeAnvilModal(); return; }
-  show('shop', false); show('floormap', false); show('bestiary', false); show('save-modal', false);
-  setMode(started ? 'playing' : 'menu');
+  for (const id of ['shop', 'floormap', 'bestiary', 'save-modal', 'prep', 'village', 'forge', 'workshop', 'npc-dialog', 'achievements', 'codex', 'board', 'story']) {
+    show(id, false);
+  }
+  if (run.mode === 'hub') {
+    renderHubBar();
+    villageHub?.refreshLabels(meta);
+  }
+  setMode(started && !paused && !choosing && !inShopOpen() ? 'playing' : 'menu');
   play('uiClose');
 }
 
@@ -2985,6 +3220,9 @@ async function init() {
   run.char = meta.char || 'knight';
   run.pet = meta.pet || 'none';
   run.curses = [...(meta.curses || [])];
+  run.difficulty = meta.difficulty || 'normal';
+  ctx.diff = curDiff();
+  ensureOrders(meta);
   ctx.player = player;
   ctx.onRangedHit = (e, dealt, proj) => (proj?.owner?.onRangedHit ? proj.owner.onRangedHit(e, dealt, proj) : player?.onRangedHit?.(e, dealt, proj));
   ctx.onHitConfirm = (e, dmg, crit) => {
@@ -3059,9 +3297,18 @@ async function init() {
   ctx.onReaction = (text, enemy, dmg) => {
     meta.stats.reactions = (meta.stats.reactions || 0) + 1;
     questProgress('react');
+    progressOrders('react', 1);
     if (enemy?.isBoss || enemies.some((x) => x.isBoss && x.alive)) addFlame(2.5);
     if (enemy) fireRunes(player, 'react', enemy.pos, player.aimDir(), Math.round((dmg || 18) * 1.1));
     progressAwakening(player, 'react');
+  };
+  ctx.onOreBreak = (pos, oreId) => {
+    const n = 1 + (Math.random() < 0.35 ? 1 : 0);
+    for (let i = 0; i < n; i++) {
+      loot.spawnPickup('ore', pos.x + (Math.random() - 0.5) * 0.8, pos.z + (Math.random() - 0.5) * 0.8, oreId);
+    }
+    loot.spawnPickup('scrap', pos.x, pos.z, 2);
+    progressOrders('mine', 1);
   };
   ctx.onPerfect = () => {
     meta.stats.perfect = (meta.stats.perfect || 0) + 1;
@@ -3107,6 +3354,7 @@ async function init() {
   companions = new CompanionManager(scene);
   sandbox = new SandboxManager(scene);
   defense = new DefenseManager(scene);
+  villageHub = new VillageHub(scene);
   initForgeUI({
     player, scene, setMode, toast, addScrap,
     getScrap: () => scrap,
@@ -3119,6 +3367,8 @@ async function init() {
     getEnhanceCost: (w) => Math.max(1, Math.round(enhanceCost(w) * (1 - 0.1 * vil('smith')))),
     dynCurseName: (id) => dynCurseById(id)?.name || id,
     refreshHud: () => { renderSlots(); renderFlameHud(); $('scrap').textContent = scrap; },
+    onTemper: () => progressOrders('temper', 1),
+    onEnhance: () => progressOrders('temper', 1),
     performAnvilForge,
   });
   ctx.enemies = enemies;
@@ -3144,10 +3394,22 @@ async function init() {
       if (!e.target.closest('.credits-wrap')) document.querySelector('.credits-wrap')?.classList.remove('open');
     });
   }
+  $('btn-hub').onclick = () => enterHub();
   $('btn-play').onclick = () => { renderPrep(); show('prep', true); play('uiOpen'); };
   if ($('btn-continue')) $('btn-continue').onclick = () => continueSavedRun();
   syncContinueBtn();
   $('btn-go').onclick = () => startGame();
+  $('btn-go-hub').onclick = () => { show('gameover', false); enterHub(); };
+  $('btn-vic-hub').onclick = () => { show('victory', false); enterHub(); };
+  if ($('hub-bar')) {
+    $('hub-bar').addEventListener('mousedown', (e) => e.stopPropagation());
+    $('hub-bar').addEventListener('pointerdown', (e) => e.stopPropagation());
+  }
+  if ($('btn-hub-workshop')) $('btn-hub-workshop').onclick = () => openWorkshop('orders');
+  if ($('btn-hub-village')) $('btn-hub-village').onclick = () => { renderVillage(); show('village', true); setMode('menu'); play('uiOpen'); };
+  if ($('btn-hub-descend')) $('btn-hub-descend').onclick = () => { renderPrep(); show('prep', true); setMode('menu'); play('uiOpen'); };
+  if ($('btn-hub-menu')) $('btn-hub-menu').onclick = () => toMenu();
+  if ($('btn-ws-close')) $('btn-ws-close').onclick = () => closeWorkshop();
   $('btn-daily').onclick = () => startGame({ daily: true });
   $('btn-bossrush').onclick = () => startGame({ bossrush: true });
   $('btn-defense').onclick = () => startGame({ defense: true });
@@ -3234,7 +3496,12 @@ async function init() {
   }
   $('btn-shop-leave').onclick = () => { leaveShopPanel(); leaveShop(); };
   $('btn-shop-close').onclick = () => leaveShopPanel();
-  for (const btn of document.querySelectorAll('[data-close]')) btn.onclick = () => { show(btn.dataset.close, false); play('uiBack'); if (btn.dataset.close === 'floormap') setMode('playing'); };
+  for (const btn of document.querySelectorAll('[data-close]')) btn.onclick = () => {
+    show(btn.dataset.close, false);
+    play('uiBack');
+    if (run.mode === 'hub') { renderHubBar(); villageHub?.refreshLabels(meta); }
+    if (started && !paused && !choosing && !inShopOpen()) setMode('playing');
+  };
   for (const btn of document.querySelectorAll('.btn')) {
     btn.addEventListener('mouseenter', () => play('uiHover'));
     btn.addEventListener('click', () => { if (btn.id !== 'btn-go' && btn.id !== 'btn-daily') play('uiClick'); });
@@ -3274,7 +3541,8 @@ async function init() {
 
   window.__game = {
     player, scene, camera, renderer, mouse, pad, loot, rewards, startGame, continueSavedRun, autoSaveRun, combat, weapons: weaponsMod, setPaused, meta,
-    hazards, echoMgr, companions, sandbox, defense, flameState, RUNES, BOSS_CORES,
+    hazards, echoMgr, companions, sandbox, defense, villageHub, flameState, RUNES, BOSS_CORES,
+    enterHub, openWorkshop, openNpcDialog, pickOre,
     addFlame, addCorruption, purgeCurse, openAnvilModal, closeAnvilModal, openTrialRoom, pickRune, pickCore,
     showVictory, exportSaveCode, importSaveCode,
     get runDmg() { return runDmg; },
@@ -3512,6 +3780,7 @@ function renderVillage() {
     meta.village[b.id] = lv + 1;
     saveMeta(meta); updateMenuSouls();
     play('forged'); renderVillage();
+    if (run.mode === 'hub') { villageHub?.refreshBuildings(meta, b.id); renderHubBar(); }
   };
   $('btn-journal').style.display = vil('library') ? '' : 'none';
 }
@@ -3520,7 +3789,10 @@ function renderVillage() {
 function renderBoard() {
   const list = loadBoard();
   const name = (id) => charById(id)?.name || id;
-  $('board-list').innerHTML = list.length ? list.map((r, i) => `<div class="board-row"><b>${i + 1}</b><span>${name(r.char)} · Tầng ${r.floor} · Đợt ${r.wave}${r.depth ? ' · Bậc ' + r.depth : ''}${r.mode ? ' · ' + r.mode : ''}<br><small class="muted">${r.kills} quái · ${r.date || ''}</small></span><span class="muted small">${r.boss ? 'Hạ boss' : ''}</span><span class="sc">${r.score}</span></div>`).join('')
+  $('board-list').innerHTML = list.length ? list.map((r, i) => {
+    const df = diffById(r.difficulty);
+    return `<div class="board-row"><b>${i + 1}</b><span>${name(r.char)} <small style="color:${df.color}">[${df.name}]</small> · Tầng ${r.floor} · Đợt ${r.wave}${r.depth ? ' · Bậc ' + r.depth : ''}${r.mode ? ' · ' + r.mode : ''}<br><small class="muted">${r.kills} quái · ${r.date || ''}</small></span><span class="muted small">${r.boss ? 'Hạ boss' : ''}</span><span class="sc">${r.score}</span></div>`;
+  }).join('')
     : '<p class="muted">Chưa có lượt chơi nào.</p>';
 }
 
@@ -3549,7 +3821,11 @@ function nextStory() {
   if (storyLine < s.lines.length - 1) { storyLine++; showStoryLine(); return; }
   meta.storySeen[s.id] = true; saveMeta(meta);
   storyQueue.shift(); storyLine = 0;
-  if (storyQueue.length) showStoryLine(); else show('story', false);
+  if (storyQueue.length) showStoryLine();
+  else {
+    show('story', false);
+    if (started && !paused && !choosing && !inShopOpen()) setMode('playing');
+  }
 }
 document.getElementById('st-next').onclick = nextStory;
 document.getElementById('btn-village').onclick = () => { renderVillage(); show('village', true); play('uiOpen'); };
@@ -3692,6 +3968,7 @@ function performAnvilForge(result, opts = {}) {
         : `${RARITY[result.rarity].name} · ${affixText(result).join(' · ') || 'đã rèn xong!'}`;
     showBanner(weaponName(result), sub, 2.8, RARITY[result.rarity].css);
     if (keep && loot.anvil) loot.anvil.used = false;
+    progressOrders('forge', 1);
     checkAchievements();
   };
   if (loot.anvil) loot.startForge(onDone);
@@ -3782,4 +4059,419 @@ function maybeSpawnEchoGrave() {
   if (!ec) return;
   const [x, z] = spawnPos(5);
   echoMgr.spawnGrave(ec, x, z);
+}
+
+// ================= Quặng, Đơn Hàng Rèn & Làng Thợ Rèn 3D =================
+function pickOre(oreId, amount = 1) {
+  const ore = ORE_BY_ID[oreId] || ORES[0];
+  addOre(meta, ore.id, amount);
+  runOres[ore.id] = (runOres[ore.id] || 0) + amount;
+  meta.stats.oresMined = (meta.stats.oresMined || 0) + amount;
+  saveMeta(meta);
+  damageNumber(player.pos, `+${amount} ${ore.name}`, 'react perfect');
+  if (run.mode === 'hub') renderHubBar();
+}
+
+function progressOrders(metric, amount = 1) {
+  const ready = recordOrderProgress(meta, metric, amount);
+  saveMeta(meta);
+  for (const o of ready) {
+    toast('x_scroll', 'Hoàn Thành Đơn Hàng!', `${o.title} · Về Làng Thợ Rèn nhận thưởng`);
+  }
+  if (run.mode === 'hub') {
+    villageHub?.refreshLabels(meta);
+    renderHubBar();
+  }
+}
+
+function syncHubWeaponPreview() {
+  if (!player) return;
+  const w = meta.craftedWeapon
+    ? JSON.parse(JSON.stringify(meta.craftedWeapon))
+    : makeWeapon(player.char.weapon, 'none', 1);
+  w.dur = 100;
+  player.setWeapons([w], 0);
+  player.recalc();
+  renderSlots();
+}
+
+function renderHubBar() {
+  const bar = $('hub-bar');
+  if (!bar) return;
+  const showBar = started && run.mode === 'hub';
+  bar.classList.toggle('hidden', !showBar);
+  if (!showBar) return;
+  if ($('hub-souls')) $('hub-souls').textContent = meta.souls || 0;
+  const oresEl = $('hub-ores');
+  if (oresEl) {
+    oresEl.innerHTML = ORES.map((o) => {
+      const cnt = (meta.ores || {})[o.id] || 0;
+      return `<span class="hub-ore-pill" style="--oc:${o.color}" title="${o.name} (${o.floorHint})"><i class="ico" style="--i:url('/ui/icons/${o.icon}.svg')"></i>${cnt}</span>`;
+    }).join('');
+  }
+  const badge = $('hub-order-badge');
+  if (badge) {
+    const r = countReadyOrders(meta);
+    badge.textContent = String(r);
+    badge.classList.toggle('hidden', r <= 0);
+  }
+}
+
+function enterHub() {
+  unlockAudio();
+  unlockMusic();
+  play('uiConfirm');
+  clearTimeout(patronTimer); clearTimeout(questTimer);
+  patronTimer = questTimer = null;
+  started = true;
+  run = {
+    char: run.char || meta.char || 'knight',
+    pet: run.pet || meta.pet || 'none',
+    curses: [],
+    daily: false,
+    depth: 0,
+    difficulty: meta.difficulty || 'normal',
+    mode: 'hub',
+    endless: false,
+  };
+  coop.on = false;
+  setupP2();
+  for (const e of enemies) if (!e.dead) e.die();
+  enemies = [];
+  ctx.enemies = enemies;
+  clearFx();
+  clearProjectiles();
+  clearAbilities();
+  clearRunes();
+  companions?.clear();
+  sandbox?.clear();
+  defense?.clear();
+  objectives?.clear();
+  clearHazards(scene);
+  echoMgr?.clear();
+  loot.clear();
+  rewards.clear();
+  resetTactics();
+  resetFlameState();
+  quest = null; renderQuest();
+  extraDmgCurse = 0; bossBane = 0; hitThisWave = false;
+  runDmg = { basic: 0, special: 0, react: 0, rune: 0, ult: 0, pet: 0 };
+  runOres = {};
+  ctx.diff = curDiff();
+
+  player.meta = meta;
+  player.curses = [];
+  player.setCharacter(run.char);
+  player.reset();
+  syncHubWeaponPreview();
+
+  villageHub.enter(meta, player, enemies);
+  ctx.enemies = enemies;
+  if (run.pet && run.pet !== 'none') companions?.setPet(run.pet, player.pos);
+
+  wave = 0; floor = 1;
+  intermission = Infinity;
+  choosing = false; choosingReward = false; inShop = false; exitOpen = false;
+  paused = false; deathShown = false; victoryShown = false;
+  nextReward = null; challengeWave = false; event = null;
+  lastHp = ghostHp = player.hp;
+  menuTransitionT = 0.55;
+  _lastPromptHtml = '';
+  hud.prompt.classList.remove('show');
+  for (const id of ['start', 'howto', 'prep', 'gameover', 'victory', 'pause', 'shop', 'anvil-modal', 'bestiary', 'save-modal', 'workshop', 'npc-dialog', 'village', 'forge', 'achievements', 'codex', 'board', 'story', 'sandbox-bar', 'defense-hud', 'boss-bar']) {
+    show(id, false);
+  }
+  document.body?.classList?.add('in-hub');
+  renderEvent();
+  renderNextReward();
+  renderRelics();
+  renderFlameHud();
+  renderHubBar();
+  syncMenuStage();
+  setMode('playing');
+  showBanner('Làng Thợ Rèn', 'Tới Đe Rèn (Tây), Thương Nhân (Đông) hoặc Cổng Hầm (Bắc)', 2.8, '#ffcf6b');
+}
+
+let wsTab = 'orders';
+let wsType = null;
+let wsEl1 = 'none';
+let wsEl2 = 'none';
+
+function openWorkshop(tab = 'orders') {
+  wsTab = tab || 'orders';
+  if (!wsType) wsType = player?.char?.weapon || 'sword';
+  ensureOrders(meta);
+  renderWorkshop();
+  show('workshop', true);
+  setMode('menu');
+  play('uiOpen');
+}
+
+function closeWorkshop() {
+  show('workshop', false);
+  if (run.mode === 'hub') { renderHubBar(); villageHub?.refreshLabels(meta); }
+  if (started && !paused && !choosing && !inShopOpen()) setMode('playing');
+  play('uiClose');
+}
+
+function renderWorkshop() {
+  const resEl = $('ws-res-bar');
+  if (resEl) {
+    resEl.innerHTML = `<span class="ore-cost-pill" style="--oc:#9fe8ff"><i class="ico ico-soul"></i> ${meta.souls || 0} Hồn Thép</span>`
+      + ORES.map((o) => `<span class="ore-cost-pill" style="--oc:${o.color}" title="${o.name} · Rơi tại ${o.floorHint}"><i class="ico" style="--i:url('/ui/icons/${o.icon}.svg')"></i> ${(meta.ores || {})[o.id] || 0} ${o.name}</span>`).join('');
+  }
+  const readyCount = countReadyOrders(meta);
+  const tabs = [
+    { id: 'orders', label: 'Đơn Hàng Rèn', badge: readyCount ? String(readyCount) : '' },
+    { id: 'craft', label: 'Rèn Quặng & Bùa', badge: '' },
+    { id: 'meta', label: 'Lò Rèn Vĩnh Viễn', badge: '' },
+  ];
+  $('ws-tabs').innerHTML = tabs.map((t) =>
+    `<button class="anvil-tab${wsTab === t.id ? ' on' : ''}" data-wtab="${t.id}">${t.label}${t.badge ? ` <em>${t.badge}</em>` : ''}</button>`
+  ).join('');
+  for (const b of $('ws-tabs').querySelectorAll('[data-wtab]')) {
+    b.onclick = () => { wsTab = b.dataset.wtab; play('uiClick'); renderWorkshop(); };
+  }
+
+  const body = $('ws-body');
+  if (!body) return;
+  if (wsTab === 'orders') {
+    const list = ensureOrders(meta);
+    const doneTotal = meta.orders?.done?.length || 0;
+    body.innerHTML = `<div class="ws-section">
+      <h3><i class="ico" style="--i:url('/ui/icons/x_scroll.svg');color:#ffcf4a"></i> Đơn Hàng Đang Nhận <span class="muted small">(Đã hoàn thành: ${doneTotal} đơn)</span></h3>
+      <div class="ws-orders">${list.map((o) => {
+        const ready = canClaimOrder(o, meta);
+        const pct = o.kind === 'deliver' ? (ready ? 100 : 0) : Math.min(100, Math.round(((o.prog || 0) / (o.goal || 1)) * 100));
+        const progTxt = o.kind === 'deliver'
+          ? formatOreCost(o.cost, meta)
+          : `<span class="muted small">Tiến độ: <b>${o.prog || 0} / ${o.goal}</b></span>`;
+        const rwParts = [];
+        if (o.reward?.souls) rwParts.push(`<i class="ico ico-soul"></i> +${o.reward.souls}`);
+        if (o.reward?.ores) rwParts.push(formatOreCost(o.reward.ores));
+        return `<div class="order-card${ready ? ' ready' : ''}">
+          <div class="order-top"><h4>${o.title}</h4><span class="order-who">${o.who}</span></div>
+          <p>${o.desc}</p>
+          <div>${progTxt}</div>
+          <div class="order-prog"><div style="width:${pct}%"></div></div>
+          <div class="order-foot">
+            <span class="order-rw">${rwParts.join(' ')}</span>
+            <button class="btn small-btn${ready ? ' primary' : ''}" data-claim="${o.id}" ${ready ? '' : 'disabled'}>${ready ? 'Nhận Thưởng' : 'Chưa xong'}</button>
+          </div>
+        </div>`;
+      }).join('')}</div>
+      <p class="muted small" style="margin-top:8px">Mẹo: Đập các <b>Mỏ Quặng phát sáng</b> trong hầm ngục (đánh hoặc bấm <b>E</b>) để thu Quặng rèn trang bị và hoàn thành đơn hàng.</p>
+    </div>`;
+    for (const b of body.querySelectorAll('[data-claim]')) {
+      b.onclick = () => {
+        const res = claimOrder(meta, b.dataset.claim);
+        if (!res.ok) { play('uiBack'); return; }
+        saveMeta(meta);
+        updateMenuSouls();
+        play('forged');
+        toast('x_scroll', `Hoàn Thành: ${res.order.title}`, `+${res.souls} Hồn Thép`);
+        if (run.mode === 'hub') { renderHubBar(); villageHub?.refreshLabels(meta); }
+        renderWorkshop();
+      };
+    }
+  } else if (wsTab === 'craft') {
+    const dualOpen = canDualCraft(meta);
+    if (!dualOpen) wsEl2 = 'none';
+    const preview = buildCraftPreview(wsType, wsEl1, wsEl2 === 'none' ? null : wsEl2);
+    const cost = craftCostFor(wsEl1, wsEl2 === 'none' ? null : wsEl2);
+    const canCraft = hasOres(meta, cost);
+    const curCraft = meta.craftedWeapon;
+    const typeOpts = Object.entries(TYPES).map(([id, t]) => `<option value="${id}"${wsType === id ? ' selected' : ''}>${t.name}</option>`).join('');
+    const el1Opts = ['none', 'fire', 'ice', 'lightning', 'blood', 'poison', 'wind', 'holy'].map((id) =>
+      `<option value="${id}"${wsEl1 === id ? ' selected' : ''}>${id === 'none' ? 'Thuần Thép' : ELEMENTS[id].name}</option>`
+    ).join('');
+    const el2Opts = `<option value="none"${wsEl2 === 'none' ? ' selected' : ''}>Không (Đơn nguyên tố)</option>`
+      + ['fire', 'ice', 'lightning', 'blood', 'poison', 'wind', 'holy'].filter((id) => id !== wsEl1).map((id) =>
+        `<option value="${id}"${wsEl2 === id ? ' selected' : ''}>${ELEMENTS[id].name}</option>`
+      ).join('');
+
+    body.innerHTML = `<div class="ws-section">
+      <h3><i class="ico ico-anvil"></i> Rèn Vũ Khí Khởi Đầu (mang xuống hầm lượt kế tiếp)</h3>
+      ${curCraft ? `<p class="small" style="margin:0 0 6px;color:#7fff9a">✔ Đang mang theo: <b style="color:${RARITY[curCraft.rarity].css}">${weaponName(curCraft)}</b> — đánh thử ngay trên Hình Nộm trong sân làng!</p>` : ''}
+      <div class="craft-box">
+        <div class="craft-controls">
+          <div class="craft-row"><label>Loại vũ khí</label><select id="ws-wtype">${typeOpts}</select></div>
+          <div class="craft-row"><label>Nguyên tố chính</label><select id="ws-el1">${el1Opts}</select></div>
+          <div class="craft-row"><label>Nguyên tố phụ</label><select id="ws-el2" ${dualOpen ? '' : 'disabled'}>${el2Opts}</select></div>
+          ${dualOpen ? '' : '<small class="muted">Hoàn thành 2 Đơn Hàng Rèn hoặc nhặt 2 loại Quặng để mở Rèn Song Nguyên Tố (Sử Thi).</small>'}
+          <div class="craft-row"><label>Chi phí Quặng</label><div>${formatOreCost(cost, meta)}</div></div>
+        </div>
+        <div class="craft-preview">
+          <img src="${weaponIcon(preview)}" alt="" />
+          <h4 style="color:${RARITY[preview.rarity].css}">${weaponName(preview)} ${weaponIcons(preview)}</h4>
+          <small class="muted">${RARITY[preview.rarity].name} · +1 Cường hóa · 1 Phụ tố ngẫu nhiên</small>
+          <button id="btn-ws-craft" class="btn primary small-btn" ${canCraft ? '' : 'disabled'} style="margin-top:6px">Rèn &amp; Mang Theo</button>
+        </div>
+      </div>
+    </div>
+    <div class="ws-section">
+      <h3><i class="ico" style="--i:url('/ui/icons/x_sunbeams.svg');color:#ffe070"></i> Bùa Chuẩn Bị (tối đa 1 bùa mỗi lượt)</h3>
+      <div class="buff-grid">${HUB_BUFFS.map((b) => {
+        const active = meta.craftedBuff === b.id;
+        const ok = hasOres(meta, b.cost);
+        return `<div class="buff-card${active ? ' on' : ''}">
+          <i class="ico" style="--i:url('/ui/icons/${b.icon}.svg');color:${b.color}"></i>
+          <div class="buff-info">
+            <h4>${b.name}</h4>
+            <p>${b.desc}</p>
+            <div>${formatOreCost(b.cost, meta)}</div>
+          </div>
+          <button class="btn small-btn${active ? '' : ' primary'}" data-buff="${b.id}" ${active || !ok ? 'disabled' : ''}>${active ? 'Đang mang ✓' : 'Rèn Bùa'}</button>
+        </div>`;
+      }).join('')}</div>
+    </div>`;
+
+    $('ws-wtype').onchange = (e) => { wsType = e.target.value; play('uiClick'); renderWorkshop(); };
+    $('ws-el1').onchange = (e) => { wsEl1 = e.target.value; if (wsEl2 === wsEl1) wsEl2 = 'none'; play('uiClick'); renderWorkshop(); };
+    $('ws-el2').onchange = (e) => { wsEl2 = e.target.value; play('uiClick'); renderWorkshop(); };
+    $('btn-ws-craft').onclick = () => {
+      const res = craftStarterWeapon(meta, wsType, wsEl1, wsEl2 === 'none' ? null : wsEl2);
+      if (!res.ok) { play('uiBack'); return; }
+      saveMeta(meta);
+      recordCodex(res.weapon);
+      play('hammer', { rate: 1.1 }); play('forged');
+      toast('anvil', 'Đã Rèn Vũ Khí!', `${res.name} · Đánh thử ngay trên Hình Nộm`);
+      if (run.mode === 'hub') { syncHubWeaponPreview(); renderHubBar(); }
+      renderWorkshop();
+    };
+    for (const b of body.querySelectorAll('[data-buff]')) {
+      b.onclick = () => {
+        const def = buffById(b.dataset.buff);
+        if (!def || meta.craftedBuff === def.id || !spendOres(meta, def.cost)) { play('uiBack'); return; }
+        meta.craftedBuff = def.id;
+        saveMeta(meta);
+        play('forged');
+        toast(def.icon, `Đã Rèn Bùa: ${def.name}`, def.desc);
+        if (run.mode === 'hub') renderHubBar();
+        renderWorkshop();
+      };
+    }
+  } else {
+    body.innerHTML = `<div class="ws-section">
+      <h3><i class="ico ico-soul"></i> Nâng Cấp Lò Rèn Vĩnh Viễn</h3>
+      <div class="forge-list">${META.map((m) => {
+        const lv = meta.up[m.id] || 0;
+        const maxed = lv >= m.max;
+        const cost = maxed ? 0 : m.cost(lv);
+        const pips = Array.from({ length: m.max }, (_, k) => `<span class="pip${k < lv ? ' on' : ''}"></span>`).join('');
+        return `<div class="forge-item${maxed ? ' maxed' : ''}">
+          <i class="ico fi-ico" style="--i:url('/ui/icons/${m.icon}.svg')"></i>
+          <div class="fi-info"><h4>${m.name} <span class="pips">${pips}</span></h4>
+            <p>${maxed ? m.desc(lv) : lv ? `${m.desc(lv)} <span class="next">→ ${m.desc(lv + 1)}</span>` : `<span class="next">${m.desc(1)}</span>`}</p></div>
+          <button class="btn buy" data-mup="${m.id}" ${maxed || meta.souls < cost ? 'disabled' : ''}>
+            ${maxed ? 'Tối đa' : `<i class="ico ico-soul"></i>${cost}`}</button>
+        </div>`;
+      }).join('')}</div>
+      <div class="btn-row center" style="margin-top:8px"><button id="btn-ws-aspects" class="btn">Mở Biến Thể Vũ Khí (Weapon Aspects)</button></div>
+    </div>`;
+    for (const b of body.querySelectorAll('[data-mup]')) {
+      b.onclick = () => {
+        const m = META.find((x) => x.id === b.dataset.mup);
+        const lv = meta.up[m.id] || 0;
+        const cost = m.cost(lv);
+        if (lv >= m.max || meta.souls < cost) { play('uiBack'); return; }
+        meta.souls -= cost;
+        meta.up[m.id] = lv + 1;
+        saveMeta(meta); updateMenuSouls();
+        play('hammer');
+        if (run.mode === 'hub') renderHubBar();
+        renderWorkshop();
+      };
+    }
+    $('btn-ws-aspects').onclick = () => {
+      show('workshop', false);
+      renderForge();
+      show('forge', true);
+      play('uiOpen');
+    };
+  }
+}
+
+function openNpcDialog(npcId) {
+  const ready = countReadyOrders(meta);
+  const builtCount = Object.values(meta.village || {}).filter((v) => v > 0).length;
+  const maxFloor = meta.stats.maxFloor || 1;
+  let cfg = null;
+
+  if (npcId === 'master_smith') {
+    const line = ready > 0
+      ? `"Tốt lắm! Ta thấy ngươi đã hoàn thành ${ready} Đơn Hàng Rèn rồi đấy. Đưa đây xem và nhận Hồn Thép nào!"`
+      : maxFloor >= 3
+        ? '"Ngọn lửa dưới hầm sâu nóng hơn nhiều phải không? Đừng quên đập Mỏ Quặng ở mỗi tầng để rèn vũ khí khởi đầu và bùa hộ mệnh trước khi xuống."'
+        : '"Hòn than trong làng bắt đầu ấm lại rồi. Hãy tới Đe Rèn bên cạnh nhận Đơn Hàng, thử vũ khí trên Hình Nộm, rồi tiến qua Cổng Hầm phía Bắc!"';
+    cfg = {
+      name: 'Thợ Cả Hàn', role: 'Bậc Thầy Lò Rèn', icon: 'x_horned-helm', text: line,
+      actions: [
+        { label: `Đơn Hàng Rèn${ready ? ` (${ready}!)` : ''}`, primary: true, run: () => { show('npc-dialog', false); openWorkshop('orders'); } },
+        { label: 'Rèn Quặng & Bùa', run: () => { show('npc-dialog', false); openWorkshop('craft'); } },
+        { label: 'Đọc Nhật Ký', run: () => { show('npc-dialog', false); playStory(true); } },
+      ],
+    };
+  } else if (npcId === 'traveler') {
+    cfg = {
+      name: 'Lữ Khách Quán Trọ', role: 'Người Dẫn Đường Hầm Ngục', icon: 'x_hood',
+      text: maxFloor >= 2
+        ? `"Dưới Hang Băng tầng 2 có nhiều Băng Tinh lắm. Gặp bọn quái Tinh Anh hãy tận dụng Phản Xuyên khi thấy tia đỏ-trắng, và nhớ giữ chút Vàng cho Quán Trọ!"`
+        : `"Đừng vội lao thẳng vào giữa bầy quái! Nếu thấy game quá gắt hay quá dễ, ở Cổng Hầm Ngục ngươi có thể chọn 3 mức Độ Khó phù hợp với mình."`,
+      actions: [
+        { label: 'Xem Đơn Hàng', primary: true, run: () => { show('npc-dialog', false); openWorkshop('orders'); } },
+        { label: 'Chọn Độ Khó & Vào Hầm', run: () => { show('npc-dialog', false); renderPrep(); show('prep', true); } },
+      ],
+    };
+  } else if (npcId === 'shrine') {
+    cfg = {
+      name: 'Đền Thần Cổ', role: `Cấp ${vil('shrine')} · Phù Hộ Chiến Binh`, icon: 'x_sunbeams',
+      text: vil('shrine') >= 2
+        ? '"Ánh sáng của các vị thần đang soi rọi ngôi làng. Ở mỗi tầng hầm, khi thờ phụng vị thần ngươi chọn sẽ được ban thêm 1 thẻ phước lành."'
+        : '"Ngôi đền đã được thắp sáng trở lại. Ngay khi bước xuống Tầng 1, vị thần đầu tiên ngươi chọn sẽ ban thêm 1 thẻ phước lành."',
+      actions: [
+        { label: 'Nâng Cấp Đền Thần', run: () => { show('npc-dialog', false); renderVillage(); show('village', true); } },
+      ],
+    };
+  } else if (npcId === 'scholar') {
+    cfg = {
+      name: 'Học Giả Thư Viện', role: 'Người Lưu Giữ Cổ Ngữ & Quái Vật', icon: 'x_book',
+      text: `"Ta đang ghi chép lại mọi công trình ngươi dựng nên (${builtCount}/6 công trình đã khôi phục) cùng toàn bộ công thức vũ khí và thông tin Quái Vật."`,
+      actions: [
+        { label: 'Nhật Ký Cốt Truyện', primary: true, run: () => { show('npc-dialog', false); playStory(true); } },
+        { label: 'Sổ Rèn', run: () => { show('npc-dialog', false); renderCodex(); show('codex', true); } },
+        { label: 'Quái Vật', run: () => { show('npc-dialog', false); renderBestiary('mobs'); show('bestiary', true); } },
+      ],
+    };
+  } else {
+    cfg = {
+      name: 'Bảng Danh Vọng', role: 'Thành Tựu · Sổ Rèn · Bảng Xếp Hạng', icon: 'x_trophy',
+      text: `"Chiến tích và công thức rèn của toàn làng được khắc tại đây. Đã mở ${Object.keys(meta.ach || {}).filter((k) => meta.ach[k]).length}/${ACHIEVEMENTS.length} thành tựu!"`,
+      actions: [
+        { label: 'Thành Tựu', primary: true, run: () => { show('npc-dialog', false); renderAchievements(); show('achievements', true); } },
+        { label: 'Sổ Rèn', run: () => { show('npc-dialog', false); renderCodex(); show('codex', true); } },
+        { label: 'Quái Vật', run: () => { show('npc-dialog', false); renderBestiary('mobs'); show('bestiary', true); } },
+        { label: 'Xếp Hạng', run: () => { show('npc-dialog', false); renderBoard(); show('board', true); } },
+      ],
+    };
+  }
+
+  $('npc-ico').style.setProperty('--i', `url('/ui/icons/${cfg.icon}.svg')`);
+  $('npc-name').textContent = cfg.name;
+  $('npc-role').textContent = cfg.role;
+  $('npc-text').textContent = cfg.text;
+  const acts = $('npc-actions');
+  acts.innerHTML = cfg.actions.map((a, i) => `<button class="btn${a.primary ? ' primary' : ''}" data-na="${i}">${a.label}</button>`).join('')
+    + '<button class="btn" id="btn-npc-bye">Tạm biệt</button>';
+  for (const b of acts.querySelectorAll('[data-na]')) {
+    b.onclick = () => { play('uiClick'); cfg.actions[Number(b.dataset.na)].run(); };
+  }
+  $('btn-npc-bye').onclick = () => {
+    show('npc-dialog', false);
+    play('uiClose');
+    if (started && !paused && !choosing && !inShopOpen()) setMode('playing');
+  };
+  show('npc-dialog', true);
+  setMode('menu');
+  play('uiOpen');
 }

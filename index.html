@@ -58,7 +58,21 @@
       <div id="hud-top">
         <div class="panel slim wave-panel">
           <i class="ico ico-wave"></i><span class="wave-label">Tầng <b id="floor">1</b> · Đợt <b id="wave">1</b></span>
+          <span id="hud-diff" class="hud-diff hidden"></span>
           <span id="enemies-left" class="sub"></span>
+        </div>
+        <div id="hub-bar" class="panel slim hub-bar hidden">
+          <div class="hub-bar-top">
+            <span class="hub-title"><i class="ico ico-anvil"></i> Làng Thợ Rèn</span>
+            <span class="hub-souls"><i class="ico ico-soul"></i> <b id="hub-souls">0</b></span>
+            <div id="hub-ores" class="hub-ores"></div>
+          </div>
+          <div class="hub-bar-actions">
+            <button id="btn-hub-workshop" class="sb-btn gold">Xưởng Rèn (F) <em id="hub-order-badge" class="hub-order-badge hidden">0</em></button>
+            <button id="btn-hub-village" class="sb-btn">Xây Làng (B)</button>
+            <button id="btn-hub-descend" class="sb-btn">Vào Hầm (Enter)</button>
+            <button id="btn-hub-menu" class="sb-btn">Menu (Esc)</button>
+          </div>
         </div>
         <div id="defense-hud" class="panel slim hidden">
           <i class="ico el-fire"></i><span>Lò Lửa</span>
@@ -205,7 +219,8 @@
         <div class="menu-panel panel">
           <div class="menu-primary">
             <button id="btn-continue" class="btn primary save-card hidden"><span class="save-ico"><i class="ico m-ico" style="--i:url('/ui/icons/x_energy-sword.svg')"></i></span><span class="m-txt"><b>Tiếp tục lượt</b><small id="continue-info"></small></span></button>
-            <button id="btn-play" class="btn primary"><i class="ico m-ico" style="--i:url('/ui/icons/sword.svg')"></i><span id="btn-play-label">Bắt đầu</span></button>
+            <button id="btn-hub" class="btn primary"><i class="ico m-ico" style="--i:url('/ui/icons/anvil.svg')"></i><span>Vào Làng Thợ Rèn</span></button>
+            <button id="btn-play" class="btn"><i class="ico m-ico" style="--i:url('/ui/icons/sword.svg')"></i><span id="btn-play-label">Vào Hầm Nhanh</span></button>
           </div>
           <div class="menu-group menu-modes">
             <div class="menu-sec">Chế Độ Chơi</div>
@@ -328,17 +343,25 @@
         <h2>Chuẩn bị xuống hầm</h2>
         <div class="divider"><img src="/ui/divider.png" alt="" /><img src="/ui/divider.png" alt="" class="flip" /></div>
         <div class="prep-scroll">
+          <h3 class="sec">Độ khó</h3>
+          <div id="diff-list" class="diff-list"></div>
+          <div id="prep-gear-summary" class="prep-gear-summary hidden"></div>
           <h3 class="sec">Chọn nhân vật</h3>
           <div id="char-list" class="char-list"></div>
           <h3 class="sec">Bạn đồng hành (Pet) <span class="muted small">(hỗ trợ chiến đấu &amp; tự nhặt vật phẩm)</span></h3>
           <div id="pet-list" class="pet-list"></div>
-          <h3 class="sec">Bậc Hầm Sâu <span id="depth-max" class="muted small"></span></h3>
-          <div class="depth-row">
-            <button id="depth-minus" class="btn depth-btn">−</button><div class="depth-val"><b id="depth-val">0</b><small>Bậc</small></div><button id="depth-plus" class="btn depth-btn">+</button>
-            <ul id="depth-rules" class="depth-rules"></ul>
+          <div id="prep-depth-wrap">
+            <h3 class="sec">Bậc Hầm Sâu <span id="depth-max" class="muted small"></span></h3>
+            <div class="depth-row">
+              <button id="depth-minus" class="btn depth-btn">−</button><div class="depth-val"><b id="depth-val">0</b><small>Bậc</small></div><button id="depth-plus" class="btn depth-btn">+</button>
+              <ul id="depth-rules" class="depth-rules"></ul>
+            </div>
           </div>
-          <h3 class="sec">Lời nguyền <span class="muted small">(tùy chọn: khó hơn nhưng nhận nhiều Hồn Thép hơn)</span></h3>
-          <div id="curse-list" class="curse-list"></div>
+          <div id="prep-curse-wrap">
+            <h3 class="sec">Lời nguyền <span class="muted small">(tùy chọn: khó hơn nhưng nhận nhiều Hồn Thép hơn)</span></h3>
+            <div id="curse-list" class="curse-list"></div>
+          </div>
+          <p id="prep-easy-lock" class="muted small hidden">Chế độ <b>Học Việc</b> tạm khóa Bậc Hầm Sâu và Lời Nguyền — chuyển sang <b>Thợ Rèn</b> hoặc <b>Lò Hỏa Ngục</b> để bật.</p>
           <p id="curse-bonus" class="curse-bonus"></p>
         </div>
         <div class="btn-row center prep-foot"><button class="btn" data-close="prep">Quay lại</button><button id="btn-go" class="btn primary">Vào hầm</button></div>
@@ -508,7 +531,8 @@
         <div id="go-summary"></div>
         <div class="btn-row center">
           <button id="btn-again" class="btn primary">Chơi lại <span class="keycap">R</span></button>
-          <button id="btn-menu" class="btn">Về màn hình chính</button>
+          <button id="btn-go-hub" class="btn">Về Làng Thợ Rèn</button>
+          <button id="btn-menu" class="btn">Về menu</button>
         </div>
       </div>
     </div>
@@ -527,7 +551,8 @@
         <div id="vic-summary"></div>
         <div class="btn-row center">
           <button id="btn-endless" class="btn primary">Tiếp tục Vô Tận (Tầng 6+)</button>
-          <button id="btn-vic-menu" class="btn">Về màn hình chính</button>
+          <button id="btn-vic-hub" class="btn">Về Làng Thợ Rèn</button>
+          <button id="btn-vic-menu" class="btn">Về menu</button>
         </div>
       </div>
     </div>
@@ -559,6 +584,34 @@
           <button id="btn-save-import" class="btn">Nạp Mã Này</button>
           <button class="btn" data-close="save-modal">Đóng</button>
         </div>
+      </div>
+    </div>
+
+    <!-- ===== Xưởng Rèn Làng (Đơn Hàng · Rèn Quặng · Bùa) ===== -->
+    <div id="workshop" class="overlay hidden">
+      <div class="panel big wide ws-panel">
+        <div class="anvil-head">
+          <h2><i class="ico ico-anvil"></i> Xưởng Rèn Làng</h2>
+          <div id="ws-res-bar" class="ws-res-bar"></div>
+        </div>
+        <div id="ws-tabs" class="anvil-tabs"></div>
+        <div id="ws-body" class="ws-body"></div>
+        <div class="btn-row center"><button id="btn-ws-close" class="btn primary">Đóng (Esc)</button></div>
+      </div>
+    </div>
+
+    <!-- ===== Hội Thoại NPC Làng ===== -->
+    <div id="npc-dialog" class="overlay hidden">
+      <div class="panel big npc-panel">
+        <div class="npc-head">
+          <i id="npc-ico" class="ico"></i>
+          <div>
+            <h2 id="npc-name">Thợ Cả Hàn</h2>
+            <small id="npc-role" class="muted"></small>
+          </div>
+        </div>
+        <p id="npc-text" class="npc-text"></p>
+        <div id="npc-actions" class="npc-actions"></div>
       </div>
     </div>
 

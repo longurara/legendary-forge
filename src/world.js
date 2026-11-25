@@ -191,8 +191,8 @@ function buildLayout(layout) {
   }
 }
 
-// ================== Dựng tầng ==================
-export function buildWorld(scene, floor = 1) {
+// ================== Dựng tầng & Chuẩn bị Không gian Làng ==================
+function ensureLightsAndResetWorld(scene) {
   if (!moon) {
     scene.background = new THREE.Color(0x0b0908);
     scene.fog = new THREE.Fog(0x0b0908, 34, 72);
@@ -213,6 +213,7 @@ export function buildWorld(scene, floor = 1) {
     scene.remove(worldGroup);
   }
   disposeLiquids();
+  removeExit();
   worldGroup = new THREE.Group();
   scene.add(worldGroup);
   pillars.length = 0;
@@ -221,6 +222,40 @@ export function buildWorld(scene, floor = 1) {
   pitFx.length = 0;
   torches.length = 0;
   staticLights = 0;
+}
+
+export function prepareCustomWorld(scene, opts = {}) {
+  const half = opts.half ?? 18.5;
+  ROOM_HALF = half;
+  WALK_LIMIT = half - 1.1;
+  ensureLightsAndResetWorld(scene);
+  isDark = false;
+  flameDarkness = 0;
+  const B = opts.biome || {
+    id: 'village', name: 'Làng Thợ Rèn', tint: 0xffffff,
+    fog: 0x16110d, sky: 0xffd9a8, ground: 0x4a3424, moon: 0xffe2b8, torch: 0xff9a3c,
+  };
+  currentBiome = B;
+  setFxBiome(B.id);
+  scene.background.set(B.fog);
+  scene.fog.color.set(B.fog);
+  hemi.color.set(B.sky);
+  hemi.groundColor.set(B.ground);
+  hemi.intensity = 1.25;
+  moon.color.set(B.moon);
+  moon.intensity = 1.35;
+  return {
+    group: worldGroup,
+    owned: ownedWorld,
+    addTorch: (x, z, rotY, color = B.torch || 0xff9a3c, y = 2.1, light = true) => wallTorch(x, z, rotY, color, y, light),
+    addPiece: (name, x, z, rotY = 0, y = 0, s = DS) => piece(name, x, z, rotY, y, s),
+  };
+}
+
+export function buildWorld(scene, floor = 1) {
+  ROOM_HALF = (TILE * N) / 2;
+  WALK_LIMIT = ROOM_HALF - 0.9;
+  ensureLightsAndResetWorld(scene);
   seed = floor * 7919 + 17;
   const theme = floorTheme(floor);
   const B = theme.biome;
@@ -376,6 +411,7 @@ function ambientFx(focus) {
   if (B.id === 'swamp' && Math.random() < 0.28) emit(amb.set(rx(), 0.4, rz()), { frame: F.glow, color: 0xbfff60, color2: 0x3a9020, size: 0.38, size2: 0.08, life: 3.5, vel: flameVel.set((Math.random() - 0.5) * 0.5, 0.5, (Math.random() - 0.5) * 0.5), alpha: 0.75 });
   if (B.id === 'sanctum' && Math.random() < 0.22) emit(amb.set(rx(), 1 + Math.random() * 4, rz()), { frame: F.elec, color: 0xffe880, color2: 0x7fdcff, size: 0.35, size2: 0.05, life: 0.3, vel: flameVel.set(0, -0.5, 0), hdr: 2 });
   if (B.id === 'stone' && Math.random() < 0.15) emit(amb.set(rx(), 1 + Math.random() * 3, rz()), { frame: F.glow, color: 0xffe0b0, size: 0.06, size2: 0.06, life: 4, vel: flameVel.set((Math.random() - 0.5) * 0.3, 0.1, (Math.random() - 0.5) * 0.3), alpha: 0.6, hdr: 1, fadeIn: 0.3 });
+  if (B.id === 'village' && Math.random() < 0.28) emit(amb.set(rx(), 0.4 + Math.random() * 2.2, rz()), { frame: F.glow, color: Math.random() < 0.5 ? 0xffcf70 : 0xff8a30, size: 0.12, size2: 0.02, life: 2.8, vel: flameVel.set((Math.random() - 0.5) * 0.4, 0.55 + Math.random() * 0.5, (Math.random() - 0.5) * 0.4), alpha: 0.75, hdr: 1.6, fadeIn: 0.2 });
   for (const p of pitFx) {
     if (B.id === 'lava' && Math.random() < 0.35) emit(amb.set(p.x0 + Math.random() * (p.x1 - p.x0), -0.6, p.z0 + Math.random() * (p.z1 - p.z0)), { frame: F.flame, color: 0xffa040, color2: 0xa01a00, size: 1.2, size2: 0.3, life: 0.9, vel: flameVel.set(0, 1.8, 0), alpha: 0.6, hdr: 1.4, fadeIn: 0.2, rotV: 1 });
     if (B.id !== 'lava' && Math.random() < 0.05) emit(amb.set(p.x0 + Math.random() * (p.x1 - p.x0), -0.8, p.z0 + Math.random() * (p.z1 - p.z0)), { smoke: true, frame: F.smoke, color: B.id === 'ice' ? 0x8ac0e0 : 0x101010, size: 2, size2: 3, life: 3, vel: flameVel.set(0, 0.4, 0), alpha: 0.25, fadeIn: 0.3 });

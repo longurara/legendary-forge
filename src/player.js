@@ -137,7 +137,7 @@ export class Player {
     this.xp = 0;
     this.regenT = 0;
     this.bonusMaxHp = 0;
-    this.maxHp = this.char.hp + (up.hp || 0) * 10 - (curses.includes('fragile') ? 30 : 0);
+    this.maxHp = this.char.hp + (up.hp || 0) * 10 + (ctx.diff?.playerBonusHp || 0) - (curses.includes('fragile') ? 30 : 0);
     this.hp = this.maxHp;
     this.dead = false;
     this.revived = false;
@@ -241,8 +241,9 @@ export class Player {
     if (flameTier() === 'ember') s.critMult = (s.critMult || 2) + 0.4;
     if (hasDynCurse('glass_wrath') && flameState.flame < 40) s.dmg += 0.3;
     if (hasDynCurse('abyss_hunger')) s.dmg *= 1.8;
+    s.luck += (ctx.diff?.luckBonus || 0);
     // Cập nhật máu tối đa hiệu lực khi bị Cơn Đói Vực Sâu
-    const rawMax = this.char.hp + ((this.meta && this.meta.up && this.meta.up.hp) || 0) * 10 - ((this.curses || []).includes('fragile') ? 30 : 0) + (this.perkLv?.hp || 0) * 20 + (this.bonusMaxHp || 0);
+    const rawMax = this.char.hp + ((this.meta && this.meta.up && this.meta.up.hp) || 0) * 10 + (ctx.diff?.playerBonusHp || 0) - ((this.curses || []).includes('fragile') ? 30 : 0) + (this.perkLv?.hp || 0) * 20 + (this.bonusMaxHp || 0);
     const effMax = hasDynCurse('abyss_hunger') ? Math.max(30, Math.round(rawMax * 0.4)) : rawMax;
     if (effMax !== this.maxHp) {
       this.maxHp = effMax;
@@ -423,7 +424,7 @@ export class Player {
     }
     this.hp = Math.max(0, this.hp - dmg);
     ctx.onPlayerHurt?.(dmg);
-    this.iframes = 0.55;
+    this.iframes = ctx.diff?.hurtIframes ?? 0.55;
     this.gainRage(8);
     if (hasDynCurse('blood_gold') && ctx.onBloodGoldHit) ctx.onBloodGoldHit(this.pos);
     addShake(0.5);
@@ -533,7 +534,7 @@ export class Player {
     if (this.hasRelic('horn')) mul *= 1 + 0.5 * (1 - this.hp / this.maxHp);
     if (this.hasRelic('fury')) mul *= 1 + 0.6 * (1 - this.hp / this.maxHp);
     const hz = this.heatZone(this.weapon);
-    const bellowBonus = this.hasRelic('bellows') ? 0.2 : 0;
+    const bellowBonus = (this.hasRelic('bellows') ? 0.2 : 0) + (this.stats.magmaHeart ? 0.15 : 0);
     if (hz === 'hot') mul *= (hasDynCurse('overheat_pact') ? 1.4 : 1.25) + bellowBonus;
     else if (hz === 'critical') mul *= 1.45 + bellowBonus;
     else if (hz === 'overheat') mul *= 0.75;
@@ -1739,7 +1740,7 @@ export class Player {
       this.dashStock--;
       this.dashDir.copy(input.lengthSq() > 0.01 ? input.clone().normalize() : this.aimDir());
       this.dashTime = DASH_TIME;
-      this.dodgeWindow = DASH_TIME + 0.12;
+      this.dodgeWindow = DASH_TIME + 0.12 + (ctx.diff?.dodgeBonus || 0);
       this.perfectUsed = false;
       this.dashHit = new Set();
       this.clashSet = new Set();

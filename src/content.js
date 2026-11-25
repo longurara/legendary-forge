@@ -134,6 +134,65 @@ export const CHARACTERS = [
 ];
 export const charById = (id) => CHARACTERS.find((c) => c.id === id) || CHARACTERS[0];
 
+// ---------- 3 Mức Độ Khó ----------
+export const DIFFICULTIES = [
+  {
+    id: 'easy', name: 'Học Việc', tag: 'Dễ', icon: 'x_shield', color: '#6fe38a',
+    desc: 'Dành cho người mới hoặc muốn tập trung khám phá, khai thác quặng & rèn đồ.',
+    bullets: [
+      'Quái gây 65% sát thương, 78% máu & ít quái hơn',
+      '+20 máu tối đa · né & hồi máu giữa đợt dễ thở hơn',
+      'Hồn Thép ×0.85 · BXH ×0.8 · Tắt Bậc Hầm Sâu & Lời Nguyền',
+    ],
+    enemyDmgMul: 0.65, enemyHpMul: 0.78, bossHpMul: 0.80, enemySpeedMul: 0.92,
+    spawnMult: 0.75, minWaveCount: 10, maxWaveCap: 28,
+    eliteChanceMul: 0.70, eliteMinWave: 3,
+    powerExpMob: 0.16, powerExpBoss: 0.45,
+    playerBonusHp: 20, dodgeBonus: 0.08, hurtIframes: 0.72,
+    potionDropMul: 1.6, potionHeal: 35, waveHeal: 10, floorHealPct: 0.45,
+    flameDrainMul: 0.75, creepLimit: 75,
+    soulMul: 0.85, luckBonus: 0, scoreMul: 0.80, defenseCoreDmgMul: 0.70,
+    allowDepthCurses: false, unlocksDepth: false,
+  },
+  {
+    id: 'normal', name: 'Thợ Rèn', tag: 'Chuẩn', icon: 'anvil', color: '#ffcf4a',
+    desc: 'Trải nghiệm cân bằng cốt lõi của Lò Rèn Huyền Thoại.',
+    bullets: [
+      'Chỉ số quái & Boss chuẩn 100% (Đợt 1 nhẹ nhịp làm quen)',
+      'Dùng đầy đủ Lời Nguyền & mở khóa Bậc Hầm Sâu',
+      'Hồn Thép ×1.0 · BXH ×1.0',
+    ],
+    enemyDmgMul: 1.0, enemyHpMul: 1.0, bossHpMul: 1.0, enemySpeedMul: 1.0,
+    spawnMult: 1.0, minWaveCount: 16, wave1MinCount: 12, maxWaveCap: 36,
+    eliteChanceMul: 1.0, eliteMinWave: 3,
+    powerExpMob: 0.22, powerExpBoss: 0.55,
+    playerBonusHp: 0, dodgeBonus: 0, hurtIframes: 0.55,
+    potionDropMul: 1.0, potionHeal: 25, waveHeal: 0, floorHealPct: 0.30,
+    flameDrainMul: 1.0, creepLimit: 60,
+    soulMul: 1.0, luckBonus: 0, scoreMul: 1.0, defenseCoreDmgMul: 1.0,
+    allowDepthCurses: true, unlocksDepth: true,
+  },
+  {
+    id: 'hard', name: 'Lò Hỏa Ngục', tag: 'Khó', icon: 'x_fire-bowl', color: '#ff5a4a',
+    desc: 'Thử thách gắt ngay từ Đợt 1 cho người chơi giàu kinh nghiệm.',
+    bullets: [
+      'Quái +30% sát thương, +28% máu, nhanh hơn 10%',
+      'Tinh anh ra từ Đợt 2 · quái scale mạnh hơn theo trang bị',
+      '+30% Hồn Thép · +15% May Mắn đồ hiếm · BXH ×1.35',
+    ],
+    enemyDmgMul: 1.30, enemyHpMul: 1.28, bossHpMul: 1.35, enemySpeedMul: 1.10,
+    spawnMult: 1.15, minWaveCount: 18, maxWaveCap: 40,
+    eliteChanceMul: 1.40, eliteMinWave: 2,
+    powerExpMob: 0.32, powerExpBoss: 0.65,
+    playerBonusHp: 0, dodgeBonus: 0, hurtIframes: 0.48,
+    potionDropMul: 0.70, potionHeal: 20, waveHeal: 0, floorHealPct: 0.20,
+    flameDrainMul: 1.15, creepLimit: 50,
+    soulMul: 1.30, luckBonus: 0.15, scoreMul: 1.35, defenseCoreDmgMul: 1.25,
+    allowDepthCurses: true, unlocksDepth: true,
+  },
+];
+export const diffById = (id) => DIFFICULTIES.find((d) => d.id === id) || DIFFICULTIES[1];
+
 // ---------- Bậc Hầm Sâu: mỗi bậc cộng dồn một luật khó hơn ----------
 export const DEPTHS = [
   { n: 1, text: 'Quái thường +20% máu' },

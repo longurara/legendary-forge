@@ -1,4 +1,5 @@
 // Làng Thợ Rèn (xây dựng bằng Hồn Thép), cốt truyện 12 chương, bảng xếp hạng & Xuất/Nhập mã Save
+import { diffById } from './content.js';
 
 export const BUILDINGS = [
   { id: 'inn', name: 'Quán Trọ', icon: 'x_price', max: 3, cost: (lv) => 60 + lv * 60, desc: (lv) => `Bắt đầu mỗi lượt với ${lv * 30} vàng`, next: (lv) => `Bắt đầu với ${(lv + 1) * 30} vàng` },
@@ -42,7 +43,10 @@ export function unlockedStory(meta, info) { return STORY.filter((s) => s.cond(me
 // ---------- Bảng xếp hạng (lưu trên máy) ----------
 const LB_KEY = 'lorenh_leaderboard';
 export function loadBoard() { try { return JSON.parse(localStorage.getItem(LB_KEY) || '[]'); } catch { return []; } }
-export function runScore(r) { return r.floor * 1000 + r.wave * 100 + r.kills + (r.depth || 0) * 800 + (r.boss ? 500 : 0) + (r.victory ? 1500 : 0); }
+export function runScore(r) {
+  const base = r.floor * 1000 + r.wave * 100 + r.kills + (r.depth || 0) * 800 + (r.boss ? 500 : 0) + (r.victory ? 1500 : 0);
+  return Math.round(base * (diffById(r.difficulty).scoreMul || 1));
+}
 export function submitRun(r) {
   const board = loadBoard();
   r.score = runScore(r);

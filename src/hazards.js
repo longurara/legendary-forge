@@ -6,6 +6,7 @@ import { spawnRing, burst, addShake, spawnTelegraph, damageNumber, explosion, fl
 import { play } from './audio.js';
 import { isBlocked, ROOM_HALF, DS, pillars, currentBiome } from './world.js';
 import { emit, F, smoke as fxSmoke, liquidMaterial, blobGeometry, glowSprite } from './fx.js';
+import { ORE_BY_ID, oreForBiome } from './crafting.js';
 
 let group = null;
 const spikes = [];
@@ -19,6 +20,7 @@ const cyclones = [];
 const fallingPillars = [];
 const swampBogs = [];
 const teslaPairs = [];
+const oreVeins = [];
 export let waveActive = { on: false };
 let rainT = 0;
 let surfaceDepth = 0;
@@ -136,6 +138,115 @@ export function clearHazards(scene) {
   waterPatches.length = 0; elecPatches.length = 0; steamClouds.length = 0;
   cyclones.length = 0; fallingPillars.length = 0;
   swampBogs.length = 0; teslaPairs.length = 0;
+  oreVeins.length = 0;
+}
+
+class OreVein {
+  constructor(x, z, oreId, rand = Math.random) {
+    const ore = ORE_BY_ID[oreId] || ORE_BY_ID.iron;
+    this.isOreVein = true;
+    this.oreId = ore.id;
+    this.ore = ore;
+    this.pos = new THREE.Vector3(x, 0, z);
+    this.alive = true;
+    this.hp = 3;
+    this.hitCd = 0;
+    this.wobble = 0;
+    this.t = rand() * 6;
+    this.owned = [];
+
+    this.mesh = new THREE.Group();
+    const rockGeo = new THREE.DodecahedronGeometry(0.68, 0);
+    const rockMat = new THREE.MeshStandardMaterial({ color: 0x3b3634, roughness: 0.92, metalness: 0.15, flatShading: true });
+    const rock = new THREE.Mesh(rockGeo, rockMat);
+    rock.scale.set(1.15, 0.72, 1.05);
+    rock.position.y = 0.34;
+    rock.castShadow = rock.receiveShadow = true;
+    this.mesh.add(rock);
+
+    const crysMat = new THREE.MeshStandardMaterial({
+      color: ore.hex, emissive: ore.hex, emissiveIntensity: 0.85,
+      roughness: 0.18, metalness: 0.35, flatShading: true,
+    });
+    this.crysMat = crysMat;
+    const crysGeo = new THREE.OctahedronGeometry(0.28, 0);
+    for (let k = 0; k < 4; k++) {
+      const c = new THREE.Mesh(crysGeo, crysMat);
+      const a = (k / 4) * Math.PI * 2 + rand() * 0.4;
+      const rad = k === 0 ? 0.08 : 0.34;
+      c.position.set(Math.cos(a) * rad, k === 0 ? 0.82 : 0.56, Math.sin(a) * rad);
+      c.scale.set(k === 0 ? 1.15 : 0.78, k === 0 ? 1.75 : 1.25, k === 0 ? 1.15 : 0.78);
+      c.rotation.set((rand() - 0.5) * 0.5, a, (rand() - 0.5) * 0.5);
+      c.castShadow = true;
+      this.mesh.add(c);
+    }
+
+    const ringGeo = new THREE.RingGeometry(0.84, 0.98, 24).rotateX(-Math.PI / 2);
+    const ringMat = new THREE.MeshBasicMaterial({ color: ore.hex, transparent: true, opacity: 0.55, depthWrite: false });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.position.y = 0.04;
+    this.mesh.add(ring);
+
+    this.owned.push(rockGeo, rockMat, crysGeo, crysMat, ringGeo, ringMat);
+    this.mesh.position.copy(this.pos);
+    group.add(this.mesh);
+    this.collider = { x, z, r: 0.72 };
+    pillars.push(this.collider);
+  }
+
+  hit() {
+    if (!this.alive || this.hitCd > 0) return;
+    this.hitCd = 0.18;
+    this.hp--;
+    this.wobble = 0.32;
+    burst(this.pos.clone().setY(0.75), this.ore.hex, 12, { speed: 6, size: 0.14 });
+    addShake(0.14);
+    play('hammer', { at: this.pos, rate: 1.15 + (3 - this.hp) * 0.18, vol: 0.75 });
+    if (this.hp > 0) {
+      damageNumber(this.pos, `${this.ore.name} (${this.hp}/3)`, 'burn');
+      this.mesh.scale.setScalar(0.88 + this.hp * 0.04);
+      return;
+    }
+    this.alive = false;
+    group?.remove(this.mesh);
+    for (const r of this.owned) r?.dispose?.();
+    const ci = pillars.indexOf(this.collider);
+    if (ci >= 0) pillars.splice(ci, 1);
+    const oi = oreVeins.indexOf(this);
+    if (oi >= 0) oreVeins.splice(oi, 1);
+    burst(this.pos.clone().setY(0.7), this.ore.hex, 28, { speed: 8.5, size: 0.18 });
+    spawnRing(ctx.scene, this.pos, 2.2, this.ore.hex, 0.4);
+    play('dropRare', { at: this.pos, rate: 1.2 });
+    damageNumber(this.pos, `+${this.ore.name}!`, 'react perfect');
+    ctx.onOreBreak?.(this.pos, this.oreId);
+  }
+
+  update(dt) {
+    if (!this.alive) return;
+    this.t += dt;
+    this.hitCd = Math.max(0, this.hitCd - dt);
+    if (this.wobble > 0) {
+      this.wobble = Math.max(0, this.wobble - dt * 1.8);
+      this.mesh.rotation.z = Math.sin(this.t * 42) * this.wobble;
+    } else {
+      this.mesh.rotation.z = 0;
+    }
+    this.crysMat.emissiveIntensity = 0.7 + Math.sin(this.t * 3.2) * 0.25;
+    if (Math.random() < dt * 1.4) {
+      emit(this.pos.clone().setY(0.85), { frame: F.sparkle, color: this.ore.hex, size: 0.26, size2: 0.04, life: 0.7, vel: new THREE.Vector3((Math.random() - 0.5) * 0.4, 0.9, (Math.random() - 0.5) * 0.4), hdr: 1.5 });
+    }
+  }
+}
+
+export function getOreVeins() { return oreVeins; }
+export function nearestOreVein(pos, maxDist = 2.3) {
+  let best = null, bd = maxDist;
+  for (const v of oreVeins) {
+    if (!v.alive) continue;
+    const d = Math.hypot(v.pos.x - pos.x, v.pos.z - pos.z);
+    if (d < bd) { bd = d; best = v; }
+  }
+  return best;
 }
 
 // Đặt bẫy cho tầng mới (gọi sau buildWorld)
@@ -157,8 +268,18 @@ export function buildHazards(scene, floor, rand = Math.random) {
   for (let i = 0; i < nBarrels; i++) { const p = free(1.6); if (p) ctx.barrels.push(new Barrel(scene, p[0], p[1])); }
   icePatches.length = 0; lavaPools.length = 0; graves.length = 0;
   waterPatches.length = 0; elecPatches.length = 0; steamClouds.length = 0; cyclones.length = 0; fallingPillars.length = 0;
-  swampBogs.length = 0; teslaPairs.length = 0;
+  swampBogs.length = 0; teslaPairs.length = 0; oreVeins.length = 0;
   const biome = currentBiome.id;
+  const baseOre = oreForBiome(biome).id;
+  const nOres = 3 + (floor >= 3 ? 1 : 0);
+  for (let i = 0; i < nOres; i++) {
+    const p = free(1.8);
+    if (!p) continue;
+    const oreId = (floor >= 3 && i === nOres - 1 && rand() < 0.4) ? 'thunder' : baseOre;
+    const v = new OreVein(p[0], p[1], oreId, rand);
+    oreVeins.push(v);
+    ctx.barrels.push(v);
+  }
   const nSpikes = biome === 'stone' || biome === 'crypt' ? 4 + Math.min(4, floor) : 2;
   for (let i = 0; i < nSpikes; i++) { const p = free(2.4); if (p) spikes.push(new Spike(p[0], p[1], rand() * 3.2)); }
   // Đặt vũng không chồng lên nhau và không đè vật cản

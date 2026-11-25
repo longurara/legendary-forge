@@ -387,7 +387,8 @@ export class DefenseManager {
       const reach = this.coreRadius + (e.radius || 0.6) + 0.45;
       if (d < reach && e.coreHitCd <= 0) {
         e.coreHitCd = e.isBoss ? 1.35 : 1.15;
-        const dmg = e.isBoss ? 36 : e.elite ? 16 : 9;
+        const baseDmg = e.isBoss ? 36 : e.elite ? 16 : 9;
+        const dmg = Math.max(1, Math.round(baseDmg * (ctx.diff?.defenseCoreDmgMul ?? 1)));
         this.damageCore(dmg);
         const away = e.pos.clone().sub(this.corePos).setY(0).normalize();
         if (away.lengthSq() > 0.01) e.knock.addScaledVector(away, e.isBoss ? 2 : 5);

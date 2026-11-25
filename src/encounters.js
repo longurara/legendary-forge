@@ -138,7 +138,7 @@ function memberPos(ax, az, idx, rng, playerPos = null) {
   return [ax, az];
 }
 
-export function composeWaveSquads({ wave = 1, floor = 1, biome = 'stone', mult = 1, arenaWave = false, rng = Math.random, playerPos = null } = {}) {
+export function composeWaveSquads({ wave = 1, floor = 1, biome = 'stone', mult = 1, arenaWave = false, rng = Math.random, playerPos = null, minCount = 16, maxCap = 36 } = {}) {
   const avail = SQUADS.filter((s) => s.minWave <= wave);
   const pool = avail.length ? avail : SQUADS.slice(0, 3);
   const wantSquads = arenaWave ? 2 : (wave >= 4 ? 3 : 2);
@@ -151,8 +151,8 @@ export function composeWaveSquads({ wave = 1, floor = 1, biome = 'stone', mult =
     chosen.push(pickWeighted(rest.length ? rest : pool, biome, rng));
   }
 
-  const cap = arenaWave ? 18 : Math.min(36, Math.round((16 + floor * 4 + Math.min(8, wave)) * mult));
-  const targetCount = Math.min(cap, Math.max(16, Math.round((14 + floor * 3 + wave * 1.3) * mult)));
+  const cap = arenaWave ? Math.max(12, Math.round(18 * Math.min(1.2, mult))) : Math.min(maxCap, Math.round((16 + floor * 4 + Math.min(8, wave)) * mult));
+  const targetCount = Math.min(cap, Math.max(minCount, Math.round((14 + floor * 3 + wave * 1.3) * mult)));
 
   const units = [];
   const escortPairs = [];

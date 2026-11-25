@@ -307,6 +307,7 @@ function strikeTemperHammer() {
       api.toast('x_sword-break', 'Đập lệch nhịp!', 'May mắn lưỡi thép không nứt, nhưng mất lượt tôi.');
     }
   }
+  api.onTemper?.();
   renderAnvilModal();
 }
 
@@ -416,6 +417,7 @@ function renderFlameTab(body, w, w2, scrap) {
     w.plus = (w.plus || 0) + 1;
     api.player.recalc(); api.refreshHud();
     play('hammer', { rate: 1.2 }); play('forged', { vol: 0.5 });
+    api.onEnhance?.();
     renderAnvilModal();
   };
   if ($('btn-enh-dark')) $('btn-enh-dark').onclick = () => {
@@ -424,6 +426,7 @@ function renderFlameTab(body, w, w2, scrap) {
     w.plus = (w.plus || 0) + 1;
     api.player.recalc(); api.refreshHud();
     play('hammer', { rate: 0.9 });
+    api.onEnhance?.();
     renderAnvilModal();
   };
   if ($('btn-kindle-scrap')) $('btn-kindle-scrap').onclick = () => {

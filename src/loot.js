@@ -3,6 +3,7 @@ import { buildWeaponMesh, weaponName, weaponIcons, RARITY } from './weapons.js';
 import { burst, addShake, addHitStop, spawnRing, glowSprite, lightPulse } from './fx.js';
 import { models, fitModel } from './models.js';
 import { play } from './audio.js';
+import { ORE_BY_ID } from './crafting.js';
 
 const labelLayer = document.getElementById('dmg-layer');
 const SOUL_GEO = new THREE.OctahedronGeometry(1, 0);
@@ -105,6 +106,17 @@ export class Loot {
       const halo = new THREE.Mesh(CORE_HALO_GEO, CORE_HALO_MAT);
       halo.rotation.x = Math.PI / 2;
       group.add(m, halo);
+    } else if (kind === 'ore') {
+      const ore = ORE_BY_ID[value] || ORE_BY_ID.iron;
+      const col = ore.hex;
+      const mat = getPickupMat('ore:' + col, col, 1.05, 0.35, 0.18, true);
+      for (let k = 0; k < 3; k++) {
+        const m = new THREE.Mesh(GEM_GEO, mat);
+        m.scale.set(k === 0 ? 1.05 : 0.72, k === 0 ? 1.55 : 1.05, k === 0 ? 1.05 : 0.72);
+        m.position.set((k - 1) * 0.13, k === 0 ? 0.08 : 0, (k === 1 ? 0.09 : -0.06));
+        m.rotation.z = (k - 1) * 0.32;
+        group.add(m);
+      }
     } else if (kind === 'scrap') {
       for (let k = 0; k < Math.min(3, 1 + Math.floor(value / 4)); k++) {
         const m = new THREE.Mesh(SCRAP_GEO, SCRAP_MAT);

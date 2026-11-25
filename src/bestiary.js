@@ -1,6 +1,7 @@
 // Sổ Quái Vật (Bestiary: 24 chủng quái + 11 Boss) & Thống Kê Chi Tiết Lượt Chơi (Run Summary & DPS Breakdown)
-import { RELIC_SETS, activeRelicSets, petById, charById } from './content.js';
+import { RELIC_SETS, activeRelicSets, petById, charById, diffById } from './content.js';
 import { RARITY, weaponName, weaponIcons } from './weapons.js';
+import { ORE_BY_ID } from './crafting.js';
 
 export const BESTIARY_MOBS = [
   { id: 'slime', name: 'Slime Độc / Dung Nham', icon: 'x_slime', role: 'Cận chiến nhảy vồ', weak: 'Sét · Băng', tip: 'Slime lớn tách thành 2 Slime nhỏ khi chết; Slime Mẹ gọi thêm đàn.' },
@@ -107,7 +108,7 @@ const DMG_CATS = [
   { key: 'pet', name: 'Bạn Đồng Hành / Trụ', color: '#7fff9a' },
 ];
 
-export function renderRunSummaryHtml(runDmg, player, run) {
+export function renderRunSummaryHtml(runDmg, player, run, runOres = null) {
   const total = DMG_CATS.reduce((s, c) => s + (runDmg[c.key] || 0), 0);
   const bars = DMG_CATS.map((c) => {
     const val = Math.round(runDmg[c.key] || 0);
@@ -123,17 +124,26 @@ export function renderRunSummaryHtml(runDmg, player, run) {
   const setBadges = sets.length
     ? `<div class="rs-tags">${sets.map((s) => `<span class="rs-set" style="border-color:${s.color};color:${s.color}">${s.name} (${s.count}/3)</span>`).join('')}</div>`
     : '';
+  const oreEntries = Object.entries(runOres || {}).filter(([, v]) => v > 0);
+  const oreLine = oreEntries.length
+    ? `<div class="rs-ores"><span>Quặng thu được:</span> ${oreEntries.map(([id, v]) => {
+        const o = ORE_BY_ID[id];
+        return `<span class="ore-cost-pill" style="--oc:${o?.color || '#fff'}"><i class="ico" style="--i:url('/ui/icons/${o?.icon || 'x_sword-stone'}.svg')"></i>+${v} ${o?.name || id}</span>`;
+      }).join(' ')}</div>`
+    : '';
   const ch = charById(run?.char || 'knight');
   const pet = petById(run?.pet || 'none');
+  const diff = diffById(run?.difficulty || 'normal');
   const wList = (player?.weapons || []).map((w) => `<span style="color:${RARITY[w.rarity].css}">${weaponName(w)}</span> ${weaponIcons(w)}`).join(' · ');
 
   return `<div class="run-summary-box">
     <div class="rs-head">
-      <span><b>${ch.name}</b>${pet.id !== 'none' ? ` · Bạn đồng hành: <b>${pet.name}</b>` : ''}</span>
+      <span><b>${ch.name}</b> <span class="rs-diff" style="color:${diff.color};border-color:${diff.color}">${diff.name}</span>${pet.id !== 'none' ? ` · Bạn đồng hành: <b>${pet.name}</b>` : ''}</span>
       <span class="rs-total">Tổng sát thương: <b>${Math.round(total).toLocaleString('vi-VN')}</b></span>
     </div>
     <div class="rs-weapons">${wList || 'Không có vũ khí'}</div>
     ${setBadges}
+    ${oreLine}
     <div class="rs-bars">${bars}</div>
   </div>`;
 }
